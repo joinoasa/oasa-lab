@@ -3,3 +3,8 @@ __pycache__/
 /results/
 *.sigmf-data
 .env
+/runs/
+*.egg-info/
+build/
+dist/
+.pytest_cache/

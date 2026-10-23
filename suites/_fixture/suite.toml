@@ -1,0 +1,6 @@
+description = "Tiny suite the l0-lab tests run to get a real bundle. Hidden from the list."
+expectations = ["test_stranger_gets_nothing"]
+
+[captures]
+encrypted = true
+skip_header_bytes = 8

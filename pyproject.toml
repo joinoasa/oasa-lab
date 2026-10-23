@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oasa-lab"
+version = "0.1.0"
+description = "OASA test lab: simulated radio channel, evidence bundles and an independent checker"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = [
+  "pytest>=8,<10",
+  "pytest-json-ctrf>=0.6.1,<0.7",
+]
+
+[project.scripts]
+oasa-lab = "oasa_lab.cli:main"
+
+[tool.setuptools]
+packages = ["oasa_lab", "oasa_lab.checker"]
+
+[tool.pytest.ini_options]
+# Direct `pytest suites/<name>` also works: load the lab plugin.
+addopts = "-p oasa_lab.pytest_plugin --import-mode=importlib"
+testpaths = ["suites"]

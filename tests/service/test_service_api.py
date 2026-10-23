@@ -55,6 +55,15 @@ def test_a_removed_user_loses_access_at_once(svc):
         svc.cfg.users = users
 
 
+def test_a_stranger_web_page_cannot_call_the_api(svc):
+    h = {**svc.headers(), "Origin": "https://evil.example"}
+    assert httpx.post(f"{svc.url}/api/pause", headers=h).status_code == 403
+    assert httpx.get(f"{svc.url}/api/lab", headers=h).status_code == 403
+    assert not svc.lab.jobs.paused
+    assert httpx.get(f"{svc.url}/api/lab", headers={**svc.headers(), "Origin": svc.url}).status_code == 200
+    assert "access-control-allow-origin" not in httpx.get(f"{svc.url}/api/lab", headers=svc.headers()).headers
+
+
 def test_unknown_host_header_is_refused(svc):
     r = httpx.get(f"{svc.url}/healthz", headers={"Host": "evil.example.com"})
     assert r.status_code == 421

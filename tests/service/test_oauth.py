@@ -143,8 +143,14 @@ def test_only_claudes_callback_urls_may_register(oauth_svc):
         assert r.status_code == 400 and r.json()["error"] == "invalid_redirect_uri", bad
     assert register(oauth_svc, CLAUDE_CB).status_code == 201
     assert register(oauth_svc, "https://claude.com/api/mcp/auth_callback").status_code == 201
-    assert register(oauth_svc, "http://localhost:51234/callback").status_code == 201  # Claude Code: any port
-    assert register(oauth_svc, "http://localhost:51234/other").status_code == 400
+    assert register(oauth_svc, "http://localhost:51234/callback").status_code == 400  # Claude Code is opt-in
+
+
+def test_claude_code_loopback_can_be_allowed_by_config(make_service):
+    s = make_service(extra={"oauth": {"redirect_uris": [CLAUDE_CB, "http://localhost/callback"]}})
+    assert register(s, "http://localhost:51234/callback").status_code == 201  # any port, as RFC 8252 says
+    assert register(s, "http://localhost:51234/other").status_code == 400
+    assert register(s, "http://127.0.0.1:51234/callback").status_code == 400  # only the host that was listed
 
 
 def test_full_sign_in_as_the_owner_gives_a_working_token(oauth_svc, gh):

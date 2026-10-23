@@ -22,12 +22,11 @@ RF_SAFE = ("cabled", "shielded")  # the only setups where a transmitting suite m
 RF_SETUPS = ("unset", "cabled", "shielded", "open")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
-# Anywhere Claude's apps send people back to after sign-in, plus loopback for Claude Code.
+# Where Claude's hosted apps send people back to after sign-in. Claude Code uses a loopback address
+# instead (http://localhost/callback); add it under [oauth] redirect_uris only if you use Claude Code.
 DEFAULT_REDIRECTS = (
     "https://claude.ai/api/mcp/auth_callback",
     "https://claude.com/api/mcp/auth_callback",
-    "http://localhost/callback",
-    "http://127.0.0.1/callback",
 )
 
 

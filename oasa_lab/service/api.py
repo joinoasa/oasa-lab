@@ -24,10 +24,16 @@ MAX_BODY = 4096
 
 
 def build_routes(cfg: Config, jobs: JobManager, inventory: Inventory, auth: Authenticator) -> list[Route]:
+    own_origins = {u.rstrip("/") for u in (cfg.public_url, cfg.api_public_url) if u}
+
     def authed(permission: str):
         def deco(fn):
             async def handler(request: Request) -> Response:
                 h = request.headers
+                # A browser always names the page it comes from. Only our own pages may call us, so a
+                # stranger's web page cannot ride on the owner's Cloudflare Access cookie (CSRF).
+                if h.get("origin") and h["origin"].rstrip("/") not in own_origins:
+                    return JSONResponse({"error": "cross-site request refused"}, 403)
                 if "authorization" not in h and "cf-access-jwt-assertion" in h:
                     who = await asyncio.to_thread(auth.authenticate, h)  # may fetch Cloudflare's keys
                 else:

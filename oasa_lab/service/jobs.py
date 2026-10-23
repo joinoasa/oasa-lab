@@ -121,9 +121,10 @@ class JobManager:
         except OSError:
             return None
         try:
-            return json.loads(raw)
+            info = json.loads(raw)
         except ValueError:
-            return {"by": "shell", "reason": raw.strip()[:200] or "paused by file"}
+            info = None
+        return info if isinstance(info, dict) else {"by": "shell", "reason": raw.strip()[:200] or "paused by file"}
 
     async def pause(self, who: str, reason: str = "", stop_running: bool = False) -> dict:
         self.cfg.state_dir.mkdir(parents=True, exist_ok=True)

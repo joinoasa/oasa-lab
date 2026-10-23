@@ -53,6 +53,10 @@ usb = "0000:0000"                      # OWNER: the switchable hub's id from lsu
 requires = ["pluto", "rtlsdr", "heltec-a", "heltec-b"]
 description = "Everything on the bench, joined by cable and attenuators"
 
+# Claude Code (the command line tool) signs in through a loopback address. Allow it only if you use it:
+# [oauth]
+# redirect_uris = ["https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback", "http://localhost/callback"]
+
 [github]
 client_id = "replace-with-your-github-oauth-app-client-id"   # OWNER: not secret
 

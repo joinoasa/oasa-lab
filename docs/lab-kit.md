@@ -61,7 +61,7 @@ Each tier adds to the one before. Buy in order within a tier. **Open** means ope
 | [Leo Bodnar Mini GPSDO](https://www.leobodnar.com/shop/) | $196 | Shared 10 MHz clock for timing across SDRs | n/a | |
 | 2× Alfa AWUS036ACH (RTL8812AU) | ~$160 | WFB-ng video and high-rate link | Driver yes | |
 | Remote bench supply (Riden RD6006P-W) | ~$100 *est.* | Power control over the network | Firmware partly | |
-| WireGuard router ([GL.iNet](https://www.gl-inet.com)) and 8-port managed switch | ~$150 *est.* | Remote access only over WireGuard; separate lab network | Firmware yes (OpenWrt) | |
+| WireGuard router ([GL.iNet](https://www.gl-inet.com)) and 8-port managed switch | ~$150 *est.* | Maintenance over WireGuard; separate lab network ([remote-lab.md](remote-lab.md)) | Firmware yes (OpenWrt) | |
 
 ## 3. Full (~$4,900 more, ~$8,600 total)
 

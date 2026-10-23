@@ -15,6 +15,7 @@ suite.toml:
 
 Hardware suites (L2) add:
     transmits = true                    # the suite puts RF on a cable; the checker then needs wiring with 60 dB or more
+                                        # (a suite with `requires` must say transmits = true or false; on real hardware it is refused otherwise)
     requires  = ["pluto", "rtlsdr", "serial-radio:2"]   # devices from lab.toml; missing ones skip the suite
     wiring    = "pluto"                 # the [wiring.NAME] of lab.toml the cables must match
     [limits.METRIC]                     # pass/fail limits of measurements; the checker re-applies them
@@ -50,6 +51,7 @@ class Suite:
     captures: dict = field(default_factory=dict)
     hidden: bool = False
     transmits: bool = False
+    transmits_declared: bool = False   # suite.toml says transmits = true|false in so many words
     requires: list[str] = field(default_factory=list)
     wiring: str = ""
     limits: dict = field(default_factory=dict)
@@ -70,20 +72,32 @@ class Suite:
         }
 
 
-def load_suite(path: Path) -> Suite:
-    data = tomllib.loads((path / "suite.toml").read_text(encoding="utf-8"))
+def parse_suite(name: str, text: str, path: Path | None = None) -> Suite:
+    """Parse the text of a suite.toml. The one parser: `oasa-lab run`, the job service and `job-run` all use it."""
+    data = tomllib.loads(text)
     return Suite(
-        name=path.name,
-        path=path,
+        name=name,
+        path=path or Path(name),
         description=str(data.get("description", "")),
         expectations=[str(x) for x in data.get("expectations", [])],
         captures=dict(data.get("captures", {})),
-        hidden=path.name.startswith("_"),
+        hidden=name.startswith("_"),
         transmits=bool(data.get("transmits", False)),
+        transmits_declared=isinstance(data.get("transmits"), bool),
         requires=[str(x) for x in data.get("requires", [])],
         wiring=str(data.get("wiring", "")),
         limits={str(k): dict(v) for k, v in (data.get("limits") or {}).items()},
     )
+
+
+def load_suite(path: Path) -> Suite:
+    return parse_suite(path.name, (path / "suite.toml").read_text(encoding="utf-8"), path)
+
+
+def suite_facts(s: Suite) -> dict:
+    """What the job service and `job-run` need to decide whether a suite may run."""
+    return {"name": s.name, "description": s.description, "transmits": s.transmits,
+            "transmits_declared": s.transmits_declared, "wiring": s.wiring, "requires": list(s.requires)}
 
 
 def list_suites(include_hidden: bool = False) -> list[Suite]:

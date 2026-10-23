@@ -1,0 +1,72 @@
+[Unit]
+Description=OASA lab job %i
+Documentation=https://github.com/joinoasa/oasa-lab/blob/main/docs/remote-lab.md
+# A failed job unit is cleaned up at once: its result is results/%i/exit.json, not systemd's memory of it.
+CollectMode=inactive-or-failed
+
+[Service]
+# Installed by root, started by the service user through polkit (deploy/polkit/50-oasa-lab.rules): only
+# units named oasa-lab-job@<32 hex>.service, only start and stop. The program is the root-owned copy in the
+# venv. It reads one request from the spool folder, checks it again and applies the transmit lock itself.
+Type=exec
+User=oasalab-job
+Group=oasalab-job
+# The radios. Only this unit gets these groups; the user itself has none.
+SupplementaryGroups=plugdev dialout
+ExecStart=/opt/oasa-lab/venv/bin/oasa-lab job-run %i
+WorkingDirectory=/
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+UMask=0027
+
+# Limits. RuntimeMaxSec must stay above lab.job_timeout_seconds + 30 s (job-run's own backstop) + the grace.
+MemoryMax=4G
+MemorySwapMax=0
+TasksMax=512
+LimitNOFILE=4096
+LimitCORE=0
+RuntimeMaxSec=3900
+KillMode=control-group
+KillSignal=SIGTERM
+SendSIGKILL=yes
+TimeoutStopSec=90
+Restart=no
+
+# Files: read-only everywhere. Of the lab's state folder it sees only the spool (read-only), the mirror
+# (read-only) and its own results folder. The service's state (tokens, audit log, job records) is not there.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+TemporaryFileSystem=/var/lib/oasa-lab:ro
+BindReadOnlyPaths=/var/lib/oasa-lab/spool /var/lib/oasa-lab/mirror.git
+BindPaths=/var/lib/oasa-lab/results
+ReadWritePaths=/var/lib/oasa-lab/results
+InaccessiblePaths=-/etc/oasa-lab/service.toml -/etc/oasa-lab/env
+
+# The process: no new privileges, no capabilities, a short list of system calls, nobody else's processes.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RemoveIPC=yes
+# Network: the Pluto+ is on the lab network and git does not run here, but libusb listens on netlink.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# Devices: USB radios and serial ports. Nothing else (null, zero, random and the like are always allowed).
+DevicePolicy=closed
+DeviceAllow=char-usb_device rw
+DeviceAllow=char-ttyUSB rw
+DeviceAllow=char-ttyACM rw

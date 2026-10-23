@@ -1,0 +1,43 @@
+# OASA lab policy. 05-service.sh copies this to /etc/oasa-lab/lab-policy.toml (root-owned, mode 0644).
+#
+# This is the owner's word on what a job may do. Two programs read it: the service (to refuse early, with a
+# clear message) and `oasa-lab job-run` (which decides again before any suite code runs). The service can read
+# it and cannot change it. Nothing secret in here. Unknown keys are an error, so a typo cannot open a door.
+# Edit it as root; the next job picks the change up. Restart the service so its early checks match.
+
+[lab]
+# How the radios are connected. Suites that transmit are refused unless this is "cabled" or "shielded".
+# Leave "unset" until you have checked the bench (cables, attenuators, box).
+rf_setup = "unset"                     # unset | cabled | shielded | open
+simulated = false                      # true: run on the simulated bench (trying it out; the service needs inventory.backend = "simulated")
+# The hardware suites' device file (see lab.example.toml): serials, ports, cable losses. Jobs get it as OASA_LAB_INVENTORY.
+devices_file = "/etc/oasa-lab.d/lab.toml"
+branch = "main"                        # must match LAB_BRANCH in setup.env (the mirror follows that branch)
+# The oldest commit a job may run (a full 40-character id). Empty: any commit on the branch.
+# Set it when a suite or the checker is fixed and the older versions must not run any more.
+min_commit = ""
+job_timeout_seconds = 1800             # the service stops a job here; job-run cuts it off 30 s later. At most 3600.
+stop_grace_seconds = 10                # SIGTERM, then SIGKILL after this long
+
+# Folders of the oasa-sec and oasa-radio programs that the link suites use. Fixed here, never from a caller.
+# Leave empty if no suite needs them.
+[bins]
+# sec = "/opt/oasa-sec/bin"
+# radio = "/opt/oasa-radio/bin"
+
+# Transmitting on real hardware also needs your say-so, one line per suite, naming the wiring you have
+# connected (the wiring named in the suite's suite.toml; see docs/hardware-suites.md). `job-run` then passes
+# --confirm-wiring for you. Leave empty until the cables and attenuators are in place.
+[confirm_wiring]
+# l2-pluto-acceptance = "pluto"
+# l2-rf-control = "lora"
+
+# Folders. These are what 05-service.sh makes; change them only together with the unit files.
+# The owner's pause switch: `sudo touch /etc/oasa-lab/PAUSE`. While anything exists there no job starts, whatever the
+# service says (the service and `job-run` both check), and no API or Claude call can remove it.
+# [paths]
+# pause = "/etc/oasa-lab/PAUSE"
+# spool = "/var/lib/oasa-lab/spool"
+# results = "/var/lib/oasa-lab/results"
+# mirror = "/var/lib/oasa-lab/mirror.git"
+# git_config = "/etc/oasa-lab.d/gitconfig"

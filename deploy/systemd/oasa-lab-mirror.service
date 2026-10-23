@@ -1,0 +1,45 @@
+[Unit]
+Description=OASA lab: update the read-only git mirror of the lab repo
+Documentation=https://github.com/joinoasa/oasa-lab/blob/main/docs/remote-lab.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# The only thing that writes the mirror (/var/lib/oasa-lab/mirror.git). Neither the service user nor the
+# job user can. LAB_REPO_URL and LAB_BRANCH come from /etc/oasa-lab.d/mirror.env (root's, written by 05-service.sh).
+# The service user may start this unit (polkit) so a new commit on main is available without waiting for the timer.
+Type=oneshot
+User=oasalab-mirror
+Group=oasalab-mirror
+EnvironmentFile=/etc/oasa-lab.d/mirror.env
+Environment=HOME=/nonexistent GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 LC_ALL=C
+ExecStart=/usr/bin/git -c core.hooksPath=/dev/null -c protocol.ext.allow=never -c transfer.fsckObjects=true -c fetch.fsckObjects=true --git-dir=/var/lib/oasa-lab/mirror.git fetch --quiet --no-tags --force --prune ${LAB_REPO_URL} +refs/heads/${LAB_BRANCH}:refs/heads/${LAB_BRANCH}
+UMask=0022
+TimeoutStartSec=300
+MemoryMax=1G
+TasksMax=64
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/oasa-lab/mirror.git
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

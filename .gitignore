@@ -9,3 +9,5 @@ build/
 dist/
 .pytest_cache/
 /lab.toml
+/deploy/setup.env
+/state/

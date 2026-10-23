@@ -1,0 +1,83 @@
+# OASA lab job service config. 05-service.sh copies this to /etc/oasa-lab/lab.toml.
+# Nothing secret in here: the GitHub client secret lives in /etc/oasa-lab/env, API tokens are stored as hashes.
+
+[service]
+host = "127.0.0.1"                     # loopback only; the service refuses anything else
+port = 8742
+# The connector's public address (Cloudflare Tunnel hostname). Claude and the sign-in use it.
+public_url = "https://lab-mcp.example.com"          # OWNER: your hostname
+# Optional: a second hostname for the REST API and downloads, behind Cloudflare Access.
+api_public_url = "https://lab-api.example.com"      # OWNER: your hostname, or delete this line
+state_dir = "/var/lib/oasa-lab"
+repo = "https://github.com/joinoasa/oasa-lab"
+branch = "main"
+job_timeout_seconds = 1800
+stop_grace_seconds = 10
+max_queued = 20
+
+[lab]
+# How the radios are connected. The service refuses suites that transmit unless this is
+# "cabled" or "shielded". Leave "unset" until you have verified the bench (cables, attenuators, box).
+rf_setup = "unset"                     # unset | cabled | shielded | open
+
+[inventory]
+backend = "usb"                        # "usb" on the lab PC; "simulated" for trying it out anywhere
+
+# Fill in the USB ids from `lsusb` on your PC. These are the usual ones.
+[[inventory.devices]]
+id = "pluto"
+kind = "pluto"
+tcp = "192.168.2.1:30431"              # iiod on the lab network; the service only checks it answers
+
+[[inventory.devices]]
+id = "rtlsdr"
+kind = "rtl-sdr"
+usb = "0bda:2838"                      # RTL-SDR Blog V4 (RTL2838)
+
+[[inventory.devices]]
+id = "heltec-a"
+kind = "lora"
+usb = "10c4:ea60"                      # CP210x on the Heltec V3. Check with lsusb.
+
+[[inventory.devices]]
+id = "heltec-b"
+kind = "lora"
+usb = "10c4:ea60"
+
+[[inventory.devices]]
+id = "usbhub"
+kind = "usb-hub"
+usb = "0000:0000"                      # OWNER: the switchable hub's id from lsusb
+
+[profiles.bench-cabled]
+requires = ["pluto", "rtlsdr", "heltec-a", "heltec-b"]
+description = "Everything on the bench, joined by cable and attenuators"
+
+[github]
+client_id = "replace-with-your-github-oauth-app-client-id"   # OWNER: not secret
+
+# Users. One admin to start. Adding someone is adding a block here and restarting the service.
+# Roles: viewer (look), runner (look, run, stop own), admin (everything, pause).
+[[users]]
+name = "citruscybersec"
+role = "admin"
+github_login = "citruscybersec"
+github_id = 232992090                  # numeric id; sign-in checks this, not the name. gh api users/citruscybersec --jq .id
+email = "imjctaylor@gmail.com"         # for Cloudflare Access on the API hostname
+
+# [[users]]
+# name = "someone"
+# role = "runner"
+# github_id = 123456
+
+# API tokens for scripts and other MCP clients. Make one with:  oasa-lab token owner-laptop --user citruscybersec
+# Paste the printed block here. Only the hash is stored.
+# [[tokens]]
+# name = "owner-laptop"
+# user = "citruscybersec"
+# sha256 = "..."
+
+# Cloudflare Access on the API hostname (not the connector): the service checks the JWT Access adds.
+# [cloudflare_access]
+# team_domain = "yourteam.cloudflareaccess.com"
+# audience = "application AUD tag from the Access dashboard"

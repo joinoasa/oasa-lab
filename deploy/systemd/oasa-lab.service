@@ -1,0 +1,43 @@
+[Unit]
+Description=OASA lab job service and Claude connector
+Documentation=https://github.com/joinoasa/oasa-lab/blob/main/docs/remote-lab.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=oasalab
+Group=oasalab
+SupplementaryGroups=plugdev dialout
+EnvironmentFile=/etc/oasa-lab/env
+ExecStart=/opt/oasa-lab/venv/bin/oasa-lab serve --config /etc/oasa-lab/lab.toml
+Restart=on-failure
+RestartSec=5
+# A stop kills every process of every job (radio tools included).
+KillMode=control-group
+TimeoutStopSec=30
+UMask=0027
+WorkingDirectory=/var/lib/oasa-lab
+
+# Hardening. The service needs: its state folder, USB devices, and outbound network (GitHub, git).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/oasa-lab
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

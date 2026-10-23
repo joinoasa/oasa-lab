@@ -10,6 +10,7 @@ import sys
 def serve(argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="oasa-lab serve", description="Run the lab's remote job service (localhost only).")
     p.add_argument("--config", default=os.environ.get("OASA_LAB_CONFIG", "lab.toml"), help="config file (default lab.toml)")
+    p.add_argument("--check", action="store_true", help="check the config and exit")
     a = p.parse_args(argv)
     try:
         import uvicorn
@@ -24,6 +25,9 @@ def serve(argv: list[str]) -> int:
     except ConfigError as exc:
         print(f"oasa-lab: {exc}", file=sys.stderr)
         return 2
+    if a.check:
+        print(f"oasa-lab: config ok ({len(cfg.users)} user(s), rf_setup={cfg.rf_setup}, listening on {cfg.host}:{cfg.port})")
+        return 0
     if cfg.rf_setup not in ("cabled", "shielded"):
         print(f"oasa-lab: rf_setup is {cfg.rf_setup!r}: suites that transmit will be refused.", file=sys.stderr)
     lab = Lab(cfg)

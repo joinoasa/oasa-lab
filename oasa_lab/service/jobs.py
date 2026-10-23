@@ -74,6 +74,7 @@ class JobManager:
         self._proc: asyncio.subprocess.Process | None = None
         self._running_id: str | None = None
         self._stop_requests: dict[str, str] = {}
+        self._closing = False
 
     # --- lifecycle ---------------------------------------------------------------------------
     async def start(self) -> None:
@@ -92,6 +93,10 @@ class JobManager:
         self._worker = asyncio.create_task(self._work(), name="oasa-lab-worker")
 
     async def shutdown(self) -> None:
+        self._closing = True  # the worker takes no new job from here
+        for job in list(self.jobs.values()):
+            if job.status == "queued":
+                self._finish(job, "cancelled", "service shutting down")
         if self._running_id:
             self._stop_requests[self._running_id] = "service shutting down"
             await self._kill()
@@ -264,7 +269,7 @@ class JobManager:
         while True:
             job_id = await self._queue.get()
             job = self.jobs.get(job_id)
-            if job is None or job.status != "queued":
+            if job is None or job.status != "queued" or self._closing:
                 continue
             try:
                 await self._run(job)

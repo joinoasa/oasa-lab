@@ -17,6 +17,22 @@ from .channel import Channel, ChannelSettings
 from .context import RunContext, derive_seed, make_rng, sha256_file
 
 
+def _source_git(binary: Path) -> dict:
+    """If the binary was built inside a git checkout, record which commit (for the manifest)."""
+    def git(*args: str) -> str | None:
+        try:
+            r = subprocess.run(["git", "-C", str(binary.parent), *args], capture_output=True, text=True, timeout=5)
+            return r.stdout.strip() if r.returncode == 0 else None
+        except Exception:
+            return None
+    sha = git("rev-parse", "HEAD")
+    if not sha or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        return {}
+    url = git("config", "--get", "remote.origin.url") or ""
+    return {"source_git_sha": sha, "source_git_dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
+            "source_repo": re.sub(r"https://[^@/]*@", "https://", url)[:200]}
+
+
 def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-")[:60] or "test"
 
@@ -79,7 +95,7 @@ class Lab:
         except Exception:
             pass
         self.ctx.binaries[str(p)] = {"name": p.name, "path": str(p), "sha256": sha256_file(p),
-                                     "version": version}
+                                     "version": version, **_source_git(p)}
         return p
 
     def _finish(self) -> None:

@@ -68,3 +68,42 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ matrix.suite }}-bundle.tar.gz
+
+  # The real encrypted link from oasa-sec, through the simulated channel.
+  # Lab changes are tested against oasa-sec main; oasa-sec runs this suite on its own pull requests.
+  link:
+    name: l1-oasa-link (oasa-sec main)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: joinoasa/oasa-sec
+          ref: main
+          path: oasa-sec
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build oasa-sec
+        working-directory: oasa-sec
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          cargo build --locked --bins
+      - name: Install
+        run: python -m pip install -e .
+      - name: Run the suite (tests, evidence bundle, checker)
+        run: |
+          set -euo pipefail
+          OASA_SEC_BIN_DIR="$GITHUB_WORKSPACE/oasa-sec/target/debug" oasa-lab run l1-oasa-link --out runs | tee "$RUNNER_TEMP/run.txt"
+      - name: Show the summary
+        if: always()
+        run: cat runs/*/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: l1-oasa-link-evidence
+          path: runs/
+          if-no-files-found: error

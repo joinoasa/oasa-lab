@@ -22,9 +22,14 @@ It is a **job service**, not remote desktop. You can ask for a named suite. You 
                   |  Claude connector (MCP tools)          |  audit log
                   v
             job queue: ONE job at a time
-                  |  clean checkout of the lab repo at a commit on main
+                  |  fresh copy of the lab repo at a commit on main
+                  |  Unix socket (only oasalab may connect)
                   v
-            oasa-lab run SUITE   ->  evidence bundle + checker verdict
+            job helper (root, 3 verbs: run, stop, clean)
+                  |  systemd-run: user "oasalab-job", own cgroup, state hidden
+                  v
+            oasa-lab run SUITE   ->  evidence bundle
+                  |  copied out (plain files only), judged again by the service's own checker
                   |
         radios on USB, Pluto+ on its own cable (lab network). SDR ports stay local.
 
@@ -48,10 +53,10 @@ Code: `oasa_lab/service/`. One process serves both the connector (`/mcp`) and th
 
 **What we built.** The official MCP Python SDK (MIT) provides the OAuth endpoints (`/.well-known/*`, `/register`, `/authorize`, `/token`, `/revoke`), PKCE and bearer checks. We supply the parts it leaves to the server (`oasa_lab/service/oauth.py`):
 
-1. **Registration** only for Claude's own callback URLs (`claude.ai`, `claude.com`). Anyone can ask to register; nobody can register somewhere else. This blocks the classic attack on OAuth proxies: register a client that sends the owner's code to the attacker.
-2. **A consent page** on our host, so a link someone sends you never signs you in silently.
+1. **Registration** only for Claude's own callback URLs (`claude.ai`, `claude.com`), compared by parsed scheme, host, port and path, never by prefix. Anyone can ask to register; nobody can register somewhere else. This blocks the classic attack on OAuth proxies: register a client that sends the owner's code to the attacker. A flood of registrations can only push out clients that never signed anyone in.
+2. **A consent page** on our host, so a link someone sends you never signs you in silently. The page sets a strict same-site cookie and puts a signed token in the form; the approval needs both to match, an `Origin` equal to our own address and a same-origin fetch metadata header. A page on another site that auto-submits the form in your browser gets a 403 and no cookie.
 3. **GitHub sign-in.** After you approve, GitHub tells us the account's numeric id. Only a user listed in `service.toml` (matched by id, not by name) gets an authorization code. Anyone else gets `access_denied`. We read the id and throw GitHub's token away.
-4. **Tokens:** random, one hour for access, 30 days for refresh (rotated on use), stored only as SHA-256 hashes in a `0600` file. Removing a user from `service.toml` ends their tokens on the next request.
+4. **Tokens:** random, one hour for access, 30 days for refresh (rotated on use), stored only as SHA-256 hashes in a `0600` file. Using a refresh token that was already swapped for a new one (a sign it was copied) ends the whole family: every access and refresh token from that sign-in. Removing a user from `service.toml` ends their tokens on the next request. Every user needs a `github_id`.
 
 No crypto is invented here: PKCE, token checks and metadata come from the SDK; GitHub does the identity.
 
@@ -70,25 +75,32 @@ No crypto is invented here: PKCE, token checks and metadata come from the SDK; G
 | Stranger finds the hostname and the paths | Every path but `/healthz` and the sign-in pages needs a token. Sign-in needs the owner's GitHub account. |
 | Stranger registers an OAuth client | Only Claude's callback URLs are accepted, so a code can only go to Claude. |
 | Stranger sends the owner a sign-in link | The owner sees a consent page naming where they will be sent. Even if approved, the code goes to Claude's callback, not to the stranger. |
+| Stranger's web page approves a sign-in in the owner's browser | The approval form needs a cookie and a token from our own page, and our own `Origin`. A cross-site post is refused. |
 | Stranger's web page calls the API using the owner's browser | Calls from any other website are refused (Origin check); no CORS headers; bearer or signed JWT needed. |
 | Stranger finds the PC's address | There is none: the PC dials out to Cloudflare. Firewall drops all inbound except WireGuard. The service listens on `127.0.0.1` only and refuses any other address in its config. |
 | Someone reaches the SDR ports | Never exposed: not in the tunnel, not in the firewall, and the service never forwards to them. `deploy/check.sh` checks it. |
 | Caller asks for something else than a suite | Only names from the lab repo's `suites/` at the checked-out commit run. `../`, shell text, paths, hidden suites, unknown fields: refused. Tests cover these. |
-| A suite would transmit at the wrong time | The service refuses suites with `transmits = true` unless the owner set `rf_setup` to `cabled` or `shielded`. The setting is in a file only root can edit. |
+| A suite would transmit at the wrong time | Three locks. The service refuses suites with `transmits = true` unless the owner set `rf_setup` to `cabled` or `shielded`, and on real hardware unless the owner confirmed that suite's wiring in the config. The root helper checks the confirmation again against its own root-owned copy of the config. And the radio calls themselves (`tx_tone`, `send_packet`) refuse unless the running suite declared `transmits = true` and a wiring is on record. |
+| A suite (or a bug in one) reads the service's secrets, edits other jobs or the audit log | Jobs run as another user (`oasalab-job`) in their own systemd unit. The service's state folder is hidden from them; they see their own source copy (read-only) and their own `runs` folder. Their environment is a short allow-list, no secrets. |
+| A suite leaves a link, a pipe or a forged verdict in its results | The service copies the bundle out of the job's folder without following links (plain files only, size-capped) and runs its own checker on the copy. It serves and counts only the copy and its own verdict. |
+| A job leaves processes behind | Each job is a systemd unit; stop and the end of the run kill the whole cgroup, including processes that left the process group. |
 | Two jobs fight over the radios | One job at a time, first in first out. |
-| A run goes wrong | Stop it (SIGTERM, then SIGKILL after 10 s, whole process group). Or pause the lab (refuses new jobs, cancels the queue). Or `touch /var/lib/oasa-lab/PAUSE` from a shell. Runs also have a time limit. |
+| A run goes wrong | Stop it (SIGTERM, then SIGKILL after 10 s, whole cgroup). Or pause the lab (refuses new jobs, cancels the queue). Or from a shell `sudo touch /etc/oasa-lab/PAUSE`: any file or folder at that path pauses the lab, and no API or Claude call can remove it (`/var/lib/oasa-lab/PAUSE` works too, but the API can clear that one). Runs also have a time limit. |
 | Someone claims a result that did not happen | A run counts only if `get_results` shows `"counted": true`: job passed and checker passed. A stopped run is never counted. |
+| Someone asks for an old, vulnerable commit | `min_commit` in the config is the oldest commit a caller may name. |
+| The disk fills | A job does not start below `min_free_mb`; only the newest `keep_jobs` finished jobs keep their evidence; log reads and live streams are capped. |
 | We need to know what happened | Audit log: one JSON line per request (who, what, when, result), no secrets. |
 
 **What we do not defend against (known limits)**
 
 - **The owner's GitHub or Claude account being taken over.** Turn on two-factor sign-in on both. Whoever is the owner can run suites.
-- **Bad code merged to `main`.** Jobs run the newest `main` of this repo. We trust pull-request review. A malicious suite would run as the `oasalab` user and could read the service's memory, including the GitHub client secret. Keep `main` protected. A later step is to run jobs as a second user.
+- **Bad code merged to `main`.** Jobs run the newest `main` of this repo. We trust pull-request review. A malicious suite runs as `oasalab-job`, cannot read the service's files or memory, and cannot change evidence after the fact, but it can use the radios it is allowed to use (inside the interlocks above) and the network. Keep `main` protected.
+- **The root helper.** It is the one root program, three verbs and a job id, reading a root-owned config, behind a socket only `oasalab` can open. A flaw in it, in systemd, or in the kernel breaks the sandbox. It is about 300 lines (`oasa_lab/service/jobrun.py`) with tests; read it.
+- **Dependencies.** The service installs from `deploy/requirements.lock` with hashes, at a pinned oasa-lab commit. That stops a changed or hijacked package from slipping in on a re-run. It does not make the packages themselves safe.
 - **Text inside test output tricking Claude** (prompt injection). The connector tells Claude that log text is data. The tools cannot do anything beyond the suites, the interlock and the role limits, so the worst a trick can do is run or stop an allowed suite.
 - **Cloudflare, GitHub or Anthropic being compromised or down.** We trust them for transport, identity and the chat. If any is down, the lab is simply unreachable.
 - **Physical access, and the bench itself.** The interlock trusts `rf_setup`. Setting it to `cabled` when the antennas are on is the owner's mistake to avoid. Attenuators and a shielded box are the real safety.
-- **Floods.** Anyone can hit `/register` and `/authorize` (they hold no power but use memory; both are capped). Add a Cloudflare rate-limit rule if you see abuse.
-- **Disk.** Bundles accumulate in `/var/lib/oasa-lab/jobs/`. Prune old ones by hand for now.
+- **Floods.** Anyone can hit `/register` and `/authorize` (they hold no power but use memory; both are capped, and a full table drops the oldest unfinished sign-in rather than refusing a new one). Add the Cloudflare rate-limit rule in [deploy/README.md](../deploy/README.md) step 7.
 
 ## Use it from a Claude chat
 
@@ -158,7 +170,7 @@ Roles live in `oasa_lab/service/config.py` (`PERMISSIONS`). Restart the service 
 1. `rf_setup` in `[lab]` must be `cabled` or `shielded`.
 2. On real hardware (inventory backend `usb`) you must also confirm the wiring, one suite at a time: `[confirm_wiring]` `l2-rf-control = "lora"` in `service.toml`, where the value is the suite's wiring name. Only then does the service run it with `--confirm-wiring lora`. A different name, or none, is refused with a message saying what to set. The simulated service never passes the flag; it runs the suites on the simulated bench (`OASA_LAB_SIM=1`).
 
-The jobs read the device file named by `devices_file` (`/etc/oasa-lab/lab.toml`; start from `lab.example.toml`). The confirmed wiring is recorded in the run's manifest (`job.wiring_confirmed`), next to `job.rf_setup`. Even then the hardware layer and the checker still enforce the 60 dB rule and the RF evidence; the service adds a lock, it does not replace theirs.
+The jobs read the device file named by `devices_file` (`/etc/oasa-lab.d/lab.toml`; start from `lab.example.toml`). The confirmed wiring is recorded in the run's manifest (`job.wiring_confirmed`), next to `job.rf_setup`. Even then the hardware layer and the checker still enforce the 60 dB rule and the RF evidence; the service adds a lock, it does not replace theirs.
 
 ## Audit log
 
@@ -178,7 +190,7 @@ Refused calls, failed sign-ins and unauthorized requests are logged too. Token v
 | Level | How |
 |---|---|
 | One run | Chat: "stop job ...". Or `POST /api/jobs/{id}/stop` |
-| No new runs | Chat: "pause the lab". Or on the PC: `sudo touch /var/lib/oasa-lab/PAUSE` (delete it to resume) |
+| No new runs | Chat: "pause the lab". Or on the PC: `sudo touch /etc/oasa-lab/PAUSE` (Claude and the API cannot clear it; delete it to resume) |
 | The service (also kills a run) | `sudo systemctl stop oasa-lab` |
 | The internet door | `sudo systemctl stop cloudflared`, or delete the tunnel in Cloudflare |
 | Claude's access only | Remove the connector in Claude; delete `/var/lib/oasa-lab/oauth.json`; restart the service |

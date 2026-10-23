@@ -31,7 +31,7 @@ ip -br link            # find the card the Pluto+ is plugged into
 nano setup.env         # LAB_IFACE, hostnames, WireGuard key later
 ```
 
-Nothing in `setup.env` is secret.
+Nothing in `setup.env` is secret. Set `LAB_REF` to a release tag or a full commit of `main` (the install refuses an empty one, or a floating branch, so a re-run cannot pull in new code unseen). Packages install from `requirements.lock` with hashes.
 
 ### 1. Packages, drivers, USB rules
 
@@ -87,7 +87,7 @@ Keep the **client id** (not secret) and make a **client secret**. Do not put the
 sudo ./05-service.sh
 ```
 
-Creates the `oasalab` user (no login, no shell), installs `oasa-lab serve` as the systemd service `oasa-lab`, and copies `service.toml.example` and `.env.example` to `/etc/oasa-lab/`. It does not start while the config still has placeholders.
+Creates two users with no login: `oasalab` (the service) and `oasalab-job` (runs the suites). Installs `oasa-lab serve` as the systemd service `oasa-lab`, plus a small root helper behind the socket `/run/oasa-lab/jobrun.sock` that only `oasalab` can open; the helper starts each job as `oasalab-job` in its own systemd unit with memory and task limits, and the service state folder hidden. It runs the helper's self-test, and copies `service.toml.example` and `.env.example` to `/etc/oasa-lab/`. The helper takes the RF setup, confirmed wiring and device file only from root-owned `/etc/oasa-lab/service.toml` and `/etc/oasa-lab.d/lab.toml`, which `oasalab` can read but not change. It does not start while the config still has placeholders.
 
 OWNER: edit the two files.
 
@@ -97,7 +97,7 @@ sudo nano /etc/oasa-lab/env          # OASA_LAB_GITHUB_CLIENT_SECRET=...
 sudo ./05-service.sh                 # checks the config and starts the service
 ```
 
-Leave `rf_setup = "unset"` until you have checked the bench: radios joined by cable with attenuators, or inside the shielded box. Then set `"cabled"` or `"shielded"` and `sudo systemctl restart oasa-lab`. Until then, suites that transmit are refused. Real transmitting also needs a `[confirm_wiring]` line per suite in `service.toml`, saying you connected that suite's wiring (see [remote lab](../docs/remote-lab.md)). The device file `/etc/oasa-lab/lab.toml` starts as a copy of `lab.example.toml`; fill in your serials and cable losses.
+Leave `rf_setup = "unset"` until you have checked the bench: radios joined by cable with attenuators, or inside the shielded box. Then set `"cabled"` or `"shielded"` and `sudo systemctl restart oasa-lab`. Until then, suites that transmit are refused. Real transmitting also needs a `[confirm_wiring]` line per suite in `service.toml`, saying you connected that suite's wiring (see [remote lab](../docs/remote-lab.md)). The device file `/etc/oasa-lab.d/lab.toml` (root-owned; jobs read it) starts as a copy of `lab.example.toml`; fill in your serials and cable losses.
 
 Make an API token for scripts (optional):
 
@@ -114,6 +114,8 @@ sudo ./06-cloudflared.sh       # installs cloudflared, then tells you the accoun
 ```
 
 You log in to Cloudflare, create the tunnel, point two hostnames at it, and copy the credentials file into `/etc/cloudflared/` (the script prints the exact commands). Run the script again. It writes the tunnel config that exposes **only** the job service, on fixed paths. Everything else returns 404. The SDR ports (iiod 30431, rtl_tcp 1234, SoapyRemote 55132) are never listed.
+
+Add a rate-limit rule (Cloudflare dashboard, Security, WAF, Rate limiting rules) on the **MCP hostname** for the paths `/register` and `/authorize`, for example 10 requests per minute per IP, action Block for 10 minutes. These two paths are open by design; the service caps what they store, and this rule stops the noise before it arrives.
 
 Then in Cloudflare Zero Trust, Access controls, Applications, add a self-hosted application for the **API hostname** with one rule: Allow, Emails, your email. Copy the application's AUD tag and your team domain into `[cloudflare_access]` in `service.toml`, and restart the service.
 
@@ -138,7 +140,7 @@ Optional hardening: a Cloudflare WAF rule on the MCP hostname that blocks `/mcp`
 | Want | Do |
 |---|---|
 | Upgrade the service | `git pull && sudo ./05-service.sh` (jobs always run the newest `main` anyway) |
-| Pause all new runs | In chat: "pause the lab". Or: `sudo touch /var/lib/oasa-lab/PAUSE` |
+| Pause all new runs | In chat: "pause the lab". Or on the PC: `sudo touch /etc/oasa-lab/PAUSE` (Claude cannot clear this one; delete it to resume) |
 | Stop the running job | In chat: "stop job <id>". Or `curl -X POST -H "Authorization: Bearer $TOKEN" .../api/jobs/<id>/stop` |
 | Stop the service (kills any run) | `sudo systemctl stop oasa-lab` |
 | Close the internet door | `sudo systemctl stop cloudflared` |
@@ -158,4 +160,6 @@ Optional hardening: a Cloudflare WAF rule on the MCP hostname that blocks `/mcp`
 | `.env.example` | The one secret the service needs (GitHub client secret) |
 | `cloudflared-config.yml.example` | What the tunnel config looks like |
 | `systemd/oasa-lab.service` | The service unit, with sandboxing |
+| `systemd/oasa-lab-jobrun.socket`, `oasa-lab-jobrun@.service` | The root helper that starts jobs as `oasalab-job` |
+| `requirements.lock`, `requirements-build.lock` | Hashed package pins (made with `uv pip compile --generate-hashes`) |
 | `udev/99-oasa-lab.rules` | USB access for the radios |

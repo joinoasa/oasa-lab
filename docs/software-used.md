@@ -67,6 +67,8 @@ Installed with it:
 | click, idna, truststore | 8.5.0 / 3.20 | BSD-3-Clause / BSD-3-Clause / MIT | Pulled in by uvicorn, httpx2 |
 | typing-extensions | 4.16.0 | PSF-2.0 (Python's own permissive license) | Typing backports |
 
+The exact versions and file hashes are pinned in `deploy/requirements.lock`; the deploy installs with `--require-hashes`. The lock files are made with `uv` (Apache-2.0 OR MIT), a build-time tool only, never installed on the lab PC. The root job helper uses the standard library and `systemd-run` (LGPL, a system tool we call, not link).
+
 The service itself uses only these and the standard library. It reads the lab's own suites from git; it adds no code from outside to a run.
 
 **Programs on the lab PC** (system packages by `deploy/01-packages.sh` and `06-cloudflared.sh`; run as separate programs, not linked or copied into this repo):

@@ -40,6 +40,13 @@ Tools run as **separate processes** (never imported, never shipped):
 
 The lab writes its own SigMF files and checks them with its own code (stdlib only), and has its own pure-Python FFT for tone measurement.
 
+## Optional (only for `l1-mavlink-sitl`)
+
+| Package | Version | License | Why |
+|---|---|---|---|
+| [pymavlink](https://github.com/ArduPilot/pymavlink) | 2.4.x | LGPL-3.0 | Makes and signs MAVLink 2 frames for the ground station in the SITL suite. Not a lab dependency: install it by hand to run that suite. **Not permissive**: needs an owner decision before it is adopted (oasa-sec's own SITL scripts already use it). |
+| PX4-Autopilot, ArduPilot | master, see the run's manifest | BSD-3-Clause, GPL-3.0 | The simulators under test. Built outside this repo and run as separate programs, never linked. |
+
 ## Build only
 
 | Package | Version | License | Why |

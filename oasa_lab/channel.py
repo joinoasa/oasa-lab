@@ -426,6 +426,8 @@ class Channel:
 
     # --- lifecycle -------------------------------------------------------------------------
     def start(self) -> "Channel":
+        if self._thread:  # already running (lab.channel() starts it; `with` calls start() again)
+            return self
         if self.pcap_path:
             self._pcap = PcapWriter(self.pcap_path)
         ready = threading.Event()

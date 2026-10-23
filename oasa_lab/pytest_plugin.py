@@ -57,21 +57,25 @@ class Lab:
         self.ctx.markers.append(m)
         return m
 
-    def channel(self, *, a=None, b=None, seed: int | None = None, **settings: Any) -> Channel:
+    def channel(self, *, a=None, b=None, seed: int | None = None, profile: str | None = None,
+                **settings: Any) -> Channel:
         """A simulated channel for this test. Started and recorded; stopped when the test ends.
 
         Unless `seed` is given, the seed is derived from the run seed and this test's id.
+        `profile` starts from a radio profile (see profiles.py); settings you pass override it.
+        The manifest records the profile name and the fully resolved settings.
         """
         n = self.ctx.next_index()
         if seed is None:
             seed = derive_seed(self.ctx.seed, self.nodeid, n)
-        cfg = ChannelSettings(seed=seed, **settings)
+        cfg = ChannelSettings.for_profile(profile, seed=seed, **settings)
         cid = f"ch{n:02d}"
         rel = f"captures/{n:02d}-{_slug(self.nodeid.split('::')[-1])}.pcap"
         flags = self.ctx.suite.capture_flags()
         ch = Channel(cfg, a=a, b=b, pcap_path=self.ctx.run_dir / rel, name=cid,
                      on_event=lambda ev, **f: self.log(ev, **f), stats_interval=1.0)
-        entry = {"id": cid, "test": self.nodeid, "settings": cfg.to_dict(), "capture": rel}
+        entry = {"id": cid, "test": self.nodeid, "profile": cfg.profile, "settings": cfg.to_dict(),
+                 "capture": rel}
         self.ctx.channels.append(entry)
         cap = {"file": rel, "channel": cid, **flags, "markers": []}
         self.ctx.captures.append(cap)

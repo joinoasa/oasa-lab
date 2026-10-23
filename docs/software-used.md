@@ -24,6 +24,10 @@ Installed with them (pytest's own dependencies):
 |---|---|---|---|
 | [setuptools](https://github.com/pypa/setuptools) | 84.2.1 (`>=68`) | MIT | Builds the `oasa-lab` package (`pip install -e .`). Not needed to run. |
 
+## Read, not used
+
+The radio profiles ([profiles.md](profiles.md)) take numbers and equations from the Semtech SX126x driver, ArduPilot SiK, mLRS and WFB-ng sources and docs. No code from them is copied or linked. If a profile ever needs one of them as a dependency, it goes in this table first.
+
 ## Standard library only
 
 The simulated channel, the pcap writer and the whole checker use only the Python 3.11+ standard library (`asyncio`, `socket`, `struct`, `hashlib`, `tomllib`, `xml.etree`). The checker takes no outside package on purpose, so it is easy to audit.

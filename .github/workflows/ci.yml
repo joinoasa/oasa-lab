@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [l0-lab, l1-channel, l1-plaintext-control]
+        suite: [l0-lab, l1-channel, l1-plaintext-control, l1-profiles]
     permissions:
       contents: read
       id-token: write

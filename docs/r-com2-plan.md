@@ -75,7 +75,7 @@ W3 and W4 build on **T-RF1** (radios scanning when idle). Tools: FutureSDR (Rust
 | Level | What runs | Hardware |
 |---|---|---|
 | **L0** | Unit tests and known-answer crypto vectors | None |
-| **L1** | Simulated radio channel: loss, delay, reordering, duplication, bandwidth limits, noise. Repeatable from a seed | None |
+| **L1** | Simulated radio channel: loss, delay, reordering, duplication, bandwidth limits, noise. Repeatable from a seed. Profiles add the airtime and packet limits of LoRa, SiK, mLRS and WFB-ng ([profiles](profiles.md)) | None |
 | **L2** | Real radios joined by coax through attenuators, or inside a shielded box | Bench |
 | **L3** | Over the air in the lab space | Bench + antennas |
 | **L4** | Field and flight tests | Vehicles |

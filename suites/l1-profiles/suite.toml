@@ -1,0 +1,10 @@
+description = "Radio profiles on the simulated channel: airtime and throughput match the model, half-duplex shares one medium, queue overflow is counted, seeds repeat"
+expectations = [
+  "test_half_duplex_serializes_both_directions",
+  "test_queue_overflow_is_counted",
+  "test_same_seed_same_decisions",
+  "test_air_rule_rejects_overlapping_packets",
+]
+
+[captures]
+encrypted = false

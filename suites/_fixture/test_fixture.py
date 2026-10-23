@@ -22,3 +22,16 @@ def test_stranger_gets_nothing(lab):
         stranger.wait_idle(0.1)
     assert len(b.received) == 20
     assert stranger.received == []
+
+
+def test_half_duplex_radio_traffic(lab):
+    """Both directions through a half-duplex profile: the capture has airtime to check."""
+    with Endpoint() as a, Endpoint() as b:
+        with lab.channel(a=a.addr, b=b.addr, profile="sik-64k") as ch:
+            up = [make_packet(i, lab.rng, 100) for i in range(40)]
+            down = [make_packet(1000 + i, lab.rng, 100) for i in range(40)]
+            a.send_paced(up, ch.addr_a)
+            b.send_paced(down, ch.addr_b)
+            a.wait_idle(0.5)
+            b.wait_idle(0.5)
+    assert len(b.received) == 40 and len(a.received) == 40

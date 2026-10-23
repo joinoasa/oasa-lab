@@ -18,10 +18,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from .air import airtime as air_time
+from .air import check_air
 from .pcapread import Packet, PcapError, parse_pcap
 from .stats import binomial_bound, chi2_bytes, poisson_limit
 
-CHECKER_VERSION = "1.0"
+CHECKER_VERSION = "1.1"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
@@ -178,6 +180,46 @@ def _num(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
+AIR_MODELS = {
+    "lora": ("lora_sf", "lora_bw_hz"),
+    "bitrate": ("air_kbps",),
+    "slots": ("slot_ms", "slot_payload"),
+}
+
+
+def _air_settings_errors(cid: str, s: dict) -> list[str]:
+    """The airtime settings are optional (older bundles have none), but if present they must make sense."""
+    kind = s.get("airtime", "")
+    errs: list[str] = []
+    if not isinstance(kind, str) or kind not in ("", *AIR_MODELS):
+        return [f"{cid}: settings.airtime must be empty or one of {', '.join(AIR_MODELS)}"]
+    if not isinstance(s.get("profile", ""), str):
+        errs.append(f"{cid}: settings.profile must be text")
+    for k in ("max_queue", "serial_bps"):
+        if k in s and not (_num(s[k]) and s[k] >= 0):
+            errs.append(f"{cid}: settings.{k} must be 0 or more")
+    if "duty_cycle" in s and not (_num(s["duty_cycle"]) and 0 <= s["duty_cycle"] <= 1):
+        errs.append(f"{cid}: settings.duty_cycle must be 0 to 1")
+    if "half_duplex" in s and not isinstance(s["half_duplex"], bool):
+        errs.append(f"{cid}: settings.half_duplex must be true or false")
+    if not kind:
+        if s.get("half_duplex") or s.get("max_queue") or s.get("duty_cycle"):
+            errs.append(f"{cid}: half_duplex, max_queue and duty_cycle need an airtime model")
+        return errs
+    for k in AIR_MODELS[kind]:
+        if not (_num(s.get(k)) and s[k] > 0):
+            errs.append(f"{cid}: settings.{k} must be above 0 for the {kind} model")
+    if s.get("rate_kbps"):
+        errs.append(f"{cid}: rate_kbps and an airtime model cannot be combined")
+    try:
+        airtime_probe = air_time(s, 64, "a_to_b")
+        if not (math.isfinite(airtime_probe) and airtime_probe > 0):
+            errs.append(f"{cid}: the airtime model gives {airtime_probe} s for 64 bytes")
+    except (KeyError, TypeError, ValueError, ZeroDivisionError, OverflowError) as exc:
+        errs.append(f"{cid}: the airtime settings are incomplete or invalid ({type(exc).__name__}: {exc})")
+    return errs
+
+
 def check_manifest(b: Bundle) -> dict:
     m = b.manifest()
     errs: list[str] = []
@@ -239,6 +281,8 @@ def check_manifest(b: Bundle) -> dict:
         for k in ("delay_ms", "jitter_ms", "rate_kbps", "mtu"):
             need(_num(s.get(k)) and s[k] >= 0, f"{c['id']}: settings.{k} must be 0 or more")
         need(isinstance(s.get("seed"), int) and not isinstance(s.get("seed"), bool), f"{c['id']}: settings.seed must be an integer")
+        errs.extend(_air_settings_errors(c["id"], s))
+        need(c.get("profile", s.get("profile", "")) == s.get("profile", ""), f"{c['id']}: profile name and settings.profile differ")
         need(isinstance(c.get("endpoints"), dict), f"{c['id']}: endpoints missing")
     files: set[str] = set()
     for i, cap in enumerate(caps or []):
@@ -501,6 +545,7 @@ def check_payload(b: Bundle) -> dict:
 # --- check 5: numbers make sense -----------------------------------------------------------
 STAT_KEYS = ("sent", "dropped", "duplicated", "reordered", "corrupted", "replayed", "too_big",
              "unrouted", "abandoned", "forwarded")
+OPTIONAL_STAT_KEYS = ("queue_dropped",)  # added with the airtime model; absent (= 0) in older logs
 
 
 def check_numbers(b: Bundle) -> dict:
@@ -512,7 +557,7 @@ def check_numbers(b: Bundle) -> dict:
             if r.get("channel") in finals:
                 raise Fail(f"two final channel_stats lines for {r.get('channel')}")
             finals[r.get("channel")] = r
-    errs, rows, skipped = [], [], []
+    errs, rows, skipped, air_rows = [], [], [], []
     declared = {c["id"] for c in m.get("channels", [])}
     for extra in sorted(set(finals) - declared):
         errs.append(f"log has channel_stats for {extra}, which the manifest does not list")
@@ -533,19 +578,24 @@ def check_numbers(b: Bundle) -> dict:
             errs.append(f"{cid}: capture holds a packet larger than mtu {s['mtu']}")
         for d in ("a_to_b", "b_to_a"):
             x = st.get(d)
-            if not isinstance(x, dict) or any(not isinstance(x.get(k), int) or x[k] < 0 for k in STAT_KEYS):
+            if isinstance(x, dict):
+                x = {**dict.fromkeys(OPTIONAL_STAT_KEYS, 0), **x}
+            if not isinstance(x, dict) or any(not isinstance(x.get(k), int) or x[k] < 0
+                                              for k in STAT_KEYS + OPTIONAL_STAT_KEYS):
                 errs.append(f"{cid} {d}: channel_stats incomplete")
                 continue
             tag = f"{cid} {d}"
-            expected_fwd = (x["sent"] - x["dropped"] - x["too_big"] - x["unrouted"]
+            expected_fwd = (x["sent"] - x["dropped"] - x["too_big"] - x["unrouted"] - x["queue_dropped"]
                             + x["duplicated"] + x["replayed"] - x["abandoned"])
+            if x["queue_dropped"] and not s.get("max_queue"):
+                errs.append(f"{tag}: {x['queue_dropped']} queue drops, but max_queue is 0 (no limit)")
             if x["forwarded"] != expected_fwd:
                 errs.append(f"{tag}: forwarded {x['forwarded']} but the counts add up to {expected_fwd}")
             if len(by_dir[d]) != x["forwarded"]:
                 errs.append(f"{tag}: log says {x['forwarded']} forwarded, capture holds {len(by_dir[d])}")
             if x["abandoned"]:
                 errs.append(f"{tag}: {x['abandoned']} packets were abandoned in flight")
-            n_loss = x["sent"] - x["too_big"] - x["unrouted"]
+            n_loss = x["sent"] - x["too_big"] - x["unrouted"] - x["queue_dropped"]
             survivors = n_loss - x["dropped"]
             for name, key, p, trials, slack in (
                 ("loss", "dropped", s["loss"], n_loss, 0.0),
@@ -577,13 +627,19 @@ def check_numbers(b: Bundle) -> dict:
                 rows.append(row)
                 if not ok:
                     errs.append(f"{tag} {name}: {k} of {trials} (configured {p}); {why}")
+        air_errs, air_info = check_air(cid, s, by_dir)
+        errs.extend(air_errs)
+        if air_info["model"]:
+            air_rows.append({"channel": cid, **air_info})
     if errs:
-        raise Fail("; ".join(errs[:6]) + (f" (and {len(errs) - 6} more)" if len(errs) > 6 else ""), errors=errs, rows=rows)
+        raise Fail("; ".join(errs[:6]) + (f" (and {len(errs) - 6} more)" if len(errs) > 6 else ""),
+                   errors=errs, rows=rows, airtime=air_rows)
     if not m.get("channels"):
         return {"reason": "no channels in this run; nothing to check", "details": {}}
+    note = f"; airtime respected on {len(air_rows)} channel(s)" if air_rows else ""
     return {"reason": f"{len(m['channels'])} channel(s): stats match the captures; {sum(r['result'] == 'ok' for r in rows)} "
-                      f"rates within 5 sigma" + (f"; {len(skipped)} skipped (too few packets)" if skipped else ""),
-            "details": {"rows": rows}}
+                      f"rates within 5 sigma" + note + (f"; {len(skipped)} skipped (too few packets)" if skipped else ""),
+            "details": {"rows": rows, "airtime": air_rows}}
 
 
 # --- check 6: known-bad cases ran and passed -----------------------------------------------

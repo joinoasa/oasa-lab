@@ -24,14 +24,15 @@ Follow the [OASA software standard](https://joinoasa.org/docs/software-standard/
 | `tail -f runs/*/log.jsonl` | Watch a run live |
 | `pytest -p oasa_lab.pytest_plugin suites/l0-lab` | A suite without a bundle (quick local loop) |
 
-Run `l0-lab`, `l1-channel` and `l1-plaintext-control` before every pull request; CI does the same. Details: [README](README.md), [checker](docs/checker.md), [software used](docs/software-used.md).
+Run `l0-lab`, `l1-channel`, `l1-plaintext-control` and `l1-profiles` before every pull request; CI does the same. Details: [README](README.md), [checker](docs/checker.md), [software used](docs/software-used.md).
 
 ## Adding a suite or test
 
 - A suite is `suites/<name>/` with a `suite.toml` (description, `expectations`, `[captures]` flags) and pytest files. Use the `lab` fixture: `lab.channel(...)`, `lab.marker()`, `lab.file()`, `lab.binary()`.
 - List known-bad cases (attacker, wrong key, replay) in `expectations`. The checker fails the run if one is missing or skipped.
 - Mark captures `encrypted = true` only if the traffic is ciphertext. Add a plaintext control for any new scanner rule.
-- The checker (`oasa_lab/checker/`) imports the standard library only. Keep it that way.
+- The checker (`oasa_lab/checker/`) imports the standard library only. Keep it that way. It has its own copy of the airtime formulas (`checker/air.py`); change both together (a test compares them).
+- A radio profile (`oasa_lab/profiles.py`) needs a source for every number in [docs/profiles.md](docs/profiles.md); mark anything unconfirmed *est.* and say why.
 - Any new outside package goes in [docs/software-used.md](docs/software-used.md) (permissive licenses only).
 
 ## Pull requests

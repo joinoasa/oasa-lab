@@ -17,8 +17,10 @@ from .suites import Suite
 
 
 class RunContext:
-    def __init__(self, suite: Suite, seed: int, run_dir: Path, run_id: str | None = None):
+    def __init__(self, suite: Suite, seed: int, run_dir: Path, run_id: str | None = None,
+                 confirm_wiring: str | None = None):
         self.suite = suite
+        self.confirm_wiring = confirm_wiring
         self.seed = seed
         self.run_dir = Path(run_dir)
         self.run_id = run_id or uuid.uuid4().hex
@@ -31,6 +33,8 @@ class RunContext:
         self.channels: list[dict[str, Any]] = []
         self.captures: list[dict[str, Any]] = []
         self.binaries: dict[str, dict[str, Any]] = {}
+        self.hardware: dict[str, Any] = {"devices": {}, "hub": None, "rf": None}
+        self.recordings: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._n = 0
 

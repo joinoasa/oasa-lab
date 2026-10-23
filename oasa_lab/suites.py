@@ -8,6 +8,15 @@ suite.toml:
     expect_plaintext  = false           # negative control: the checker must FIND the markers
     expect_mavlink    = false           # negative control: the checker must find MAVLink frames
     skip_header_bytes = 0               # leading protocol bytes left out of the randomness test
+
+Hardware suites (L2) add:
+    transmits = true                    # the suite puts RF on a cable; the checker then needs wiring with 60 dB or more
+    requires  = ["pluto", "rtlsdr", "serial-radio:2"]   # devices from lab.toml; missing ones skip the suite
+    wiring    = "pluto"                 # the [wiring.NAME] of lab.toml the cables must match
+    [limits.METRIC]                     # pass/fail limits of measurements; the checker re-applies them
+    min = 0.6
+    max = 1.05
+    reason = "why these numbers"
 """
 
 from __future__ import annotations
@@ -35,6 +44,10 @@ class Suite:
     expectations: list[str] = field(default_factory=list)
     captures: dict = field(default_factory=dict)
     hidden: bool = False
+    transmits: bool = False
+    requires: list[str] = field(default_factory=list)
+    wiring: str = ""
+    limits: dict = field(default_factory=dict)
 
     def capture_flags(self) -> dict:
         c = self.captures
@@ -55,6 +68,10 @@ def load_suite(path: Path) -> Suite:
         expectations=[str(x) for x in data.get("expectations", [])],
         captures=dict(data.get("captures", {})),
         hidden=path.name.startswith("_"),
+        transmits=bool(data.get("transmits", False)),
+        requires=[str(x) for x in data.get("requires", [])],
+        wiring=str(data.get("wiring", "")),
+        limits={str(k): dict(v) for k, v in (data.get("limits") or {}).items()},
     )
 
 

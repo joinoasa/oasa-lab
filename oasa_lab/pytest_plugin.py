@@ -12,9 +12,12 @@ from typing import Any
 
 import pytest
 
-from . import context
+from . import context, sigmf
 from .channel import Channel, ChannelSettings
 from .context import RunContext, derive_seed, make_rng, sha256_file
+from .devices import Inventory, InventoryError
+from .hw import Hardware
+from .pcap import PcapWriter
 
 
 def _source_git(binary: Path) -> dict:
@@ -46,6 +49,7 @@ class Lab:
         self.rng = make_rng(ctx.seed, nodeid)  # repeatable randomness for this test
         self.markers: list[str] = []
         self._channels: list[tuple[Channel, dict[str, Any]]] = []
+        self._air: list[tuple[Any, dict[str, Any], str, int]] = []
 
     def log(self, event: str, **fields: Any) -> None:
         self.ctx.log.write(event, test=self.nodeid, **fields)
@@ -102,7 +106,60 @@ class Lab:
                                      "version": version, **_source_git(p)}
         return p
 
+    def air_capture(self, link: Any, device_id: str, name: str | None = None) -> str:
+        """Record what a modem delivers to its host (what it heard on the air) as captures/NN-air-NAME.pcap.
+
+        `link` is a ModemLink. The file is written when the test ends. Returns its path in the bundle.
+        The frames are packets of the radio, wrapped in synthetic IP and UDP headers so the checker's
+        scanner and Wireshark can read them.
+        """
+        n = self.ctx.next_index()
+        rel = f"captures/{n:02d}-air-{_slug(name or device_id)}.pcap"
+        cap = {"file": rel, "kind": "air", "device": device_id, **self.ctx.suite.capture_flags(), "markers": []}
+        self.ctx.captures.append(cap)
+        self._air.append((link, cap, rel, n))
+        return rel
+
+    def sigmf(self, name: str, data: Any, *, datatype: str, sample_rate: float, center_hz: float, start_time: float,
+              device: str, purpose: str, description: str = "", burst_check: dict[str, Any] | None = None,
+              annotations: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """Write a radio recording as SigMF into recordings/ and list it in the manifest.
+
+        `data` is bytes or the path of a file to move in. `burst_check` asks the checker to line the
+        recording's bursts up with the airtime of the frames in the named air captures.
+        """
+        info = self.ctx.hardware["devices"].get(device, {})
+        hw = f"{info.get('model', device)} SN {info.get('serial', 'n/a')} ({info.get('backend', '?')})"
+        entry = sigmf.write_recording(
+            self.ctx.run_dir, self.ctx.next_index(), name, data, datatype=datatype, sample_rate=sample_rate,
+            center_hz=center_hz, start_time=start_time, device=device, hw=hw, run_id=self.ctx.run_id,
+            purpose=purpose, description=description, annotations=annotations, burst_check=burst_check)
+        self.ctx.recordings.append(entry)
+        self.log("recording", file=entry["meta"], samples=entry["samples"], datatype=datatype,
+                 sample_rate=sample_rate, center_hz=center_hz, device=device, purpose=purpose)
+        return entry
+
+    def measure(self, metric: str, name: str, value: float, unit: str = "") -> bool:
+        """Log a measurement against the limits the suite declares in `[limits.METRIC]`. Returns True if inside.
+
+        The checker re-applies the same limits from suite.toml, so a test cannot loosen them.
+        """
+        lim = self.ctx.suite.limits.get(metric)
+        if lim is None:
+            raise KeyError(f"{metric!r} has no [limits.{metric}] in suite.toml")
+        lo, hi = lim.get("min"), lim.get("max")
+        ok = (lo is None or value >= lo) and (hi is None or value <= hi)
+        self.log("measurement", metric=metric, name=name, value=value, unit=unit, min=lo, max=hi, ok=ok)
+        return ok
+
     def _finish(self) -> None:
+        for link, cap, rel, n in self._air:
+            w = PcapWriter(self.ctx.run_dir / rel)
+            for fr in link.rx_packets():
+                w.write(("10.99.0.254", 9), (f"10.99.0.{n % 250 + 1}", 9), fr.data, ts=fr.ts)
+            w.close()
+            cap["markers"] = list(self.markers)
+        self._air.clear()
         for ch, cap in self._channels:
             ch.stop()
             entry = next(c for c in self.ctx.channels if c["id"] == ch.name)
@@ -118,6 +175,26 @@ def lab(request: pytest.FixtureRequest):
         yield obj
     finally:
         obj._finish()
+
+
+@pytest.fixture
+def hw(request: pytest.FixtureRequest, lab: Lab):
+    """The bench: devices from lab.toml (or the simulated bench). Skips the test if the suite's
+    `requires` are not all there. Devices are closed when the test ends."""
+    ctx = context.current()
+    try:
+        inv = Inventory.load()
+    except InventoryError as exc:
+        pytest.skip(f"lab.toml is not usable: {exc}")
+    missing = inv.missing(ctx.suite.requires)
+    if missing:
+        pytest.skip(f"hardware missing from {inv.source}: {', '.join(missing)}. "
+                    "Write lab.toml (see lab.example.toml) or set OASA_LAB_SIM=1 for the simulated bench")
+    h = Hardware(ctx, inv, request.node.nodeid)
+    try:
+        yield h
+    finally:
+        h.close()
 
 
 # --- live log ------------------------------------------------------------------------------

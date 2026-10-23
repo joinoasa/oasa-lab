@@ -75,6 +75,26 @@ jobs:
         with:
           subject-path: ${{ matrix.suite }}-bundle.tar.gz
 
+  # The remote job service and Claude connector (oasa_lab/service): real jobs, a live localhost server,
+  # an MCP client, a faked GitHub. No hardware, no secrets, no network beyond localhost.
+  service:
+    name: job service tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install -e '.[service]'
+      - name: Test
+        run: python -m pytest -o addopts="" tests/service -q
+
   # The real encrypted link from oasa-sec, through the simulated channel.
   # Lab changes are tested against oasa-sec main; oasa-sec runs this suite on its own pull requests.
   link:

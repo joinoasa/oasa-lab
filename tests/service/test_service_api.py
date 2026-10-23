@@ -398,3 +398,40 @@ def test_jobs_running_when_the_service_stopped_are_marked_interrupted(make_servi
         assert ja.status in ("stopped", "interrupted") and jb.status == "cancelled"
     finally:
         stop(s2)
+
+
+# --- commits ----------------------------------------------------------------------------------------------
+def test_a_commit_that_is_not_on_main_is_refused(svc, lab_repo):
+    import subprocess
+
+    tree = subprocess.run(["git", "-C", str(lab_repo), "rev-parse", "HEAD^{tree}"], capture_output=True, text=True).stdout.strip()
+    stray = subprocess.run(["git", "-C", str(lab_repo), "-c", "user.name=t", "-c", "user.email=t@e.invalid",
+                            "commit-tree", tree, "-m", "not on main"], capture_output=True, text=True).stdout.strip()
+    with svc.client() as c:
+        r = c.post("/api/jobs", json={"suite": "t-quick", "commit": stray})
+    assert r.status_code == 400 and "not on main" in r.json()["error"]
+
+
+def test_each_job_uses_the_newest_main_and_records_it(make_service, lab_repo, tmp_path):
+    import shutil
+    import subprocess
+
+    repo = tmp_path / "repo"
+    shutil.copytree(lab_repo, repo)
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@e.invalid", *a],  # noqa: E731
+                                    check=True, capture_output=True, text=True).stdout.strip()
+    s = make_service()
+    s.cfg.repo = str(repo)
+    s.lab.checkouts.repo = str(repo)
+    first = s.wait(s.submit("t-quick")["id"])
+    d = repo / "suites" / "t-new"
+    d.mkdir()
+    (d / "suite.toml").write_text('description = "added later"\n[captures]\nencrypted = false\n')
+    (d / "test_new.py").write_text("def test_new():\n    pass\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "add t-new")
+    second = s.wait(s.submit("t-new")["id"])
+    assert second["status"] == "passed" and second["commit"] == git("rev-parse", "HEAD") != first["commit"]
+    with s.client() as c:
+        old = c.post("/api/jobs", json={"suite": "t-new", "commit": first["commit"]})
+    assert old.status_code == 400  # at the older commit the suite does not exist

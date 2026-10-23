@@ -15,7 +15,7 @@ Both write the verdict to `runs/<bundle>.check.json`, **beside** the bundle fold
 - It reads every file again. It trusts no number the run wrote about itself.
 - A bundle it can't read **fails**; it never crashes or skips.
 
-## The six checks
+## The seven checks
 
 Each check is `pass` or `fail`, with a reason in plain words.
 
@@ -82,6 +82,17 @@ A capture where two packets overlap on the air, or a manifest that claims a slow
 
 If the suite file is available, the manifest must list at least the expectations in `suite.toml`. A run can't drop its hardest tests.
 
+### 7. Radio evidence
+
+Runs for bundles that used devices or recordings (the manifest has `hardware`, `recordings` or `transmits`); otherwise it passes with "not a hardware run".
+- **Devices:** each has a kind, a backend (`sim` or `hardware`), a model, a serial and a firmware. Every `requires` of the suite is met. The bundle says **SIMULATED** if any device is. With `--require-hardware` (CLI) a simulated device fails.
+- **RF safety:** the setup is `cabled` or `shielded`. Every path loss is at least 60 dB where the far end can transmit, 40 dB for a receive-only end.
+- **Recordings** ([SigMF](https://sigmf.org), `recordings/NN-name.sigmf-meta` and `.sigmf-data`): each is listed in the manifest and in `SHA256SUMS`; the metadata is valid (`core:datatype`, `core:sample_rate`, `core:version`, a capture with frequency and time); `core:sha512` is recomputed from the data; `oasa:run_id` equals the run; the time falls inside the run (plus 2 s). A file in `recordings/` that the manifest does not list fails.
+- **Bursts vs airtime:** where a recording is declared with a burst check, the checker finds bursts of energy (0.5 ms windows, threshold 3 times the 25th-percentile noise) and lines them up with the frames the modems carried, using its own airtime formulas. A frame needs a burst of the right length (2 ms + 3 %), at the right time after fitting one fixed clock offset (at most 1.5 s, 50 ms tolerance). At least 95 % of frames must match, at most 10 % of bursts (min. 2) may be unexplained, and mean SNR must be 12 dB. The model must equal the modem's declared radio settings. Timing and energy only; nothing is demodulated.
+- **Limits:** every `measurement` event in `log.jsonl` is re-judged against `[limits.METRIC]` in `suite.toml` (min and max). A test cannot loosen them. A metric that was never measured fails, unless the limit says `optional = true`.
+
+Air captures (`captures/*-air-*.pcap`, `kind: "air"` with a `device`) are what a modem delivered to its host. Check 2 declares them and check 4 scans them like any other capture.
+
 ## Reading `check.json`
 
 ```json
@@ -97,4 +108,6 @@ If the suite file is available, the manifest must list at least the expectations
 
 - The checker catches careless and accidental problems and obvious cheating. It does not stop someone who rewrites the whole bundle, the manifest and `SHA256SUMS` together. That needs the signature (milestone M5) and CI provenance (`actions/attest-build-provenance`), which bind the bundle to a build.
 - The randomness test shows ciphertext looks random. It does not prove the cipher is sound.
+- Check 7 trusts the cable losses the run declares. It cannot see the wiring. The `--confirm-wiring` step and the diagrams in [hardware suites](hardware-suites.md) are what keep that honest.
+- Burst detection finds energy, not packets. It cannot tell a LoRa chirp from any other signal of the same length.
 - Channel statistics come from the channel itself and are cross-checked against the pcap it wrote. A second tap (a different program) comes with the radio tiers.

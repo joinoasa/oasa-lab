@@ -90,7 +90,7 @@ class LinkProc:
     def __init__(self, bins: Bins, me: Identity, peer: str, *, bind: tuple[str, int],
                  remote: tuple[str, int] | None, initiate: bool, plain_listen: tuple[str, int],
                  plain_send: tuple[str, int], log_path: Path, rekey_secs: int | None = None,
-                 duration: float | None = None, counter_bytes: int | None = None):
+                 duration: float | None = None, counter_bytes: int | None = None, mtu: int | None = None):
         cmd = [str(bins.link), "--dir", str(me.dir), "--peer", peer, "--bind", f"{bind[0]}:{bind[1]}",
                "--plain-listen", f"{plain_listen[0]}:{plain_listen[1]}",
                "--plain-send", f"{plain_send[0]}:{plain_send[1]}"]
@@ -104,6 +104,8 @@ class LinkProc:
             cmd += ["--rekey-secs", str(rekey_secs)]
         if duration:
             cmd += ["--duration", str(duration)]
+        if mtu:
+            cmd += ["--mtu", str(mtu)]
         self.cmd, self.log_path = cmd, log_path
         self.events: list[dict] = []
         self._lock = threading.Lock()
@@ -161,7 +163,8 @@ class LinkPair:
     app_a / app_b are plain UDP endpoints that feed and receive each link's plaintext side."""
 
     def __init__(self, lab, bins: Bins, base: Path, *, rekey_secs: int | None = None,
-                 duration: float | None = None, counter_bytes: int | None = None, **channel_settings: Any):
+                 duration: float | None = None, counter_bytes: int | None = None, mtu: int | None = None,
+                 **channel_settings: Any):
         self.lab, self.bins = lab, bins
         self.a_id = make_identity(bins, base, "alice")
         self.b_id = make_identity(bins, base, "bob")
@@ -171,16 +174,18 @@ class LinkPair:
         self.a_bind, self.b_bind = (HOST, free_udp_port()), (HOST, free_udp_port())
         self.a_plain, self.b_plain = (HOST, free_udp_port()), (HOST, free_udp_port())
         self.channel = lab.channel(a=self.a_bind, b=self.b_bind, **channel_settings)
-        kw = dict(rekey_secs=rekey_secs, duration=duration, counter_bytes=counter_bytes)
+        kw = dict(rekey_secs=rekey_secs, duration=duration, counter_bytes=counter_bytes, mtu=mtu)
         self.link_b = LinkProc(bins, self.b_id, "alice", bind=self.b_bind, remote=self.channel.addr_b,
                                initiate=False, plain_listen=self.b_plain, plain_send=self.app_b.addr,
                                log_path=lab.file("link-bob.jsonl"), **kw)
+        self.t_start = time.monotonic()  # the initiator starts here; handshake time is measured from it
         self.link_a = LinkProc(bins, self.a_id, "bob", bind=self.a_bind, remote=self.channel.addr_a,
                                initiate=True, plain_listen=self.a_plain, plain_send=self.app_a.addr,
                                log_path=lab.file("link-alice.jsonl"), **kw)
         self.stats: dict[str, dict | None] = {}
 
     def wait_established(self, timeout: float = 30.0) -> float:
+        """Returns the time (time.monotonic) the initiator's session was seen up."""
         """Wait for the initiator only. Per the link spec the responder confirms a session when
         the first data packet arrives, so waiting for it here could deadlock if the initiator's
         keepalive is lost. Handshake retries back off (5 s, then longer), hence 30 s."""

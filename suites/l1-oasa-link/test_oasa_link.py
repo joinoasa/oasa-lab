@@ -9,9 +9,10 @@ import time
 
 import pytest
 
+from oasa_lab.channel import ChannelSettings
 from oasa_lab.linkharness import HOST, LinkPair, LinkProc, MissingBinaries, find_bins, make_identity, trust
 from oasa_lab.pcap import read_pcap
-from oasa_lab.testing import Endpoint, free_udp_port
+from oasa_lab.testing import Endpoint, free_udp_port, wait_for
 
 
 @pytest.fixture
@@ -117,3 +118,30 @@ def test_rekey_keeps_delivering(lab, bins, tmp_path):
     for w in range(4):  # every 2 s window of the sending period saw deliveries
         lo, hi = t0 + 2 * w, t0 + 2 * w + 2
         assert any(lo <= t < hi for t, _ in got), f"nothing delivered between {2 * w} s and {2 * w + 2} s"
+
+
+@pytest.mark.parametrize("profile", ["lora-sf7-bw125", "sik-64k"])
+def test_link_over_radio_profiles(lab, bins, tmp_path, profile):
+    """Informational: the link over the airtime of a real radio. It asserts only that the link comes up
+    and delivers. Handshake time and goodput go to the log as `link_metrics` events, to read and compare."""
+    n, size = 20, 80
+    s = ChannelSettings.for_profile(profile)
+    mtu = min(s.mtu, 255)  # the link's largest encrypted packet: the radio's own limit (oasa-link default is 128)
+    sent = messages(lab.marker(), n, size)
+    with LinkPair(lab, bins, tmp_path, profile=profile, mtu=mtu) as lp:
+        up = lp.wait_established()
+        handshake_s = up - lp.t_start
+        t0 = time.monotonic()
+        lp.send_a_to_b(sent, batch=n)  # one burst: the radio is the bottleneck
+        wait_for(lambda: len(lp.app_b.received) >= n, timeout=30)  # the radio is slow; don't stop it early
+        lp.finish()
+    got = lp.app_b.received
+    assert set(d for _, d in got) <= set(sent), "something was delivered that nobody sent"
+    assert got, "the link came up but delivered nothing"
+    span = got[-1][0] - t0
+    goodput_bps = sum(len(d) for _, d in got) * 8 / span
+    wire = [p for p in capture_of(lab) if p.dst == lp.b_bind]
+    lab.log("link_metrics", profile=profile, link_mtu=mtu, handshake_s=round(handshake_s, 3), sent=n,
+            delivered=len(got), payload_bytes=size, burst_s=round(span, 3), goodput_bps=round(goodput_bps),
+            wire_packets_a_to_b=len(wire), wire_bytes_a_to_b=sum(len(p.payload) for p in wire),
+            airtime_64_byte_s=round(s.airtime_s(64), 4))

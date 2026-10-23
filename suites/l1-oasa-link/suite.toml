@@ -6,5 +6,5 @@ expectations = [
 
 [captures]
 encrypted = true
-# The first bytes of an oasa-link packet are protocol header, not ciphertext. Adjust to the link spec.
-skip_header_bytes = 8
+# Data packets start with 5 (2-byte counter) or 7 (4-byte counter) header bytes; see oasa-sec docs/oasa-sec-v0-link.md §3.
+skip_header_bytes = 7

@@ -180,8 +180,11 @@ class LinkPair:
                                log_path=lab.file("link-alice.jsonl"), **kw)
         self.stats: dict[str, dict | None] = {}
 
-    def wait_established(self, timeout: float = 15.0) -> float:
-        ok = self.link_a.wait_event("session_established", timeout) and self.link_b.wait_event("session_established", timeout)
+    def wait_established(self, timeout: float = 30.0) -> float:
+        """Wait for the initiator only. Per the link spec the responder confirms a session when
+        the first data packet arrives, so waiting for it here could deadlock if the initiator's
+        keepalive is lost. Handshake retries back off (5 s, then longer), hence 30 s."""
+        ok = self.link_a.wait_event("session_established", timeout)
         if not ok:
             raise AssertionError("the link did not establish a session in time; see logs/link-*.jsonl in the bundle")
         return time.monotonic()

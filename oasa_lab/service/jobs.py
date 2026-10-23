@@ -58,6 +58,7 @@ class Job:
     check_ok: bool | None = None
     counts: dict = field(default_factory=dict)
     transmits: bool = False
+    wiring_confirmed: str | None = None  # the wiring the owner's config confirmed for this run
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -157,22 +158,50 @@ class JobManager:
             raise JobError(502, f"cannot get the lab code: {exc}")
         return co, read_suites(co)
 
+    @staticmethod
+    def missing_requirements(requires: list[str], present: list) -> list[str]:
+        """Suite `requires` use the hardware suites' form: a device kind, or `kind:N` for at least N."""
+        out = []
+        for req in requires:
+            kind, _, n = req.partition(":")
+            need = int(n) if n.isdigit() else 1
+            if sum(1 for d in present if d.kind == kind) < need:
+                out.append(req)
+        return out
+
     async def _device_problem(self, suite: dict, profile: str | None) -> str | None:
         want_ids = list(self.cfg.profiles[profile].requires) if profile else []
         if not want_ids and not suite["requires"]:
             return None
         status = await self.inventory.scan()
-        present_ids = {d.id for d in status if d.present}
-        present_kinds = {d.kind for d in status if d.present}
-        missing = [i for i in want_ids if i not in present_ids]
-        missing += [k for k in suite["requires"] if k not in present_kinds]
+        present = [d for d in status if d.present]
+        missing = [i for i in want_ids if i not in {d.id for d in present}]
+        missing += self.missing_requirements(suite["requires"], present)
         return f"missing device(s): {', '.join(sorted(set(missing)))}" if missing else None
 
+    @property
+    def simulated(self) -> bool:
+        return self.cfg.inventory_backend == "simulated"
+
     def _interlock(self, suite: dict) -> str | None:
-        if suite["transmits"] and self.cfg.rf_setup not in RF_SAFE:
+        """The transmit rules. 1) rf_setup must be cabled or shielded. 2) On a real bench the owner must
+        also have confirmed the suite's wiring in the config (the service passes --confirm-wiring)."""
+        if not suite["transmits"]:
+            return None
+        if self.cfg.rf_setup not in RF_SAFE:
             return (f"refused: suite {suite['name']!r} transmits, and this lab's rf_setup is "
                     f"{self.cfg.rf_setup!r} (must be one of: {', '.join(RF_SAFE)})")
+        if not self.simulated and not self.wiring_to_confirm(suite):
+            return (f"refused: suite {suite['name']!r} transmits on real hardware. Connect wiring "
+                    f"{suite['wiring'] or '(the suite names none)'!r} as in docs/hardware-suites.md, then set "
+                    f"[confirm_wiring] {suite['name']} = {suite['wiring']!r} in service.toml and restart the service")
         return None
+
+    def wiring_to_confirm(self, suite: dict) -> str | None:
+        """The wiring name to pass as --confirm-wiring, or None. Only when the suite names a wiring and the
+        owner's config confirms exactly that one."""
+        w = suite.get("wiring") or ""
+        return w if w and self.cfg.confirm_wiring.get(suite["name"]) == w else None
 
     async def submit(self, who: Principal, suite_name: Any, seed: Any = 0, profile: Any = None, commit: Any = None) -> Job:
         if not who.can("run"):
@@ -203,7 +232,8 @@ class JobManager:
             raise JobError(409, why)
         job = Job(id=uuid.uuid4().hex[:12], suite=suite_name, seed=seed, profile=profile,
                   requested_by=who.name, via=who.via, commit=co.sha, created=now_rfc3339(),
-                  transmits=suite["transmits"])
+                  transmits=suite["transmits"],
+                  wiring_confirmed=self.wiring_to_confirm(suite) if suite["transmits"] and not self.simulated else None)
         self.jobs[job.id] = job
         self._save(job)
         self._queue.put_nowait(job.id)
@@ -306,6 +336,14 @@ class JobManager:
             "OASA_LAB_JOB_ID": job.id, "OASA_LAB_REQUESTED_BY": job.requested_by,
             "OASA_LAB_RF_SETUP": self.cfg.rf_setup,
         })
+        if self.simulated:
+            env["OASA_LAB_SIM"] = "1"  # the simulated service runs the hardware suites on the simulated bench
+        elif self.cfg.devices_file:
+            env["OASA_LAB_INVENTORY"] = self.cfg.devices_file
+        cmd = [sys.executable, "-m", "oasa_lab", "run", job.suite, "--seed", str(job.seed), "--out", str(jd / "runs")]
+        if job.wiring_confirmed:
+            cmd += ["--confirm-wiring", job.wiring_confirmed]
+            env["OASA_LAB_WIRING_CONFIRMED"] = job.wiring_confirmed
         if job.profile:
             env["OASA_LAB_PROFILE"] = job.profile
             env["OASA_LAB_DEVICES"] = ",".join(self.cfg.profiles[job.profile].requires)
@@ -314,8 +352,7 @@ class JobManager:
         self._save(job)
         with open(jd / "stdout.log", "wb") as out:
             self._proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "oasa_lab", "run", job.suite, "--seed", str(job.seed), "--out", str(jd / "runs"),
-                cwd=co.path, env=env, stdout=out, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
+                *cmd, cwd=co.path, env=env, stdout=out, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
             try:
                 if job.id in self._stop_requests:  # stop arrived before the process existed
                     await self._kill()

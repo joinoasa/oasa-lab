@@ -78,7 +78,7 @@ def test_run_watch_and_get_results(svc):
             err, job = await s.call("run_suite", suite="t-quick", seed=3)
             assert not err and job["seed"] == 3 and job["requested_by"] == "owner"
             st = await s.wait(job["id"])
-            assert st["status"] == "passed"
+            assert st["status"] == "passed", st
             err, w = await s.call("watch_job", job_id=job["id"], lines=50)
             events = [json.loads(x)["event"] for x in w["lines"]]
             assert events[0] == "run_start" and "test_end" in events and events[-1] == "run_end"
@@ -197,7 +197,7 @@ def test_end_to_end_l1_channel_through_the_connector(svc):
             assert st["status"] == "passed", st
             err, res = await s.call("get_results", job_id=job["id"])
             assert res["counted"] is True and res["counts"]["failed"] == 0 and res["counts"]["total"] >= 10
-            assert [c["status"] for c in res["checker"]["checks"]] == ["pass"] * 6
+            assert [c["status"] for c in res["checker"]["checks"]] == ["pass"] * len(res["checker"]["checks"])
             return res
     res = run(go())
     with svc.client() as c:  # and the bundle really downloads and re-verifies

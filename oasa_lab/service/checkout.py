@@ -117,5 +117,6 @@ def read_suites(checkout: Checkout) -> dict[str, dict]:
             continue
         out[p.name] = {"name": p.name, "description": str(data.get("description", "")),
                        "transmits": bool(data.get("transmits", False)),
+                       "wiring": str(data.get("wiring", "")),
                        "requires": [str(x) for x in data.get("requires", [])]}
     return out

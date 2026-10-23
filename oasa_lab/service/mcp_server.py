@@ -100,11 +100,11 @@ def build_mcp(cfg: Config, jobs: JobManager, inventory: Inventory, audit: AuditL
         """List the test suites that can be run: name, what it proves, whether it transmits, and any
         devices it needs. Also says whether each can run right now."""
         co, found = await jobs.list_suites()
-        devs = {d.kind for d in await inventory.scan() if d.present}
+        present = [d for d in await inventory.scan() if d.present]
         out = []
         for s in found.values():
-            why = jobs._interlock(s) or (f"missing device kind(s): {', '.join(k for k in s['requires'] if k not in devs)}"
-                                         if any(k not in devs for k in s["requires"]) else None)
+            gone = jobs.missing_requirements(s["requires"], present)
+            why = jobs._interlock(s) or (f"missing device(s): {', '.join(gone)}" if gone else None)
             out.append({**s, "runnable": why is None, "why_not": why})
         return {"commit": co.sha, "suites": out}
 

@@ -88,6 +88,8 @@ class Config:
     max_queued: int = 20
     keep_checkouts: int = 5
     rf_setup: str = "unset"
+    devices_file: str = ""  # the hardware suites' device file (lab.toml: serials, ports, cabling), passed to jobs
+    confirm_wiring: dict[str, str] = field(default_factory=dict)  # suite -> wiring the owner says is connected
     inventory_backend: str = "simulated"
     devices: list[Device] = field(default_factory=list)
     profiles: dict[str, Profile] = field(default_factory=dict)
@@ -159,10 +161,17 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
     cfg.stop_grace_seconds = float(s.get("stop_grace_seconds", cfg.stop_grace_seconds))
     cfg.max_queued = int(s.get("max_queued", cfg.max_queued))
     cfg.keep_checkouts = int(s.get("keep_checkouts", cfg.keep_checkouts))
+    cfg.devices_file = str(s.get("devices_file", ""))
+    _need(not cfg.devices_file or os.path.isabs(cfg.devices_file), "service.devices_file must be an absolute path")
     cfg.allowed_hosts = [str(h) for h in s.get("allowed_hosts", [])]
 
     cfg.rf_setup = str(lab.get("rf_setup", "unset"))
     _need(cfg.rf_setup in RF_SETUPS, f"lab.rf_setup must be one of {', '.join(RF_SETUPS)}")
+
+    for suite_name, wiring in data.get("confirm_wiring", {}).items():
+        _need(bool(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", suite_name)) and bool(NAME_RE.match(str(wiring))),
+              f"confirm_wiring: bad entry {suite_name!r} = {wiring!r}")
+        cfg.confirm_wiring[suite_name] = str(wiring)
 
     inv = data.get("inventory", {})
     cfg.inventory_backend = str(inv.get("backend", "simulated"))

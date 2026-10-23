@@ -18,7 +18,7 @@ from .suites import repo_root
 MANIFEST_SCHEMA = 1  # new fields since 0.1 (hardware, recordings, transmits, requires) are optional for the checker
 # Optional job details the service passes in; recorded in the manifest as manifest["job"].
 _JOB_ENV = {"id": "OASA_LAB_JOB_ID", "profile": "OASA_LAB_PROFILE", "rf_setup": "OASA_LAB_RF_SETUP",
-            "requested_by": "OASA_LAB_REQUESTED_BY"}
+            "requested_by": "OASA_LAB_REQUESTED_BY", "wiring_confirmed": "OASA_LAB_WIRING_CONFIRMED"}
 
 
 def write_manifest(ctx: RunContext) -> dict:

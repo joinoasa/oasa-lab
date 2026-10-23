@@ -29,6 +29,34 @@ QUICK = '''
 def test_quick(lab):
     assert 1 + 1 == 2
 '''
+TX = '''
+def test_tx(hw):
+    hw.use_wiring()  # records the cable plan; refuses on real hardware unless --confirm-wiring names it
+    for dev in ("heltec_a", "heltec_b", "rtl0"):
+        hw.open(dev)  # the checker wants every device on the cable plan in the manifest
+'''
+SIM_BENCH = '''[lab]
+backend = "sim"
+[devices.heltec_a]
+kind = "serial-radio"
+port = "sim:a"
+[devices.heltec_b]
+kind = "serial-radio"
+port = "sim:b"
+[devices.rtl0]
+kind = "rtlsdr"
+[wiring.lora]
+rf_setup = "cabled"
+paths = [
+  { name = "a-to-b", from = "heltec_a", to = "heltec_b", loss_db = 72.0 },
+  { name = "b-to-a", from = "heltec_b", to = "heltec_a", loss_db = 72.0 },
+  { name = "a-to-rtl", from = "heltec_a", to = "rtl0", loss_db = 66.0, receiver_transmits = false },
+]
+'''
+NEEDS = '''
+def test_needs(hw):
+    hw.open(hw.inv.ids_of("pluto")[0])  # the checker wants the required device in the manifest
+'''
 SLOW = '''
 import time
 def test_slow():
@@ -55,8 +83,9 @@ SUITES = {
     "t-slow": ('description = "runs until stopped"\n', SLOW),
     "t-stubborn": ('description = "ignores SIGTERM"\n', STUBBORN),
     "t-env": ('description = "checks the job environment"\n', ENV),
-    "t-tx": ('description = "pretends to transmit"\ntransmits = true\n', QUICK),
-    "t-needs": ('description = "needs a pluto"\nrequires = ["pluto"]\n', QUICK),
+    "t-tx": ('description = "pretends to transmit"\ntransmits = true\nwiring = "lora"\n', TX),
+    "t-needs2": ('description = "needs two plutos"\nrequires = ["pluto:2"]\n', QUICK),
+    "t-needs": ('description = "needs a pluto"\nrequires = ["pluto"]\n', NEEDS),
 }
 
 
@@ -71,6 +100,7 @@ def lab_repo(tmp_path_factory) -> Path:
     shutil.copytree(ROOT / "oasa_lab", repo / "oasa_lab", ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy(ROOT / "pyproject.toml", repo / "pyproject.toml")
     shutil.copy(ROOT / "README.md", repo / "README.md")
+    shutil.copy(ROOT / "lab.example.toml", repo / "lab.example.toml")  # l0-lab reads it
     shutil.copytree(ROOT / "suites", repo / "suites", ignore=shutil.ignore_patterns("__pycache__"))
     for name, (toml, body) in SUITES.items():
         d = repo / "suites" / name
@@ -141,7 +171,7 @@ def start(repo: Path, state: Path, *, extra: dict | None = None, env: dict | Non
                     "stop_grace_seconds": 1, "job_timeout_seconds": 120},
         "lab": {"rf_setup": "unset"},
         "inventory": {"backend": "simulated", "devices": [
-            {"id": "pluto", "kind": "pluto"}, {"id": "rtlsdr", "kind": "rtl-sdr"}]},
+            {"id": "pluto", "kind": "pluto"}, {"id": "rtlsdr", "kind": "rtlsdr"}]},
         "profiles": {"bench": {"requires": ["pluto"], "description": "pluto on the bench"}},
         "users": users, "tokens": token_rows,
         "github": {"client_id": "gh-client"},

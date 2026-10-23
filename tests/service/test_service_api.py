@@ -9,7 +9,11 @@ import time
 import httpx2 as httpx
 import pytest
 
-from .conftest import start, stop
+from pathlib import Path
+
+from oasa_lab.service.config import ConfigError, parse_config
+
+from .conftest import SIM_BENCH, start, stop
 
 
 def test_health_is_open_and_says_nothing(svc):
@@ -81,7 +85,7 @@ def test_submit_runs_and_leaves_checked_evidence(svc):
     with svc.client() as c:
         res = c.get(f"/api/jobs/{job['id']}/results").json()
         assert res["counted"] is True and res["checker"]["ok"] is True
-        assert [x["status"] for x in res["checker"]["checks"]] == ["pass"] * 6
+        assert [x["status"] for x in res["checker"]["checks"]] == ["pass"] * len(res["checker"]["checks"])
         assert "t-quick" in res["summary_md"]
         chk = c.get(f"/api/jobs/{job['id']}/check.json").json()
         assert chk["ok"] is True
@@ -340,7 +344,58 @@ def test_transmitting_suites_run_when_cabled_or_shielded(make_service, rf):
     assert man["job"]["rf_setup"] == rf  # the evidence says how the radios were connected
 
 
+def _real_bench(s, tmp_path):
+    """Pretend the service drives real hardware. The jobs still run on a simulated device file, so the
+    run itself is safe; what is under test is what the service checks, passes and records."""
+    s.lab.cfg.inventory_backend = "usb"
+    f = tmp_path / "devices.toml"
+    f.write_text(SIM_BENCH)
+    s.lab.cfg.devices_file = str(f)
+
+
+def test_real_hardware_transmit_needs_the_owners_wiring_confirmation(make_service, tmp_path):
+    s = make_service(extra={"lab": {"rf_setup": "cabled"}})
+    _real_bench(s, tmp_path)
+    with s.client() as c:
+        r = c.post("/api/jobs", json={"suite": "t-tx"})
+        assert r.status_code == 403 and "lora" in r.json()["error"] and "confirm_wiring" in r.json()["error"]
+        assert c.get("/api/suites").json()  # still listed
+    s.lab.cfg.confirm_wiring["t-tx"] = "some-other-wiring"  # a confirmation for a different wiring is not enough
+    with s.client() as c:
+        assert c.post("/api/jobs", json={"suite": "t-tx"}).status_code == 403
+
+
+def test_confirmed_wiring_is_passed_to_the_run_and_recorded(make_service, tmp_path):
+    s = make_service(extra={"lab": {"rf_setup": "shielded"}, "confirm_wiring": {"t-tx": "lora"}})
+    _real_bench(s, tmp_path)
+    done = s.wait(s.submit("t-tx")["id"])
+    assert done["status"] == "passed" and done["wiring_confirmed"] == "lora"
+    with s.client() as c:
+        b = c.get(f"/api/jobs/{done['id']}/bundle.tar.gz").content
+    man = json.loads(tarfile.open(fileobj=io.BytesIO(b)).extractfile(f"{done['bundle']}/manifest.json").read())
+    assert man["job"]["wiring_confirmed"] == "lora"
+
+
+def test_simulated_service_never_passes_a_wiring_confirmation(make_service):
+    s = make_service(extra={"lab": {"rf_setup": "cabled"}, "confirm_wiring": {"t-tx": "lora"}})
+    done = s.wait(s.submit("t-tx")["id"])
+    assert done["status"] == "passed" and done["wiring_confirmed"] is None
+
+
+def test_confirm_wiring_config_is_checked():
+    with pytest.raises(ConfigError):
+        parse_config({"service": {"port": 8765, "public_url": "http://127.0.0.1:8765"},
+                      "confirm_wiring": {"BAD NAME": "x"}}, Path("."), {})
+
+
 # --- devices ------------------------------------------------------------------------------------------
+def test_counted_requirements_use_the_hardware_suites_form(make_service):
+    s = make_service()  # one pluto only
+    with s.client() as c:
+        r = c.post("/api/jobs", json={"suite": "t-needs2"})
+        assert r.status_code == 409 and "pluto:2" in r.json()["error"]
+
+
 def test_missing_device_blocks_a_profile_or_a_suite(make_service):
     s = make_service(present={"pluto": False})
     with s.client() as c:

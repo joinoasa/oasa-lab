@@ -20,7 +20,7 @@ from .conftest import start, stop
 
 
 def test_simulated_inventory_follows_the_config_and_overrides():
-    devs = [Device("pluto", "pluto"), Device("hub", "usb-hub", simulated_present=False)]
+    devs = [Device("pluto", "pluto"), Device("hub", "hub", simulated_present=False)]
     inv = SimulatedInventory(devs)
     got = {d.id: d.present for d in asyncio.run(inv.scan())}
     assert got == {"pluto": True, "hub": False}
@@ -44,9 +44,9 @@ def test_usb_inventory_reads_sysfs_and_gives_two_identical_boards_one_match_each
     srv.bind(("127.0.0.1", 0))
     srv.listen()
     port = srv.getsockname()[1]
-    devs = [Device("rtlsdr", "rtl-sdr", usb="0bda:2838"), Device("heltec-a", "lora", usb="10c4:ea60"),
-            Device("heltec-b", "lora", usb="10c4:ea60"), Device("heltec-c", "lora", usb="10c4:ea60"),
-            Device("hub", "usb-hub", usb="2109:2817"), Device("pluto", "pluto", tcp=f"127.0.0.1:{port}"),
+    devs = [Device("rtlsdr", "rtlsdr", usb="0bda:2838"), Device("heltec-a", "serial-radio", usb="10c4:ea60"),
+            Device("heltec-b", "serial-radio", usb="10c4:ea60"), Device("heltec-c", "lora", usb="10c4:ea60"),
+            Device("hub", "hub", usb="2109:2817"), Device("pluto", "pluto", tcp=f"127.0.0.1:{port}"),
             Device("pluto2", "pluto", tcp="127.0.0.1:9"), Device("nothing", "x")]
     got = {d.id: d.present for d in asyncio.run(UsbSysfsInventory(devs, tmp_path).scan())}
     srv.close()
@@ -56,7 +56,7 @@ def test_usb_inventory_reads_sysfs_and_gives_two_identical_boards_one_match_each
 
 def test_usb_inventory_matches_a_serial_number(tmp_path):
     fake_sysfs(tmp_path, [("10c4:ea60", "AAA"), ("10c4:ea60", "BBB")])
-    devs = [Device("a", "lora", usb="10c4:ea60", serial="BBB"), Device("b", "lora", usb="10c4:ea60", serial="ZZZ")]
+    devs = [Device("a", "serial-radio", usb="10c4:ea60", serial="BBB"), Device("b", "lora", usb="10c4:ea60", serial="ZZZ")]
     got = {d.id: d.present for d in asyncio.run(UsbSysfsInventory(devs, tmp_path).scan())}
     assert got == {"a": True, "b": False}
 

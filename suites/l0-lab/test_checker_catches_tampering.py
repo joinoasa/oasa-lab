@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from oasa_lab.bundle import write_sums
+from oasa_lab.checker.air import airtime
 from oasa_lab.checker import check_bundle, write_check
 from oasa_lab.pcap import PcapWriter, read_pcap
 from oasa_lab.suites import suites_dir
@@ -153,6 +154,102 @@ def rewrite_pcap(path, fn):
     for i, p in enumerate(pk):
         w.write(p.src, p.dst, fn(i, p.payload), ts=p.ts)
     w.close()
+
+
+def retime_pcap(path, fn):
+    """Rewrite the time stamps. fn(packets) returns the new list of time stamps."""
+    pk = read_pcap(path)
+    stamps = fn(pk)
+    w = PcapWriter(path)
+    for p, ts in zip(pk, stamps):
+        w.write(p.src, p.dst, p.payload, ts=ts)
+    w.close()
+
+
+def airtime_capture(b):
+    """The half-duplex channel of the fixture run, its manifest entry and the capture's packets."""
+    m = json.loads((b / "manifest.json").read_text())
+    ch = next(c for c in m["channels"] if c["settings"].get("airtime"))
+    assert ch["settings"]["half_duplex"] and ch["settings"]["profile"] == "sik-64k"
+    return ch, b / ch["capture"]
+
+
+def test_untouched_airtime_capture_passes_the_air_rule(good_encrypted):
+    checks, _ = verdict(good_encrypted)
+    assert checks[5]["status"] == "pass" and "airtime respected on 1 channel" in checks[5]["reason"]
+    row = checks[5]["details"]["airtime"][0]
+    assert row["pairs_checked"] >= 70 and row["smallest_margin_ms"] >= -0.05
+
+
+def test_overlap_on_air_is_caught(good_encrypted, tmp_path):
+    """Two packets in one direction on the air at once."""
+    b = copy_of(good_encrypted, tmp_path)
+    ch, cap = airtime_capture(b)
+    air = airtime(ch["settings"], 100, "a_to_b")
+
+    def squeeze(pk):
+        ts = [p.ts for p in pk]
+        first, second = [i for i, p in enumerate(pk) if p.dst == pk[0].dst][:2]
+        ts[second] = ts[first] + air * 0.3
+        return ts
+
+    retime_pcap(cap, squeeze)
+    write_sums(b)
+    checks, _ = verdict(b)
+    assert checks[1]["status"] == "pass"
+    assert checks[5]["status"] == "fail" and "overlap" in checks[5]["reason"], checks[5]["reason"]
+
+
+def test_overlap_between_directions_on_a_half_duplex_channel_is_caught(good_encrypted, tmp_path):
+    """A and B transmit at the same moment on one medium: only a half-duplex channel forbids it."""
+    b = copy_of(good_encrypted, tmp_path)
+    ch, cap = airtime_capture(b)
+
+    def collide(pk):
+        ts = [p.ts for p in pk]
+        i = 0
+        j = next(k for k, p in enumerate(pk) if p.dst != pk[0].dst)
+        ts[j] = ts[i] + 0.004  # B starts 4 ms into A's packet
+        return ts
+
+    retime_pcap(cap, collide)
+    write_sums(b)
+    checks, _ = verdict(b)
+    assert checks[5]["status"] == "fail" and "overlap" in checks[5]["reason"], checks[5]["reason"]
+    assert "both directions" in checks[5]["reason"]
+
+
+def test_claiming_a_slower_medium_than_the_capture_shows_is_caught(good_encrypted, tmp_path):
+    """The run says 16 kbps, but its packets were spaced for 64 kbps: they would overlap on a 16 kbps radio."""
+    b = copy_of(good_encrypted, tmp_path)
+    edit_json(b / "manifest.json", lambda m: next(
+        c for c in m["channels"] if c["settings"].get("airtime"))["settings"].update(air_kbps=16.0, fixed_us=0.0))
+    write_sums(b)
+    assert "overlap" in verdict(b)[0][5]["reason"]
+
+
+def test_queue_drops_with_no_queue_limit_are_caught(good_encrypted, tmp_path):
+    b = copy_of(good_encrypted, tmp_path)
+    ch, _ = airtime_capture(b)
+    lines = []
+    for ln in (b / "log.jsonl").read_text().splitlines():
+        rec = json.loads(ln)
+        if rec["event"] == "channel_stats" and rec.get("final") and rec["channel"] == ch["id"]:
+            rec["a_to_b"]["queue_dropped"] = 2
+            rec["a_to_b"]["sent"] += 2
+        lines.append(json.dumps(rec))
+    (b / "log.jsonl").write_text("\n".join(lines) + "\n")
+    write_sums(b)
+    assert "max_queue is 0" in verdict(b)[0][5]["reason"]
+
+
+def test_bad_airtime_settings_are_caught(good_encrypted, tmp_path):
+    for change in (dict(airtime="bogus"), dict(air_kbps=-1.0), dict(duty_cycle=1.5), dict(rate_kbps=64.0)):
+        b = copy_of(good_encrypted, tmp_path / str(sorted(change)))
+        edit_json(b / "manifest.json", lambda m: next(
+            c for c in m["channels"] if c["settings"].get("airtime"))["settings"].update(change))
+        write_sums(b)
+        assert 2 in failed(b), change
 
 
 def test_marker_in_encrypted_capture_is_caught(good_encrypted, tmp_path):

@@ -1,4 +1,4 @@
-description = "The lab's own unit tests: channel determinism, pcap writer, and the checker catching tampering"
+description = "The lab's own unit tests: channel determinism, airtime formulas, profiles, pcap writer, and the checker catching tampering"
 expectations = [
   "test_flipped_byte_is_caught",
   "test_missing_file_is_caught",
@@ -6,6 +6,9 @@ expectations = [
   "test_marker_in_encrypted_capture_is_caught",
   "test_broken_negative_control_is_caught",
   "test_dropped_expectation_is_caught",
+  "test_overlap_on_air_is_caught",
+  "test_overlap_between_directions_on_a_half_duplex_channel_is_caught",
+  "test_queue_drops_with_no_queue_limit_are_caught",
 ]
 
 [captures]

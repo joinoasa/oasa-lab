@@ -1,0 +1,12 @@
+description = "The lab's own unit tests: channel determinism, pcap writer, and the checker catching tampering"
+expectations = [
+  "test_flipped_byte_is_caught",
+  "test_missing_file_is_caught",
+  "test_ctrf_and_log_disagreeing_is_caught",
+  "test_marker_in_encrypted_capture_is_caught",
+  "test_broken_negative_control_is_caught",
+  "test_dropped_expectation_is_caught",
+]
+
+[captures]
+encrypted = false

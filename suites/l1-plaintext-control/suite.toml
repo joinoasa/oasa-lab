@@ -1,0 +1,7 @@
+description = "Negative control: plaintext with markers and MAVLink goes through the channel; the checker must find it"
+expectations = ["test_checker_input_is_plaintext"]
+
+[captures]
+encrypted = false
+expect_plaintext = true
+expect_mavlink = true

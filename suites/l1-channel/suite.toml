@@ -1,0 +1,5 @@
+description = "Simulated radio channel: loss, delay, reorder, duplicate, corrupt, rate, mtu and replay behave as set, repeatably"
+expectations = ["test_different_seed_differs", "test_mtu_drops_oversize", "test_same_seed_same_pattern"]
+
+[captures]
+encrypted = false

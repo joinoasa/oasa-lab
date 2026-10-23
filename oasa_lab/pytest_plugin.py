@@ -62,12 +62,15 @@ class Lab:
         return m
 
     def channel(self, *, a=None, b=None, seed: int | None = None, profile: str | None = None,
+                control: bool = False,
                 **settings: Any) -> Channel:
         """A simulated channel for this test. Started and recorded; stopped when the test ends.
 
         Unless `seed` is given, the seed is derived from the run seed and this test's id.
         `profile` starts from a radio profile (see profiles.py); settings you pass override it.
         The manifest records the profile name and the fully resolved settings.
+        `control=True` takes the capture flags from the suite's `[captures.control]` table (a
+        negative control inside a suite whose other captures are encrypted).
         """
         n = self.ctx.next_index()
         if seed is None:
@@ -75,13 +78,15 @@ class Lab:
         cfg = ChannelSettings.for_profile(profile, seed=seed, **settings)
         cid = f"ch{n:02d}"
         rel = f"captures/{n:02d}-{_slug(self.nodeid.split('::')[-1])}.pcap"
-        flags = self.ctx.suite.capture_flags()
+        flags = self.ctx.suite.capture_flags(control)
         ch = Channel(cfg, a=a, b=b, pcap_path=self.ctx.run_dir / rel, name=cid,
                      on_event=lambda ev, **f: self.log(ev, **f), stats_interval=1.0)
         entry = {"id": cid, "test": self.nodeid, "profile": cfg.profile, "settings": cfg.to_dict(),
                  "capture": rel}
         self.ctx.channels.append(entry)
         cap = {"file": rel, "channel": cid, **flags, "markers": []}
+        if control:
+            cap["role"] = "control"
         self.ctx.captures.append(cap)
         self._channels.append((ch, cap))
         return ch.start()

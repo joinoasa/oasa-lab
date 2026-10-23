@@ -28,6 +28,7 @@ oasa-lab run l1-channel
 | `l2-pluto-acceptance` | A Pluto+ clone is genuine: tuning range, crystal error, all four ports on cable (Pluto+ and RTL-SDR) |
 | `l2-lora-link` | The encrypted link over two LoRa modems on coax; the air shows only ciphertext; an SDR recording matches the airtime (needs `OASA_SEC_BIN_DIR`, `OASA_RADIO_BIN_DIR`) |
 | `l2-rf-control` | Negative control: the air check finds a plaintext LoRa packet |
+| `l1-mavlink-sitl` | Real PX4 and ArduPilot simulators flown through the encrypted link, plus the drone-side MAVLink allowlist guard. Slow, not in CI (see below) |
 
 ### Hardware suites
 
@@ -41,6 +42,23 @@ oasa-lab check --require-hardware runs/<bundle>           # rejects a simulated 
 ```
 
 A suite whose hardware is missing skips with the reason. A transmitting suite skips until `--confirm-wiring` names its wiring. **Never connect transmitters without at least 60 dB between them.** Wiring, safety and thresholds: [docs/hardware-suites.md](docs/hardware-suites.md).
+
+## Flying a real autopilot through the link (`l1-mavlink-sitl`)
+
+Autopilot SITL, then the drone-side `oasa-link`, the simulated channel (5% loss, captured), the ground-side `oasa-link`, and a pymavlink ground station. The signing key is paired with `oasa-pair`, so signing runs inside the link. For each of PX4 and ArduPilot it checks telemetry rates, signed commands (and that unsigned and wrong-key ones are ignored), a flight to 10 m and back and a four-item mission (upload, takeoff, two waypoints, return to launch), all through the link with the guard's default allowlist, and the guard itself (a signed `SETUP_SIGNING`, FTP, a `PARAM_SET` unless `--allow-param` names it, a signing `PARAM_SET` always, a reboot command, a geofence or rally clear and a message not on the list are dropped; the key and the parameters are unchanged), that the captures hold no plaintext, and a **negative control**: the same autopilot over a channel without the link, in which the checker must find MAVLink.
+
+It is too slow for CI (it needs the simulators built, about 20 minutes each, see oasa-sec's `docs/sitl.md`), so the CI matrix does not run it. Run it by hand, about 8 minutes:
+
+```
+pip install pymavlink                                  # LGPL, used only by this suite
+cargo build --bins                                     # in oasa-sec, a build with the MAVLink guard
+export OASA_SEC_BIN_DIR=~/oasa-sec/target/debug
+export PX4_DIR=~/PX4-Autopilot                         # built with: make px4_sitl_sih
+export ARDUPILOT_DIR=~/ardupilot                       # built with: ./waf configure --board sitl && ./waf copter
+oasa-lab run l1-mavlink-sitl
+```
+
+It uses fixed local ports (PX4 14540, 14580 and 18570; ArduPilot 5780 to 5783), so run one at a time and stop other simulators first. Without a binary, a simulator or pymavlink every test is skipped with the reason, and the checker fails the run because the guard cases never ran. The manifest records each simulator's git commit and binary hash. Keys and pairing codes stay in a temporary folder, never in the bundle.
 
 ## How an agent watches a run
 

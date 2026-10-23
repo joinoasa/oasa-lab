@@ -87,6 +87,13 @@ The service itself uses only these and the standard library. It reads the lab's 
 
 These are tools the owner installs and the tests may call. (For the service tests only: [node](https://nodejs.org) (MIT), optional, runs the polkit rule file in `tests/service/test_polkit.py`; the test is skipped without it.) Copyleft licenses apply to them, not to this repo, because nothing links against them. If a test ever needs one as a library, it goes through review first.
 
+## Optional (only for `l1-mavlink-sitl`)
+
+| Package | Version | License | Why |
+|---|---|---|---|
+| [pymavlink](https://github.com/ArduPilot/pymavlink) | 2.4.x | LGPL-3.0 | Makes and signs MAVLink 2 frames for the ground station in the SITL suite. Not a lab dependency: install it by hand to run that suite. **Not permissive; allowed in tests only** (owner decision, 2026-10-23): optional, never shipped. |
+| PX4-Autopilot, ArduPilot | master, see the run's manifest | BSD-3-Clause, GPL-3.0 | The simulators under test. Built outside this repo and run as separate programs, never linked. |
+
 ## Build only
 
 | Package | Version | License | Why |

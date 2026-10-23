@@ -90,7 +90,8 @@ class LinkProc:
     def __init__(self, bins: Bins, me: Identity, peer: str, *, bind: tuple[str, int],
                  remote: tuple[str, int] | None, initiate: bool, plain_listen: tuple[str, int],
                  plain_send: tuple[str, int], log_path: Path, rekey_secs: int | None = None,
-                 duration: float | None = None, counter_bytes: int | None = None, mtu: int | None = None):
+                 duration: float | None = None, counter_bytes: int | None = None, mtu: int | None = None,
+                 extra: list[str] | None = None):
         cmd = [str(bins.link), "--dir", str(me.dir), "--peer", peer, "--bind", f"{bind[0]}:{bind[1]}",
                "--plain-listen", f"{plain_listen[0]}:{plain_listen[1]}",
                "--plain-send", f"{plain_send[0]}:{plain_send[1]}"]
@@ -106,6 +107,7 @@ class LinkProc:
             cmd += ["--duration", str(duration)]
         if mtu:
             cmd += ["--mtu", str(mtu)]
+        cmd += list(extra or [])
         self.cmd, self.log_path = cmd, log_path
         self.events: list[dict] = []
         self._lock = threading.Lock()

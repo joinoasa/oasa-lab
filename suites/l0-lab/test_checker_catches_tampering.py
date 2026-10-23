@@ -35,6 +35,11 @@ def good_control(tmp_path_factory):
     return make_bundle(tmp_path_factory, "l1-plaintext-control")
 
 
+@pytest.fixture(scope="module")
+def good_mixed(tmp_path_factory):
+    return make_bundle(tmp_path_factory, "_fixture-mixed")
+
+
 def copy_of(src, tmp_path):
     dst = tmp_path / src.name
     shutil.copytree(src, dst)
@@ -312,6 +317,53 @@ def test_flipping_encrypted_flag_is_caught(good_control, tmp_path):
     edit_json(b / "manifest.json", relabel)
     write_sums(b)
     assert "suite file says" in verdict(b)[0][4]["reason"]
+
+
+def test_mixed_suite_passes_with_a_control_capture(good_mixed):
+    checks, res = verdict(good_mixed)
+    assert res["ok"], res
+    modes = {c["mode"] for c in checks[4]["details"]["captures"]}
+    assert modes == {"encrypted", "negative control"}
+    m = json.loads((good_mixed / "manifest.json").read_text())
+    assert sorted(c.get("role", "") for c in m["captures"]) == ["", "control"]
+
+
+def test_control_capture_cannot_drop_its_role(good_mixed, tmp_path):
+    """Taking `role: control` off a control capture makes it face the encrypted rules."""
+    b = copy_of(good_mixed, tmp_path)
+
+    def drop_role(m):
+        for c in m["captures"]:
+            c.pop("role", None)
+
+    edit_json(b / "manifest.json", drop_role)
+    write_sums(b)
+    assert "suite file says" in verdict(b)[0][4]["reason"]
+
+
+def test_encrypted_capture_cannot_pose_as_a_control(good_mixed, tmp_path):
+    """Calling the encrypted capture a control does not hide it: the scanner must find MAVLink."""
+    b = copy_of(good_mixed, tmp_path)
+
+    def relabel(m):
+        for c in m["captures"]:
+            if "role" not in c:
+                c.update(role="control", encrypted=False, expect_mavlink=True, skip_header_bytes=0)
+
+    edit_json(b / "manifest.json", relabel)
+    write_sums(b)
+    assert "negative control failed" in verdict(b)[0][4]["reason"]
+
+
+def test_control_role_needs_a_control_table(good_encrypted, tmp_path):
+    b = copy_of(good_encrypted, tmp_path)
+
+    def mark(m):
+        m["captures"][0]["role"] = "control"
+
+    edit_json(b / "manifest.json", mark)
+    write_sums(b)
+    assert "no [captures.control]" in verdict(b)[0][4]["reason"]
 
 
 def test_stats_that_lie_are_caught(good_encrypted, tmp_path):

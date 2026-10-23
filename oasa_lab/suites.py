@@ -8,6 +8,10 @@ suite.toml:
     expect_plaintext  = false           # negative control: the checker must FIND the markers
     expect_mavlink    = false           # negative control: the checker must find MAVLink frames
     skip_header_bytes = 0               # leading protocol bytes left out of the randomness test
+    [captures.control]                  # optional: flags for channels made with lab.channel(control=True),
+    encrypted = false                   # e.g. a negative control that carries the same traffic without
+    expect_mavlink = true               # the link, in a suite whose other captures are encrypted
+
 
 Hardware suites (L2) add:
     transmits = true                    # the suite puts RF on a cable; the checker then needs wiring with 60 dB or more
@@ -52,8 +56,14 @@ class Suite:
     wiring: str = ""
     limits: dict = field(default_factory=dict)
 
-    def capture_flags(self) -> dict:
-        c = self.captures
+    def capture_flags(self, control: bool = False) -> dict:
+        """Flags for a capture. With control=True: the suite's `[captures.control]` table."""
+        if control:
+            if not isinstance(self.captures.get("control"), dict):
+                raise ValueError(f"suite {self.name} has no [captures.control] table")
+            c = self.captures["control"]
+        else:
+            c = self.captures
         return {
             "encrypted": bool(c.get("encrypted", False)),
             "expect_plaintext": bool(c.get("expect_plaintext", False)),

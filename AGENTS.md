@@ -43,7 +43,7 @@ Run `l0-lab`, `l1-channel`, `l1-plaintext-control`, `l1-profiles`, and with `OAS
 - Mark captures `encrypted = true` only if the traffic is ciphertext. Add a plaintext control for any new scanner rule.
 - The checker (`oasa_lab/checker/`) imports the standard library only. Keep it that way. It has its own copy of the airtime formulas (`checker/air.py`); change both together (a test compares them).
 - A radio profile (`oasa_lab/profiles.py`) needs a source for every number in [docs/profiles.md](docs/profiles.md); mark anything unconfirmed *est.* and say why.
-- Any new outside package goes in [docs/software-used.md](docs/software-used.md) (permissive licenses only).
+- Any new outside package goes in [docs/software-used.md](docs/software-used.md) (permissive licenses only). Exception (owner decision, 2026-10-23): LGPL test tools such as pymavlink are allowed when optional and never shipped.
 
 ## The job service
 

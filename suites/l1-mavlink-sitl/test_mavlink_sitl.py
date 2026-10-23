@@ -496,6 +496,31 @@ def test_guard_drops_disallowed_command(lab, rig):
         lk.finish()
 
 
+def test_guard_drops_fence_and_rally_clear(lab, rig):
+    """MISSION_CLEAR_ALL for the geofence (1), the rally points (2) or all types (255) erases them on both
+    autopilots. The default allowlist passes the normal mission (type 0) only: the others are dropped and
+    the autopilot never answers them."""
+    with Links(lab, rig, loss=LOSS) as lk:
+        st = lk.station
+        wait_established_and_alive(st)
+        assert st.probe("own", window=15)  # also lets the start-up drop lines pass the log's rate limit
+        t0 = time.monotonic()
+        for _ in range(3):
+            for mission_type in (1, 2, 255):
+                st.send("mission_clear_all_encode", 1, 1, mission_type)
+            time.sleep(0.4)
+        assert wait_for_value(lambda: lk.blocked() >= 3, 10), "the guard did not drop the clear-alls"
+        drops = [e for e in lk.drone.seen("drop") if e.get("why") == "mission_type"]
+        seen = {e.get("mission_type") for e in drops if e.get("msgid") == 45}
+        assert seen & {1, 2, 255}, f"no mission_type drops logged: {drops}"
+        time.sleep(1.5)
+        acks = [m for _, m in st.of_type("MISSION_ACK", t0) if m.get_srcSystem() == 1]
+        assert not acks, "the autopilot answered a fence or rally clear"
+        assert st.probe("own", window=15)
+        lk.finish()
+    assert lk.stats["drone"]["drops"].get("mavlink_blocked", 0) >= 3
+
+
 def test_guard_drops_messages_not_on_the_list(lab, rig):
     """SET_GPS_GLOBAL_ORIGIN (48) is not a message a ground station needs: dropped."""
     with Links(lab, rig, loss=LOSS) as lk:

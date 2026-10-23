@@ -12,6 +12,7 @@ expectations = [
   "test_guard_drops_signing_param_set",
   "test_guard_drops_disallowed_command",
   "test_guard_drops_messages_not_on_the_list",
+  "test_guard_drops_fence_and_rally_clear",
   "test_captures_hold_no_plaintext",
   "test_negative_control_sees_autopilot_mavlink",
 ]

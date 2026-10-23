@@ -31,10 +31,12 @@ def semtech_driver_ms_numerator(pld, sf, bw, cr, pre, explicit, crc, ldro):
 
 
 def test_lora_known_answers():
-    """Well-known numbers from public LoRa airtime calculators (SF7 and SF12, 125 kHz, CR 4/5, 8 preamble, CRC)."""
-    assert lab_air.lora_airtime_s(10, 7, 125_000) == pytest.approx(0.041216, abs=1e-6)
-    assert lab_air.lora_airtime_s(10, 12, 125_000) == pytest.approx(0.991232, abs=1e-6)
+    """SF7/SF12, 125 kHz, CR 4/5, 8 preamble symbols, explicit header, CRC. Worked by hand from the Semtech
+    formula. The SF12 value for 13 bytes also agrees with the 1.16 s quoted on the TTN forum (docs/profiles.md)."""
+    assert lab_air.lora_airtime_s(10, 7, 125_000) == pytest.approx(0.041216, abs=1e-6)  # 40.25 symbols
+    assert lab_air.lora_airtime_s(10, 12, 125_000) == pytest.approx(0.991232, abs=1e-6)  # 30.25 symbols
     assert lab_air.lora_airtime_s(64, 7, 125_000) == pytest.approx(0.118016, abs=1e-6)
+    assert lab_air.lora_airtime_s(13, 12, 125_000) == pytest.approx(1.16, abs=0.01)
 
 
 def test_lora_matches_the_semtech_driver_over_a_grid():

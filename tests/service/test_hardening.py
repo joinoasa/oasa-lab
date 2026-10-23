@@ -13,7 +13,7 @@ import httpx2 as httpx
 import pytest
 
 from oasa_lab.service import files
-from oasa_lab.service.checkout import Checkout, CheckoutError, Checkouts, _git, git_env, read_suites
+from oasa_lab.service.checkout import CheckoutError, Checkouts, _git, git_env, read_suites
 
 ROOT = Path(__file__).resolve().parents[2]
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]

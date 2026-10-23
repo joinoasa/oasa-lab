@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-from oasa_lab.service import files
 from oasa_lab.service.config import ConfigError, parse_config
 from oasa_lab.service.jobs import Job
 from oasa_lab.service.sandbox import Launch

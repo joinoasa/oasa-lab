@@ -353,6 +353,9 @@ def run_job(job_id: str, policy_path: str = DEFAULT_POLICY, *, policy_uid: int =
             _note(resdir, f"job-run: refused: {exc}\n")
         except Stopped:
             code, reason, error = None, "stopped", "stopped before the suite started"
+        except Exception as exc:   # a bug or a full disk must still leave a result the service can read
+            code, reason, error = None, "error", f"job-run failed: {type(exc).__name__}: {exc}"
+            _note(resdir, error + "\n")
         finally:
             make_group_readable(resdir)
         write_exit(resdir, code, error, reason)

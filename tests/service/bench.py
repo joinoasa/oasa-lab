@@ -7,7 +7,6 @@ lab PC (deploy/selftest.sh does). Here we test what our own code decides and wha
 from __future__ import annotations
 
 import json
-import os
 import stat
 import subprocess
 import sys

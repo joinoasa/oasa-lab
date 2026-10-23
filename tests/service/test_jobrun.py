@@ -14,7 +14,7 @@ import uuid
 import pytest
 
 from oasa_lab import jobrunner
-from oasa_lab.policy import PolicyError, load_policy, parse_policy
+from oasa_lab.policy import PolicyError, parse_policy
 
 from .bench import Bench, git, wait_for
 from .conftest import SIM_BENCH
@@ -250,6 +250,18 @@ def test_the_owners_pause_file_stops_a_job_even_if_the_service_asks(bench, spy):
     other = "4" * 32
     bench.request(other)
     assert job(bench, other) == jobrunner.EX_REFUSED and "paused" in bench.exit_info(other)["error"]
+
+
+def test_an_unexpected_failure_still_leaves_a_result(bench, monkeypatch):
+    bench.request(ID)
+
+    def boom(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(jobrunner, "execute", boom)
+    assert job(bench) == jobrunner.EX_REFUSED
+    info = bench.exit_info(ID)
+    assert info["code"] is None and "No space left" in info["error"] and info["reason"] == "error"
 
 
 def test_an_id_runs_once(bench, spy):

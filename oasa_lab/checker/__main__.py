@@ -13,12 +13,13 @@ def main(argv=None) -> int:
     p.add_argument("bundle")
     p.add_argument("--suites-dir", help="folder with <suite>/suite.toml to confirm expectations and capture flags against")
     p.add_argument("--json", action="store_true", help="print the full result as JSON")
+    p.add_argument("--require-hardware", action="store_true", help="fail if any device in the bundle was simulated")
     args = p.parse_args(argv)
     bundle = Path(args.bundle)
     if not bundle.is_dir():
         print(f"not a folder: {bundle}", file=sys.stderr)
         return 2
-    result = check_bundle(bundle, args.suites_dir)
+    result = check_bundle(bundle, args.suites_dir, require_hardware=args.require_hardware)
     out = write_check(bundle, result)
     print(json.dumps(result, indent=2, default=str) if args.json else format_result(result))
     print(f"wrote {out}")

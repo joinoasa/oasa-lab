@@ -18,12 +18,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from . import radio as radio_mod
+from . import sigmf as sigmf_mod
 from .air import airtime as air_time
 from .air import check_air
 from .pcapread import Packet, PcapError, parse_pcap
 from .stats import binomial_bound, chi2_bytes, poisson_limit
 
-CHECKER_VERSION = "1.1"
+CHECKER_VERSION = "1.2"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
@@ -64,9 +66,10 @@ def sha256_file(path: Path) -> str:
 class Bundle:
     """Lazy, defensive reader for one bundle folder."""
 
-    def __init__(self, root: Path, suites_dir: Path | None):
+    def __init__(self, root: Path, suites_dir: Path | None, require_hardware: bool = False):
         self.root = root
         self.suites_dir = suites_dir
+        self.require_hardware = require_hardware
         self._cache: dict[str, Any] = {}
 
     def read_bytes(self, rel: str) -> bytes:
@@ -285,6 +288,8 @@ def check_manifest(b: Bundle) -> dict:
         need(c.get("profile", s.get("profile", "")) == s.get("profile", ""), f"{c['id']}: profile name and settings.profile differ")
         need(isinstance(c.get("endpoints"), dict), f"{c['id']}: endpoints missing")
     files: set[str] = set()
+    chan_files: set[str] = set()
+    dev_ids = {d.get("id") for d in (m.get("hardware") or {}).get("devices", []) if isinstance(d, dict)}
     for i, cap in enumerate(caps or []):
         if not isinstance(cap, dict):
             errs.append(f"captures[{i}] is not an object")
@@ -293,7 +298,12 @@ def check_manifest(b: Bundle) -> dict:
         need(isinstance(f, str) and bool(CAPTURE_PATH.match(f)), f"captures[{i}].file must be captures/NAME.pcap")
         need(isinstance(f, str) and f not in files, f"captures[{i}].file is listed twice")
         files.add(str(f))
-        need(cap.get("channel") in ids, f"captures[{i}] names an unknown channel")
+        if cap.get("kind") == "air":  # frames a radio modem heard, not a simulated channel
+            need(cap.get("device") in dev_ids, f"captures[{i}] names a device the manifest's hardware does not list")
+            need("channel" not in cap, f"captures[{i}]: an air capture has no channel")
+        else:
+            need(cap.get("channel") in ids, f"captures[{i}] names an unknown channel")
+            chan_files.add(str(f))
         for k in ("encrypted", "expect_plaintext", "expect_mavlink"):
             need(isinstance(cap.get(k), bool), f"captures[{i}].{k} must be true or false")
         need(not (cap.get("encrypted") is True and (cap.get("expect_plaintext") is True or cap.get("expect_mavlink") is True)),
@@ -302,7 +312,7 @@ def check_manifest(b: Bundle) -> dict:
         need(isinstance(sk, int) and not isinstance(sk, bool) and 0 <= sk <= 64, f"captures[{i}].skip_header_bytes must be 0 to 64")
         need(isinstance(cap.get("markers"), list) and all(x in (markers or []) for x in cap["markers"]),
              f"captures[{i}].markers must be a subset of markers")
-    need(len(ids) == len(chans or []) and files == {c.get("capture") for c in chans or []},
+    need(len(ids) == len(chans or []) and chan_files == {c.get("capture") for c in chans or []},
          "every channel needs exactly one capture and the lists must agree")
     # every pcap in the bundle must be declared, or it would escape the scan
     undeclared = sorted(
@@ -567,7 +577,7 @@ def check_numbers(b: Bundle) -> dict:
         if st is None:
             errs.append(f"{cid}: no final channel_stats line in the log")
             continue
-        cap = next(c for c in m["captures"] if c["channel"] == cid)
+        cap = next(c for c in m["captures"] if c.get("channel") == cid)
         pk = b.packets(cap["file"])
         ep = ch["endpoints"]
         dest = {"a_to_b": ep.get("b"), "b_to_a": ep.get("a")}
@@ -678,6 +688,289 @@ def check_expectations(b: Bundle) -> dict:
     return {"reason": f"{len(exps)} expected test(s) ran and passed ({src})", "details": {"rows": rows}}
 
 
+
+# --- check 7: radio evidence ----------------------------------------------------------------
+DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio")
+BACKENDS = ("sim", "hardware")
+RF_SETUPS = ("cabled", "shielded")
+MIN_LOSS_TX_DB = 60.0       # cable loss between a transmitter and any receiver that a transmitter could damage
+MIN_LOSS_RX_ONLY_DB = 40.0  # ... and a receive-only device (an RTL-SDR)
+RUN_SLACK_S = 2.0           # a recording may start this long before the run or end after it
+LIMIT_KEYS = ("min", "max")
+
+
+def _sums_listed(b: Bundle) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for line in (b.root / "SHA256SUMS").read_text(encoding="utf-8", errors="replace").splitlines():
+        mm = re.match(r"^([0-9a-f]{64})  (.+)$", line)
+        if mm:
+            out[mm.group(2)] = mm.group(1)
+    return out
+
+
+def _device_errors(devices: Any, hub: Any) -> tuple[list[str], dict[str, dict]]:
+    errs: list[str] = []
+    by_id: dict[str, dict] = {}
+    if not isinstance(devices, list):
+        return ["hardware.devices must be a list"], by_id
+    for i, d in enumerate(devices):
+        if not isinstance(d, dict) or not isinstance(d.get("id"), str) or d["id"] in by_id:
+            errs.append(f"hardware.devices[{i}] needs a unique id")
+            continue
+        by_id[d["id"]] = d
+        tag = f"device {d['id']}"
+        if d.get("kind") not in DEVICE_KINDS:
+            errs.append(f"{tag}: kind must be one of {DEVICE_KINDS}")
+        if d.get("backend") not in BACKENDS:
+            errs.append(f"{tag}: backend must be sim or hardware")
+        for k in ("model", "serial", "firmware"):
+            if not (isinstance(d.get(k), str) and d[k]):
+                errs.append(f"{tag}: {k} is missing")
+        if d.get("backend") == "hardware":
+            if d.get("serial") in ("n/a", None, ""):
+                errs.append(f"{tag}: a real device must have a serial number on record")
+            if d.get("kind") in ("pluto", "serial-radio") and d.get("firmware") in ("n/a", None, ""):
+                errs.append(f"{tag}: a real {d.get('kind')} must have its firmware version on record")
+    if hub is not None and not (isinstance(hub, dict) and hub.get("backend") in BACKENDS):
+        errs.append("hardware.hub needs a backend (sim or hardware)")
+    return errs, by_id
+
+
+def _rf_errors(rf: Any, by_id: dict[str, dict], transmits: bool) -> list[str]:
+    if rf is None:
+        return ["the suite transmits but the manifest has no hardware.rf (RF setup and cable losses)"] if transmits else []
+    errs: list[str] = []
+    if not isinstance(rf, dict) or rf.get("setup") not in RF_SETUPS:
+        return [f"hardware.rf.setup must be one of {RF_SETUPS} (radiating over the air is not allowed at this level)"]
+    paths = rf.get("paths")
+    if not (isinstance(paths, list) and paths):
+        return ["hardware.rf.paths must list the cable paths with their loss"]
+    for i, p in enumerate(paths):
+        if not isinstance(p, dict) or not all(isinstance(p.get(k), str) and p[k] for k in ("name", "from", "to")) \
+                or not _num(p.get("loss_db")) or not isinstance(p.get("receiver_transmits"), bool):
+            errs.append(f"hardware.rf.paths[{i}] needs name, from, to, loss_db and receiver_transmits")
+            continue
+        for end in ("from", "to"):
+            if p[end].split(":")[0] not in by_id:
+                errs.append(f"RF path {p['name']}: {end} {p[end]!r} is not a device in the manifest")
+        need = MIN_LOSS_TX_DB if p["receiver_transmits"] else MIN_LOSS_RX_ONLY_DB
+        if p["loss_db"] < need:
+            errs.append(f"RF path {p['name']}: {p['loss_db']:g} dB is below the {need:g} dB required "
+                        f"before a {'radio' if p['receiver_transmits'] else 'receive-only device'}")
+    return errs
+
+
+def _burst_errors(b: Bundle, m: dict, rec: dict, meta_facts: dict, data_path: Path, by_id: dict[str, dict]) -> tuple[list[str], dict]:
+    bc = rec["burst_check"]
+    tag = rec["base"]
+    errs: list[str] = []
+    if not (isinstance(bc, dict) and isinstance(bc.get("captures"), list) and bc["captures"] and isinstance(bc.get("model"), dict)):
+        return [f"{tag}: burst_check needs captures (a list) and model (LoRa airtime settings)"], {}
+    model = bc["model"]
+    overhead = bc.get("overhead_bytes", 0)
+    if model.get("airtime") != "lora" or not _int_ge0(overhead):
+        return [f"{tag}: burst_check.model must be a lora airtime model and overhead_bytes 0 or more"], {}
+    errs.extend(_air_settings_errors(tag, dict(model)))
+    caps = {c.get("file"): c for c in m.get("captures", []) if isinstance(c, dict)}
+    frames: list[tuple[float, float]] = []
+    for f in bc["captures"]:
+        cap = caps.get(f)
+        if cap is None or cap.get("kind") != "air":
+            errs.append(f"{tag}: burst_check names {f!r}, which is not an air capture in the manifest")
+            continue
+        # the model must be what the modem was declared to run, so it cannot be tuned to fit the recording
+        declared = ((by_id.get(cap.get("device"), {}).get("radio") or {}).get("airtime")) or {}
+        for k, v in model.items():
+            if k in declared and declared[k] != v:
+                errs.append(f"{tag}: burst_check.model.{k}={v!r} but {cap.get('device')} was declared with {declared[k]!r}")
+        try:
+            for p in b.packets(f):
+                frames.append((p.ts, air_time(model, len(p.payload) + overhead, "a_to_b")))
+        except Fail as exc:
+            errs.append(exc.reason)
+    if errs:
+        return errs, {}
+    frames.sort()
+    if not frames:
+        return [f"{tag}: the air captures hold no frames, so there is nothing to line the recording up with"], {}
+    try:
+        levels, win = radio_mod.window_levels(data_path, meta_facts["datatype"], meta_facts["sample_rate"])
+    except radio_mod.RadioError as exc:
+        return [f"{tag}: {exc}"], {}
+    bursts, _noise = radio_mod.detect_bursts(levels, win)
+    t0 = parse_time(meta_facts["datetime"]).timestamp()
+    r = radio_mod.align(frames, bursts, t0)
+    r["recording"] = tag
+    if r["matched"] < radio_mod.MIN_MATCH_FRACTION * r["frames"]:
+        errs.append(f"{tag}: only {r['matched']} of {r['frames']} frames line up with a burst of the right length "
+                    f"({r['duration_mismatch']} had a burst at the right time but the wrong length)")
+    allowed = max(2, math.ceil(0.1 * r["bursts"]))
+    if r["unmatched_bursts"] > allowed:
+        errs.append(f"{tag}: {r['unmatched_bursts']} bursts on the air match no frame (more than {allowed} allowed)")
+    if r["mean_snr_db"] is not None and r["mean_snr_db"] < radio_mod.MIN_SNR_DB:
+        errs.append(f"{tag}: bursts are only {r['mean_snr_db']} dB above the noise (need {radio_mod.MIN_SNR_DB:g})")
+    if abs(r["offset_s"]) > radio_mod.MAX_OFFSET_S:
+        errs.append(f"{tag}: recording clock is {r['offset_s']} s from the host clock (limit {radio_mod.MAX_OFFSET_S} s)")
+    return errs, r
+
+
+def _int_ge0(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def _recording_errors(b: Bundle, m: dict, recs: Any, by_id: dict[str, dict]) -> tuple[list[str], list[dict]]:
+    errs: list[str] = []
+    bursts: list[dict] = []
+    if not isinstance(recs, list):
+        return ["recordings must be a list"], bursts
+    sums = _sums_listed(b)
+    seen: set[str] = set()
+    declared_files: set[str] = set()
+    run_start = run_end = None
+    try:
+        run_start, run_end = parse_time(m.get("start")), parse_time(m.get("end"))
+    except ValueError:
+        pass
+    for i, rec in enumerate(recs):
+        if not isinstance(rec, dict):
+            errs.append(f"recordings[{i}] is not an object")
+            continue
+        base, meta_rel, data_rel = rec.get("base"), rec.get("meta"), rec.get("data")
+        if not (isinstance(base, str) and meta_rel == f"{base}.sigmf-meta" and data_rel == f"{base}.sigmf-data"
+                and sigmf_mod.RECORDING_FILE.match(str(meta_rel)) and sigmf_mod.RECORDING_FILE.match(str(data_rel))):
+            errs.append(f"recordings[{i}]: base, meta and data must be recordings/NAME and its two SigMF files")
+            continue
+        if base in seen:
+            errs.append(f"{base} is listed twice")
+            continue
+        seen.add(base)
+        declared_files.update((meta_rel, data_rel))
+        if rec.get("device") not in by_id:
+            errs.append(f"{base}: device {rec.get('device')!r} is not a device in the manifest")
+        for rel in (meta_rel, data_rel):
+            if rel not in sums:
+                errs.append(f"{rel} is not hashed in SHA256SUMS")
+        data_path, meta_path = b.root / data_rel, b.root / meta_rel
+        if any(p.is_symlink() or not p.is_file() for p in (data_path, meta_path)):
+            errs.append(f"{base}: a SigMF file is missing or not a plain file")
+            continue
+        try:
+            meta = json.loads(meta_path.read_bytes())
+        except json.JSONDecodeError as exc:
+            errs.append(f"{meta_rel} is not valid JSON ({exc})")
+            continue
+        problems, facts = sigmf_mod.validate_meta(meta, data_path.stat().st_size, sigmf_mod.sha512_file(data_path))
+        errs.extend(f"{base}: {p}" for p in problems)
+        if problems:
+            continue
+        g = meta["global"]
+        if g.get("oasa:run_id") != m.get("run_id"):
+            errs.append(f"{base}: oasa:run_id is not this run's id (a recording from another run?)")
+        if g.get("oasa:device") != rec.get("device"):
+            errs.append(f"{base}: oasa:device differs from the manifest")
+        for key, got in (("datatype", facts["datatype"]), ("sample_rate", facts["sample_rate"]),
+                         ("center_hz", facts["frequency"]), ("samples", facts["samples"])):
+            if rec.get(key) != got:
+                errs.append(f"{base}: manifest {key}={rec.get(key)!r} but the SigMF file says {got!r}")
+        t = parse_time(facts["datetime"])
+        if run_start and run_end and not (run_start - timedelta(seconds=RUN_SLACK_S) <= t <= run_end + timedelta(seconds=RUN_SLACK_S)):
+            errs.append(f"{base}: recorded at {facts['datetime']}, outside the run ({m.get('start')} to {m.get('end')})")
+        if rec.get("burst_check") is not None:
+            e, r = _burst_errors(b, m, rec, facts, data_path, by_id)
+            errs.extend(e)
+            if r:
+                bursts.append(r)
+    folder = b.root / "recordings"
+    if folder.is_dir():
+        for p in sorted(folder.iterdir()):
+            rel = p.relative_to(b.root).as_posix()
+            if rel not in declared_files:
+                errs.append(f"{rel} is in recordings/ but not listed in the manifest")
+    return errs, bursts
+
+
+def _measurement_errors(b: Bundle, decl: dict | None) -> tuple[list[str], int]:
+    errs: list[str] = []
+    rows = [r for r in b.log() if r["event"] == "measurement"]
+    limits = (decl or {}).get("limits", {}) if decl is not None else None
+    seen: set[str] = set()
+    for r in rows:
+        metric, value = r.get("metric"), r.get("value")
+        lo, hi = r.get("min"), r.get("max")
+        if not isinstance(metric, str) or not _num(value) or any(x is not None and not _num(x) for x in (lo, hi)):
+            errs.append(f"a measurement line is malformed: {metric!r}")
+            continue
+        seen.add(metric)
+        inside = (lo is None or value >= lo) and (hi is None or value <= hi)
+        if r.get("ok") is not inside:
+            errs.append(f"{r.get('name', metric)}: the log says ok={r.get('ok')} but {value} against {lo}..{hi} is {inside}")
+        elif not inside:
+            errs.append(f"{r.get('name', metric)} = {value:g} is outside its limits ({lo}..{hi})")
+        if limits is not None:
+            want = limits.get(metric)
+            if want is None:
+                errs.append(f"measurement {metric!r} has no [limits.{metric}] in the suite file")
+            elif (want.get("min"), want.get("max")) != (lo, hi):
+                errs.append(f"{r.get('name', metric)}: limits {lo}..{hi} differ from the suite file's "
+                            f"{want.get('min')}..{want.get('max')}")
+    if limits:
+        for metric in limits:
+            if metric not in seen:
+                errs.append(f"limit {metric!r} is declared in the suite file but nothing was measured against it")
+    return errs, len(rows)
+
+
+def check_radio(b: Bundle) -> dict:
+    m = b.manifest()
+    decl = b.suite_decl(m["suite"]) if b.suites_dir else None
+    hw = m.get("hardware") if isinstance(m.get("hardware"), dict) else {}
+    recs = m.get("recordings", [])
+    transmits = m.get("transmits", False)
+    requires = m.get("requires", [])
+    errs: list[str] = []
+    if not isinstance(transmits, bool):
+        errs.append("transmits must be true or false")
+        transmits = False
+    if not (isinstance(requires, list) and all(isinstance(x, str) for x in requires)):
+        errs.append("requires must be a list of device names")
+        requires = []
+    if decl is not None:
+        if bool(decl.get("transmits", False)) != transmits:
+            errs.append(f"manifest says transmits={transmits} but the suite file says {bool(decl.get('transmits', False))}")
+        dropped = [r for r in decl.get("requires", []) if r not in requires]
+        if dropped:
+            errs.append(f"the manifest dropped hardware the suite file requires: {dropped}")
+    device_errs, by_id = _device_errors(hw.get("devices", []), hw.get("hub"))
+    errs.extend(device_errs)
+    for req in requires:
+        kind, _, n = req.partition(":")
+        have = (1 if hw.get("hub") else 0) if kind == "hub" else sum(1 for d in by_id.values() if d.get("kind") == kind)
+        if have < (int(n) if n.isdigit() else 1):
+            errs.append(f"the suite requires {req} but the manifest lists {have}")
+    errs.extend(_rf_errors(hw.get("rf"), by_id, transmits))
+    rec_errs, burst_rows = _recording_errors(b, m, recs, by_id)
+    errs.extend(rec_errs)
+    meas_errs, n_meas = _measurement_errors(b, decl)
+    errs.extend(meas_errs)
+    sim_ids = sorted(i for i, d in by_id.items() if d.get("backend") == "sim")
+    if b.require_hardware and (sim_ids or not by_id):
+        errs.append("real hardware was required but " + (f"these devices were simulated: {sim_ids}" if sim_ids else "no device is on record"))
+    if errs:
+        raise Fail("; ".join(errs[:6]) + (f" (and {len(errs) - 6} more)" if len(errs) > 6 else ""), errors=errs, bursts=burst_rows)
+    if not (by_id or recs or requires or transmits or n_meas):
+        return {"reason": "no hardware, recordings or measurements in this run", "details": {}}
+    bits = [f"{len(by_id)} device(s)" + (f" ({len(sim_ids)} SIMULATED)" if sim_ids else "")]
+    if transmits:
+        bits.append(f"RF {hw['rf']['setup']}, {len(hw['rf']['paths'])} path(s) at or above the minimum loss")
+    if recs:
+        bits.append(f"{len(recs)} SigMF recording(s) listed, hashed and valid")
+    if burst_rows:
+        bits.append(f"bursts line up with airtime in {len(burst_rows)} ({sum(r['matched'] for r in burst_rows)} frames)")
+    if n_meas:
+        bits.append(f"{n_meas} measurement(s) inside the suite's limits")
+    return {"reason": "; ".join(bits), "details": {"simulated": sim_ids, "bursts": burst_rows}}
+
+
 CHECKS: list[tuple[int, str, Callable[[Bundle], dict]]] = [
     (1, "integrity", check_integrity),
     (2, "manifest", check_manifest),
@@ -685,12 +978,13 @@ CHECKS: list[tuple[int, str, Callable[[Bundle], dict]]] = [
     (4, "no_readable_payload", check_payload),
     (5, "numbers_make_sense", check_numbers),
     (6, "known_bad_cases_ran", check_expectations),
+    (7, "radio_evidence", check_radio),
 ]
 
 
-def check_bundle(bundle: Path | str, suites_dir: Path | str | None = None) -> dict:
+def check_bundle(bundle: Path | str, suites_dir: Path | str | None = None, require_hardware: bool = False) -> dict:
     root = Path(bundle)
-    b = Bundle(root, Path(suites_dir) if suites_dir else None)
+    b = Bundle(root, Path(suites_dir) if suites_dir else None, require_hardware)
     results = []
     for num, name, fn in CHECKS:
         try:

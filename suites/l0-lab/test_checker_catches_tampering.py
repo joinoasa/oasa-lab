@@ -60,7 +60,7 @@ def test_untouched_bundles_pass(good_encrypted, good_control):
     for b in (good_encrypted, good_control):
         checks, res = verdict(b)
         assert res["ok"], {i: c["reason"] for i, c in checks.items() if c["status"] == "fail"}
-        assert [c["status"] for c in checks.values()] == ["pass"] * 6
+        assert [c["status"] for c in checks.values()] == ["pass"] * 7
 
 
 @pytest.mark.skipif(shutil.which("sha256sum") is None, reason="sha256sum not installed")

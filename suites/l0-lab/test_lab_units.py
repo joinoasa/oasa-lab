@@ -183,7 +183,7 @@ def test_checker_imports_only_the_standard_library():
                 names = [a.name.split(".")[0] for a in node.names]
             elif isinstance(node, ast.ImportFrom):
                 if node.level:  # relative: must stay inside the checker package
-                    assert node.level == 1 and (node.module or "") in ("core", "pcapread", "stats", "air", "") , f"{f.name}: {node.module}"
+                    assert node.level == 1 and (node.module or "") in ("core", "pcapread", "stats", "air", "radio", "sigmf", "") , f"{f.name}: {node.module}"
                     continue
                 names = [(node.module or "").split(".")[0]]
             else:

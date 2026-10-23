@@ -119,6 +119,7 @@ class Pluto(Device):
 
     def tx_tone(self, port: int, rf_hz: float, offset_hz: float, gain_db: float, scale: float, fs: float) -> None:
         """Send a single tone at rf_hz + offset_hz from TX `port` (1 or 2). The other TX is muted."""
+        self.require_tx("tx_tone")
         if port not in (1, 2) or port > self.channels:
             raise DeviceError(f"{self.id}: no TX{port}")
         self.tune(rf_hz)

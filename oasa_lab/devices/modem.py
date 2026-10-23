@@ -71,8 +71,9 @@ class Frame:
 
 
 class ModemLink:
-    def __init__(self, name: str, port: PortLike, mtu: int = DEFAULT_MTU):
+    def __init__(self, name: str, port: PortLike, mtu: int = DEFAULT_MTU, gate: "Callable[[str], None] | None" = None):
         self.name, self.port, self.mtu = name, port, mtu
+        self.gate = gate  # called before any byte goes to the modem; raises TxRefused to stop it
         self.rx: list[Frame] = []   # modem to host: what it heard on the air
         self.tx: list[Frame] = []   # host to modem: what it was asked to send
         self.dec_rx, self.dec_tx = FrameDecoder(mtu), FrameDecoder(mtu)
@@ -86,6 +87,8 @@ class ModemLink:
 
     # --- use ------------------------------------------------------------------------------
     def send_packet(self, packet: bytes) -> None:
+        if self.gate:
+            self.gate("send_packet")
         self.port.write(encode_frame(packet, self.mtu))
         with self._lock:
             self.tx.append(Frame(time.time(), packet))
@@ -156,6 +159,12 @@ class ModemLink:
                 data = os.read(self._master, 4096)
             except OSError:
                 continue
+            if data and self.gate:
+                try:
+                    self.gate("pty write")
+                except DeviceError as exc:
+                    self.errors.append(str(exc))
+                    continue
             if data:
                 self.port.write(data)
                 ts = time.time()
@@ -194,7 +203,7 @@ class SerialRadio(Device):
             self._check_usb_serial(path)
             self.port = SerialPort(path, int(self.cfg.get("baud", 115200)),
                                    bool(self.cfg.get("dtr", True)), bool(self.cfg.get("rts", False)))
-        self.link = ModemLink(self.id, self.port, self.mtu)
+        self.link = ModemLink(self.id, self.port, self.mtu, gate=self.require_tx)
 
     def _check_usb_serial(self, path: str) -> None:
         """If lab.toml gives a USB serial number, the port must belong to that board."""

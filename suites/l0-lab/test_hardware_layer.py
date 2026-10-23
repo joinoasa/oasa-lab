@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from oasa_lab.devices import (DeviceError, Inventory, InventoryError, Pluto, RtlSdr, SerialRadio, SimHub, SimWorld,
-                              Unavailable, make_device)
+                              Unavailable, TxRefused, make_device)
 from oasa_lab.devices.framing import FrameDecoder, cobs_decode, cobs_encode, crc16, encode_frame
 from oasa_lab.devices.inventory import DEFAULT_SIM
 from oasa_lab.iq import IQ, cf32_bytes, tone_report
@@ -274,6 +274,9 @@ def test_real_serial_backend_against_a_pseudo_terminal(tmp_path):
                                                  "firmware": "fake 1.0", "baud": 115200}}}, "t")
     modem = make_device("m", inv, None, None)
     assert modem.backend == "hardware"
+    with pytest.raises(TxRefused), modem:  # real hardware with no suite behind it: nothing goes out
+        modem.link.send_packet(b"hello")
+    modem.tx_gate = lambda: None  # a unit test standing in for a suite that declared transmits and confirmed wiring
     with modem:
         info = modem.info()
         assert info["serial"] == "T-1" and info["firmware"] == "fake 1.0" and info["radio"]["freq_mhz"] == 915.0

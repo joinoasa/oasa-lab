@@ -95,6 +95,8 @@ Set the modems to 10 dBm. At 72 dB B hears A at about -62 dBm (LoRa SF7 needs -1
 
 Change the cabling between suites; `--confirm-wiring` is how you say the right one is in place.
 
+**The transmit calls check too.** `Pluto.tx_tone` and `ModemLink.send_packet` (and the pty a bridge writes through) ask the run first: the suite must say `transmits = true` in `suite.toml`, and a wiring must be on record (`hw.use_wiring()`, which on real hardware needs `--confirm-wiring`). Otherwise they raise `TxRefused` before anything goes out. A device built by hand on real hardware, with no `hw` fixture behind it, never transmits. A suite with `requires` must say `transmits = true` or `transmits = false`; on real hardware it is refused if it says neither. Muting (`tx_off`) and receiving are always allowed.
+
 ## Running the suites
 
 ```

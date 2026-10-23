@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from oasa_lab.devices import DeviceError, Inventory, Unavailable, make_device
+from oasa_lab.devices import DeviceError, Inventory, TxRefused, Unavailable, make_device
 from oasa_lab.devices.hub import UsbHub
 
 FAKE_RTL_TEST = '''#!/usr/bin/env python3
@@ -157,6 +157,7 @@ def test_pluto_real_backend_with_a_fake_adi(monkeypatch):
         assert "Pluto" in info["model"]
         sdr = FakeAd9361.last
         assert sdr.dds[0][1] == 0.0 and sdr.dds[1][1] == 0.0       # opened with both transmitters muted
+        p.tx_gate = lambda: None  # a unit test standing in for a suite that declared transmits and confirmed wiring
         p.tx_tone(2, 915e6, 1e5, -10.0, 0.5, 2e6)
         assert sdr.dds[1] == (100000, 0.5) and sdr.dds[0][1] == 0.0 and sdr.tx_hardwaregain_chan1 == -10.0
         assert sdr.tx_hardwaregain_chan0 == -89.0                   # the other port stays muted

@@ -17,6 +17,10 @@ class WiringRefused(Exception):
     """The suite may not transmit yet; the message says why."""
 
 
+class UndeclaredTransmit(WiringRefused):
+    """A suite that needs hardware must say, in suite.toml, whether it transmits."""
+
+
 class Hardware:
     def __init__(self, ctx: RunContext, inv: Inventory, nodeid: str):
         self.ctx, self.inv = ctx, inv
@@ -54,13 +58,32 @@ class Hardware:
         self.ctx.hardware["rf"] = rf
         return rf
 
+    # --- the transmit gate -----------------------------------------------------------------------
+    def tx_allowed(self) -> str | None:
+        """None when this run may transmit; else why not. Every device's transmit call asks this."""
+        suite, rf = self.ctx.suite, self.ctx.hardware.get("rf")
+        if not suite.transmits:
+            return f"suite {suite.name!r} does not declare transmits = true"
+        if not rf:
+            return "no wiring is on record; call hw.use_wiring() first"
+        real = any(self.inv.backend_of(i) != "sim" for i in self.inv.devices)
+        if real and self.ctx.confirm_wiring != rf.get("wiring"):
+            return f"wiring {rf.get('wiring')!r} was not confirmed with --confirm-wiring"
+        return None
+
     # --- devices ------------------------------------------------------------------------------
     def open(self, dev_id: str) -> Device:
         if dev_id in self.devices:
             return self.devices[dev_id]
         if dev_id not in self.inv.devices:
             raise KeyError(f"lab.toml has no device {dev_id!r}")
-        dev = make_device(dev_id, self.inv, self.hub, self.world).open()
+        suite = self.ctx.suite
+        if self.inv.backend_of(dev_id) != "sim" and suite.requires and not suite.transmits_declared:
+            raise UndeclaredTransmit(f"suite {suite.name!r} needs hardware but suite.toml does not say transmits = true "
+                                     "or transmits = false. Say which, so the lab knows whether it may radiate")
+        dev = make_device(dev_id, self.inv, self.hub, self.world)
+        dev.tx_gate = self.tx_allowed
+        dev = dev.open()
         self.devices[dev_id] = dev
         self.ctx.hardware["devices"][dev_id] = dev.info()
         return dev

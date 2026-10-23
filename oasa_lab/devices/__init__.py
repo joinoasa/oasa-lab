@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import Device, DeviceError, Unavailable
+from .base import Device, DeviceError, TxRefused, Unavailable
 from .hub import SimHub, UsbHub, make_hub
 from .inventory import Inventory, InventoryError
 from .modem import ModemLink, SerialRadio
@@ -21,5 +21,5 @@ def make_device(dev_id: str, inv: Inventory, hub: UsbHub | None, world: SimWorld
     return DRIVERS[cfg["kind"]](dev_id, cfg, backend, hub, world)
 
 
-__all__ = ["Device", "DeviceError", "Unavailable", "Inventory", "InventoryError", "UsbHub", "SimHub", "SimWorld",
+__all__ = ["Device", "DeviceError", "TxRefused", "Unavailable", "Inventory", "InventoryError", "UsbHub", "SimHub", "SimWorld",
            "Pluto", "RtlSdr", "SerialRadio", "ModemLink", "make_device", "make_hub"]

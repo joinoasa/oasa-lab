@@ -8,7 +8,7 @@ keys, so the manifest looks the same either way, with `backend` telling which it
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Callable
 
 
 class DeviceError(Exception):
@@ -17,6 +17,10 @@ class DeviceError(Exception):
 
 class Unavailable(DeviceError):
     """The device, a library or a tool it needs is not there. Suites skip on this."""
+
+
+class TxRefused(DeviceError):
+    """A transmit call was refused: the suite did not declare `transmits = true`, or no confirmed wiring was recorded."""
 
 
 INFO_KEYS = ("id", "kind", "backend", "model", "serial", "firmware")
@@ -28,6 +32,23 @@ class Device:
     def __init__(self, dev_id: str, cfg: dict[str, Any], backend: str, hub: "Any | None" = None, world: "Any | None" = None):
         self.id, self.cfg, self.backend, self.hub, self.world = dev_id, dict(cfg), backend, hub, world
         self.is_open = False
+        # Set by the `hw` fixture. Returns None when this run may transmit, else the reason it may not.
+        self.tx_gate: "Callable[[], str | None] | None" = None
+
+    def require_tx(self, what: str) -> None:
+        """Every transmit path calls this first. Receiving and muting never do.
+
+        A device opened through the `hw` fixture asks the run: the suite must say `transmits = true` and a
+        confirmed wiring must be on record. The simulated backend radiates nothing, so a simulated device
+        with no gate (a unit test building one by hand) is allowed. Real hardware without a gate never is."""
+        if self.tx_gate is None:
+            if self.backend == "sim":
+                return
+            raise TxRefused(f"{self.id}: {what} refused: this device was not opened through the hw fixture of a "
+                            "suite that declares transmits = true")
+        why = self.tx_gate()
+        if why:
+            raise TxRefused(f"{self.id}: {what} refused: {why}")
 
     # --- to override ---------------------------------------------------------------------
     def _open(self) -> None:

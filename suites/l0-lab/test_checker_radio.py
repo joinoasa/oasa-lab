@@ -357,3 +357,11 @@ def test_a_limit_nobody_measured_against_is_caught(good_pluto, tmp_path):
     edit_log(b, lambda rows: rows.__setitem__(slice(None), [r for r in rows
                                                             if not (r["event"] == "measurement" and r["metric"] == "port_level_spread_db")]))
     assert failed(b) == [7] and "nothing was measured" in reason7(b)
+
+
+def test_an_optional_limit_may_stay_unmeasured(good_pluto, tmp_path):
+    """Without a calibration the absolute level is not judged; that must not fail the run."""
+    b = copy_of(good_pluto, tmp_path)
+    edit_log(b, lambda rows: rows.__setitem__(slice(None), [r for r in rows
+                                                            if not (r["event"] == "measurement" and r["metric"] == "rx_level_vs_expected_db")]))
+    assert failed(b) == []

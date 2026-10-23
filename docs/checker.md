@@ -60,6 +60,8 @@ For every capture the manifest marks `encrypted: true`:
 
 **Negative control.** For a capture marked `encrypted: false, expect_plaintext: true` the checker must **find** the run's marker (and find MAVLink frames if `expect_mavlink`), and must see that the bytes are *not* random. If it doesn't, the check fails. That proves the scanner works. The suite `l1-plaintext-control` does this on every CI run.
 
+**A control inside an encrypted suite.** A suite can add a `[captures.control]` table (for example `encrypted = false`, `expect_mavlink = true`). A test makes such a capture with `lab.channel(control=True)`; the manifest marks it `role: "control"` and the checker judges it by that table. Taking the role off, or calling an encrypted capture a control, fails: the first no longer matches the suite file, the second must show MAVLink frames and ciphertext has none. `l1-mavlink-sitl` uses this to prove the scanner sees real autopilot traffic.
+
 **The suite decides what is encrypted.** If the suite's `suite.toml` is available, the manifest's flags must equal it. A run can't relabel a capture to dodge the scan.
 
 ### 5. Numbers make sense

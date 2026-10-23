@@ -308,6 +308,7 @@ def check_manifest(b: Bundle) -> dict:
             need(isinstance(cap.get(k), bool), f"captures[{i}].{k} must be true or false")
         need(not (cap.get("encrypted") is True and (cap.get("expect_plaintext") is True or cap.get("expect_mavlink") is True)),
              f"captures[{i}]: a capture cannot be both encrypted and a plaintext control")
+        need(cap.get("role") in (None, "control"), f"captures[{i}].role must be absent or \"control\"")
         sk = cap.get("skip_header_bytes")
         need(isinstance(sk, int) and not isinstance(sk, bool) and 0 <= sk <= 64, f"captures[{i}].skip_header_bytes must be 0 to 64")
         need(isinstance(cap.get("markers"), list) and all(x in (markers or []) for x in cap["markers"]),
@@ -507,6 +508,12 @@ def check_payload(b: Bundle) -> dict:
         r["file"] = f
         if decl is not None:
             d = decl.get("captures", {})
+            if cap.get("role") == "control":
+                # A control capture is judged by the suite's [captures.control] table.
+                d = d.get("control")
+                if not isinstance(d, dict):
+                    errs.append(f"{f}: marked as a control, but the suite file has no [captures.control]")
+                    d = {}
             for key in ("encrypted", "expect_plaintext", "expect_mavlink"):
                 if bool(d.get(key, False)) != cap[key]:
                     errs.append(f"{f}: manifest says {key}={cap[key]} but the suite file says {bool(d.get(key, False))}")

@@ -1,0 +1,10 @@
+description = "Tiny suite with random traffic and a MAVLink control channel in one run. Hidden from the list."
+expectations = ["test_control_carries_mavlink"]
+
+[captures]
+encrypted = true
+skip_header_bytes = 8
+
+[captures.control]
+encrypted = false
+expect_mavlink = true

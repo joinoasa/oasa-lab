@@ -40,9 +40,15 @@ def git_env() -> dict[str, str]:
             "GIT_ATTR_NOSYSTEM": "1", "LC_ALL": "C"}
 
 
-async def _git(*args: str, cwd: Path | None = None, timeout: float = 120) -> str:
+def _umask_022() -> None:
+    os.umask(0o022)
+
+
+async def _git(*args: str, cwd: Path | None = None, timeout: float = 120, readable: bool = False) -> str:
+    """Run git with a clean environment. `readable`: files come out world-readable, for a copy the job user must read."""
     proc = await asyncio.create_subprocess_exec(
-        "git", *GIT_SAFE, *args, cwd=cwd, env=git_env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        "git", *GIT_SAFE, *args, cwd=cwd, env=git_env(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        preexec_fn=_umask_022 if readable else None)
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
     except asyncio.TimeoutError:
@@ -90,8 +96,8 @@ class Checkouts:
         if not SHA_RE.match(sha):
             raise CheckoutError("bad commit id")
         shutil.rmtree(dest, ignore_errors=True)
-        await _git("clone", "-q", "--no-checkout", "--no-hardlinks", "--template=", str(self.mirror), str(dest))
-        await _git("checkout", "-q", "--detach", sha, cwd=dest)
+        await _git("clone", "-q", "--no-checkout", "--no-hardlinks", "--template=", str(self.mirror), str(dest), readable=True)
+        await _git("checkout", "-q", "--detach", sha, cwd=dest, readable=True)
         return dest
 
     async def _above_floor(self, rev: str) -> None:

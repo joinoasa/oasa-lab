@@ -1,12 +1,16 @@
 """The one small program that runs as root: it starts a job as the unprivileged job user.
 
-    sudo -n /opt/oasa-lab/venv/bin/python -I -m oasa_lab.service.jobrun run  JOB_ID
-    sudo -n ...                                                          stop JOB_ID
-    sudo -n ...                                                          clean JOB_ID
+systemd runs one copy per connection to a Unix socket that only the service user can open
+(deploy/systemd/oasa-lab-jobrun.socket). There is no sudo and no setuid file, so the service keeps its full
+sandbox (no new privileges, no capabilities). The connection carries one line:
 
-The service (user oasalab) may run this and nothing else as root (see deploy/sudoers). So it does not
-trust what it is given. The service passes only a job id. Everything else is read from root-owned files or
-checked here:
+    run JOB_ID     start the job; its output streams back; when it ends the exit status is written to
+                   jobs/JOB_ID/exit.json and the connection closes. Closing the connection early stops the job.
+    stop JOB_ID    stop the job's systemd unit (SIGTERM, then SIGKILL to its whole cgroup)
+    clean JOB_ID   delete the job's runs folder (it belongs to the job user, so the service cannot)
+
+This program does not trust what it is given. The caller is whoever systemd says is on the socket (SO_PEERCRED).
+The service passes only a job id. Everything else is read from root-owned files or checked here:
 
   - the lab config /etc/oasa-lab/service.toml (root-owned, the service cannot edit it) says who the job
     user is, the limits, the rf setup, the device file and which wirings the owner confirmed;
@@ -24,8 +28,12 @@ import json
 import os
 import pwd
 import re
+import select
 import shutil
+import socket
 import stat
+import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,46 +60,45 @@ class Refused(Exception):
     pass
 
 
-def _direct() -> bool:
-    """True when run by hand or by a test, not through sudo. sudo always sets SUDO_UID (overwriting any value
-    the caller made up) and resets the rest of the environment, so the service user can never be 'direct'."""
-    return "SUDO_UID" not in os.environ
+def _test_mode() -> bool:
+    """Only a test sets this. In production the helper's environment is systemd's, which has no such variable,
+    and the service (a client of the socket) cannot add to it."""
+    return os.environ.get("OASA_LAB_JOBRUN_TEST") == "1"
 
 
 def _tool(name: str, env_var: str) -> str:
-    """systemd-run or systemctl. Tests may point at a stand-in; through sudo the path is never taken from the environment."""
-    return os.environ.get(env_var, name) if _direct() else name
+    """systemd-run or systemctl; tests may point at a stand-in."""
+    return os.environ.get(env_var, name) if _test_mode() else name
 
 
 def _config():
     from .config import load_config
 
     path = CONFIG
-    if _direct() and os.environ.get("OASA_LAB_RUNNER_CONFIG"):  # tests only: through sudo this is never read
+    if _test_mode() and os.environ.get("OASA_LAB_RUNNER_CONFIG"):
         path = os.environ["OASA_LAB_RUNNER_CONFIG"]
     return load_config(path, {})
 
 
-def _real_dir(path: Path, owner: int | None) -> None:
+def peer_uid(sock: socket.socket) -> int:
+    """The user id on the other end of the socket, as the kernel reports it."""
+    pid, uid, gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+    return uid
+
+
+def _real_dir(path: Path, owner: int) -> None:
     st = os.lstat(path)
     if not stat.S_ISDIR(st.st_mode):
         raise Refused(f"{path} is not a plain folder")
-    if owner is not None and st.st_uid != owner:
+    if st.st_uid != owner:
         raise Refused(f"{path} is not owned by the caller")
 
 
-def _caller() -> int | None:
-    """Who asked: under sudo, the service user. None when run directly (tests, or an admin at a shell)."""
-    if _direct():
-        return None
-    try:
-        return int(os.environ["SUDO_UID"])
-    except ValueError:
-        raise Refused("bad SUDO_UID") from None
-
-
 def _read_launch(jd: Path) -> dict:
-    fd = os.open(jd / "launch.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        fd = os.open(jd / "launch.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise Refused(f"cannot read launch.json: {exc.strerror}") from None
     with os.fdopen(fd, "rb") as fh:
         if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
             raise Refused("launch.json is not a plain file")
@@ -147,8 +154,8 @@ def unit_name(job_id: str) -> str:
     return f"oasa-job-{job_id}"
 
 
-def command(cfg, job_id: str, req: dict, src: Path, runs: Path, python: str, timeout: float) -> list[str]:
-    """The systemd-run command line. Pure, so a test can read it."""
+def command(cfg, job_id: str, req: dict, src: Path, runs: Path, python: str, timeout: float, tail: list[str] | None = None) -> list[str]:
+    """The systemd-run command line. Pure, so a test can read it. `tail` replaces the run command (the self-test)."""
     sb, state = cfg.sandbox, str(cfg.state_dir)
     bindir = str(Path(python).parent)
     env = {**req["env"], "PATH": f"{bindir}:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp",
@@ -179,33 +186,35 @@ def command(cfg, job_id: str, req: dict, src: Path, runs: Path, python: str, tim
         argv.append(f"--setenv={k}={env[k]}")
     for p in props:
         argv += ["-p", p]
+    if tail is not None:
+        return argv + ["--", python, *tail]
     argv += ["--", python, "-m", "oasa_lab", "run", req["suite"], "--seed", str(req["seed"]), "--out", str(runs)]
     if req["confirm"]:
         argv += ["--confirm-wiring", req["confirm"]]
     return argv
 
 
-def _job_folder(cfg, job_id: str) -> Path:
+def _job_folder(cfg, job_id: str, caller: int) -> Path:
     if not JOB_ID.match(job_id):
         raise Refused("bad job id")
     jd = Path(cfg.state_dir) / "jobs" / job_id
-    _real_dir(Path(cfg.state_dir) / "jobs", _caller())
-    _real_dir(jd, _caller())
+    _real_dir(Path(cfg.state_dir) / "jobs", caller)
+    _real_dir(jd, caller)
     return jd
 
 
-def run(job_id: str) -> int:
-    cfg = _config()
+def prepare(cfg, caller: int, job_id: str) -> tuple[list[str], Path]:
+    """Check a run request and make the job's runs folder. Returns the systemd-run command and the job folder."""
     if cfg.sandbox.mode != "systemd":
         raise Refused("the config does not use the systemd sandbox")
-    jd = _job_folder(cfg, job_id)
+    jd = _job_folder(cfg, job_id, caller)
     req = validated(cfg, job_id, _read_launch(jd))
     src, runs = jd / "src", jd / "runs"
-    _real_dir(src, _caller())
+    _real_dir(src, caller)
     if runs.exists() or runs.is_symlink():
         raise Refused("runs folder already exists")
     runs.mkdir(mode=0o755)
-    if os.geteuid() == 0 and not _direct():
+    if os.geteuid() == 0 and not _test_mode():
         try:
             pw = pwd.getpwnam(cfg.sandbox.user)
         except KeyError:
@@ -213,42 +222,203 @@ def run(job_id: str) -> int:
         if pw.pw_uid == 0:
             raise Refused("the job user must not be root")
         os.chown(runs, pw.pw_uid, pw.pw_gid)
-    argv = command(cfg, job_id, req, src, runs, sys.executable, cfg.job_timeout_seconds)
-    os.execvp(argv[0], argv)  # replaces this process: the service sees systemd-run's exit status
-    return 0  # only reached when a test replaced execvp
+    return command(cfg, job_id, req, src, runs, sys.executable, cfg.job_timeout_seconds), jd
 
 
-def stop(job_id: str) -> int:
-    cfg = _config()
-    _job_folder(cfg, job_id)
+def _write_exit(jd: Path, code: int | None) -> None:
+    """Record how the job ended, in the job folder, without following anything the service could have planted."""
+    dfd = os.open(jd, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        try:
+            os.unlink("exit.json", dir_fd=dfd)
+        except FileNotFoundError:
+            pass
+        fd = os.open("exit.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=dfd)
+        with os.fdopen(fd, "w") as fh:
+            json.dump({"code": code}, fh)
+    finally:
+        os.close(dfd)
+
+
+def _stop_unit(job_id: str) -> None:
     ctl = _tool("systemctl", "OASA_LAB_SYSTEMCTL")
-    os.execvp(ctl, [ctl, "stop", "--quiet", f"{unit_name(job_id)}.service"])
-    return 0
+    subprocess.run([ctl, "stop", "--quiet", f"{unit_name(job_id)}.service"], stdin=subprocess.DEVNULL,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60, check=False)
 
 
-def clean(job_id: str) -> int:
-    cfg = _config()
-    jd = _job_folder(cfg, job_id)
+def do_run(sock: socket.socket, cfg, caller: int, job_id: str) -> None:
+    """Start the job and relay its output until it ends. If the service hangs up, stop the job."""
+    argv, jd = prepare(cfg, caller, job_id)
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, close_fds=True)
+    stopped = False
+    try:
+        while True:
+            r, _, _ = select.select([proc.stdout, sock], [], [], 1.0)
+            if sock in r:
+                try:
+                    gone = sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+                except BlockingIOError:
+                    gone = False
+                except OSError:
+                    gone = True
+                if gone and not stopped:
+                    stopped = True
+                    _stop_unit(job_id)
+            if proc.stdout in r:
+                chunk = os.read(proc.stdout.fileno(), 65536)
+                if not chunk:
+                    break
+                if not stopped:
+                    try:
+                        sock.sendall(chunk)
+                    except OSError:
+                        stopped = True
+                        _stop_unit(job_id)
+            elif proc.poll() is not None and not r:
+                break
+        code = proc.wait()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    _write_exit(jd, code)
+
+
+def do_stop(cfg, caller: int, job_id: str) -> None:
+    _job_folder(cfg, job_id, caller)
+    _stop_unit(job_id)
+
+
+def do_clean(cfg, caller: int, job_id: str) -> None:
+    jd = _job_folder(cfg, job_id, caller)
     runs = jd / "runs"
-    if runs.is_symlink() or not runs.exists():
+    if not runs.is_symlink() and runs.exists():
+        shutil.rmtree(runs, ignore_errors=True)
+
+
+def serve(sock: socket.socket, caller: int | None = None) -> int:
+    """Handle one connection. `caller` is read from the socket unless a test says otherwise."""
+    try:
+        line = b""
+        while not line.endswith(b"\n") and len(line) < 64:
+            ch = sock.recv(1)
+            if not ch:
+                break
+            line += ch
+        parts = line.decode("ascii", errors="replace").split()
+        if len(parts) != 2 or parts[0] not in ("run", "stop", "clean"):
+            raise Refused("usage: run|stop|clean JOB_ID")
+        uid = peer_uid(sock) if caller is None else caller
+        cfg = _config()
+        verb, job_id = parts
+        if verb == "run":
+            do_run(sock, cfg, uid, job_id)
+        elif verb == "stop":
+            do_stop(cfg, uid, job_id)
+            sock.sendall(b"ok\n")
+        else:
+            do_clean(cfg, uid, job_id)
+            sock.sendall(b"ok\n")
         return 0
-    shutil.rmtree(runs, ignore_errors=True)
-    return 0
+    except Refused as exc:
+        _say(sock, f"jobrun: refused: {exc}\n")
+        return 3
+    except OSError as exc:
+        _say(sock, f"jobrun: {exc}\n")
+        return 4
+    except Exception as exc:  # a bad config must not look like a success
+        _say(sock, f"jobrun: {type(exc).__name__}: {exc}\n")
+        return 4
+
+
+def _say(sock: socket.socket, text: str) -> None:
+    try:
+        sock.sendall(text.encode())
+    except OSError:
+        pass
+
+
+SELFTEST = r"""
+import os, sys, pwd
+bad = []
+me = pwd.getpwuid(os.getuid()).pw_name
+if os.getuid() == 0 or me != sys.argv[1]:
+    bad.append(f"running as {me}, expected {sys.argv[1]}")
+for secret in ("/etc/oasa-lab/service.toml", "/etc/oasa-lab/env", sys.argv[2] + "/oauth.json", sys.argv[2] + "/audit.jsonl"):
+    if os.path.exists(secret) and os.access(secret, os.R_OK):
+        bad.append("can read " + secret)
+try:
+    seen = sorted(os.listdir(sys.argv[2]))
+    if seen != ["jobs"] and seen != []:
+        bad.append("sees the service state: " + ",".join(seen))
+    others = [d for d in os.listdir(sys.argv[2] + "/jobs") if d != sys.argv[3]]
+    if others:
+        bad.append("sees other jobs: " + ",".join(others))
+except OSError:
+    pass
+for path, want_write in ((sys.argv[4], False), (sys.argv[5], True)):
+    try:
+        open(os.path.join(path, ".probe"), "w").close(); os.unlink(os.path.join(path, ".probe")); wrote = True
+    except OSError:
+        wrote = False
+    if wrote != want_write:
+        bad.append(f"{path}: writable={wrote}, expected {want_write}")
+try:
+    open("/etc/oasa-lab.d/lab.toml").close()
+except OSError as exc:
+    bad.append("cannot read the device file: " + str(exc))
+import oasa_lab
+print("sandbox-bad: " + "; ".join(bad) if bad else "sandbox-ok")
+sys.exit(1 if bad else 0)
+"""
+
+
+def selftest() -> int:
+    """Run as root by hand (05-service.sh does): start a harmless command the way a job starts, and check
+    from the inside that the sandbox is what it should be. Uses the real systemd."""
+    cfg = _config()
+    state = Path(cfg.state_dir)
+    owner = os.stat(state).st_uid
+    jobs = state / "jobs"
+    jobs.mkdir(exist_ok=True)
+    if not _test_mode():
+        os.chown(jobs, owner, os.stat(state).st_gid)
+    job_id = "5e1f7e57e57e"
+    jd = jobs / job_id
+    shutil.rmtree(jd, ignore_errors=True)
+    for d in (jd, jd / "src"):
+        d.mkdir(mode=0o755)
+        if not _test_mode():
+            os.chown(d, owner, os.stat(state).st_gid)
+    req = validated(cfg, job_id, {"suite": "selftest", "sha": "0" * 40, "seed": 0, "env": {}})
+    runs = jd / "runs"
+    runs.mkdir(mode=0o755)
+    if not _test_mode():
+        try:
+            pw = pwd.getpwnam(cfg.sandbox.user)
+        except KeyError:
+            print(f"there is no user {cfg.sandbox.user!r}; run deploy/05-service.sh", file=sys.stderr)
+            return 1
+        os.chown(runs, pw.pw_uid, pw.pw_gid)
+    argv = command(cfg, job_id, req, jd / "src", runs, sys.executable, 60,
+                   tail=["-I", "-c", SELFTEST, cfg.sandbox.user, str(state), job_id, str(jd / "src"), str(runs)])
+    r = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+    print((r.stdout + r.stderr).strip())
+    shutil.rmtree(jd, ignore_errors=True)
+    return 0 if r.returncode == 0 and "sandbox-ok" in r.stdout else 1
 
 
 def main(argv: list[str] | None = None) -> int:
+    """`python -I -m oasa_lab.service.jobrun serve`: the socket is standard input (systemd, Accept=yes)."""
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) != 2 or argv[0] not in ("run", "stop", "clean"):
-        print("usage: jobrun run|stop|clean JOB_ID", file=sys.stderr)
+    if argv == ["selftest"]:
+        return selftest()
+    if argv != ["serve"]:
+        print("usage: jobrun serve   (started by oasa-lab-jobrun@.service; the connection is stdin)\n"
+              "       jobrun selftest   (run as root: checks the sandbox on this machine)", file=sys.stderr)
         return 2
-    try:
-        return {"run": run, "stop": stop, "clean": clean}[argv[0]](argv[1])
-    except Refused as exc:
-        print(f"jobrun: refused: {exc}", file=sys.stderr)
-        return 3
-    except OSError as exc:
-        print(f"jobrun: {exc}", file=sys.stderr)
-        return 4
+    with socket.socket(fileno=os.dup(0)) as sock:
+        return serve(sock)
 
 
 if __name__ == "__main__":

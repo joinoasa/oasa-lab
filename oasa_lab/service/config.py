@@ -81,7 +81,7 @@ class Sandbox:
     `none`: as the service's own user in a process group. For tests and development only."""
     mode: str = "systemd"
     user: str = "oasalab-job"
-    runner: tuple[str, ...] = ()        # the command that starts the helper; default: sudo -n <python> -I -m oasa_lab.service.jobrun
+    socket: str = "/run/oasa-lab/jobrun.sock"   # the root helper's socket (deploy/systemd/oasa-lab-jobrun.socket)
     memory_max: str = "4G"
     tasks_max: int = 512
 
@@ -195,8 +195,9 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
     user = str(sb.get("user", "oasalab-job"))
     _need(bool(re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user)) and user != "root", "sandbox.user must be an unprivileged user name")
     _need(bool(re.fullmatch(r"[0-9]{1,6}[KMG]?", str(sb.get("memory_max", "4G")))), "sandbox.memory_max looks like 4G")
-    runner = tuple(str(x) for x in sb.get("runner", []))
-    cfg.sandbox = Sandbox(mode, user, runner, str(sb.get("memory_max", "4G")), int(sb.get("tasks_max", 512)))
+    sock = str(sb.get("socket", Sandbox.socket))
+    _need(os.path.isabs(sock), "sandbox.socket must be an absolute path")
+    cfg.sandbox = Sandbox(mode, user, sock, str(sb.get("memory_max", "4G")), int(sb.get("tasks_max", 512)))
     cfg.allowed_hosts = [str(h) for h in s.get("allowed_hosts", [])]
 
     cfg.rf_setup = str(lab.get("rf_setup", "unset"))

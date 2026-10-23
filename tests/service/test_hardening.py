@@ -222,6 +222,12 @@ def test_each_job_gets_a_fresh_copy_with_no_hooks(tmp_path):
     b = run(cks.export(shas[2], tmp_path / "a"))              # same place, again
     assert not (b / "leftover").exists() and (b / "f.txt").read_text() == "2"
     assert not (b / ".git" / "hooks").exists()
+    old = os.umask(0o077)                                     # a strict service umask must not hide the copy from the job user
+    try:
+        c = run(cks.export(shas[2], tmp_path / "c"))
+    finally:
+        os.umask(old)
+    assert (c / "f.txt").stat().st_mode & 0o004 and (c.stat().st_mode & 0o005) == 0o005
     assert (run(cks.export(shas[0], tmp_path / "old")) / "f.txt").read_text() == "0"
     with pytest.raises(CheckoutError):
         run(cks.export("not-a-sha", tmp_path / "bad"))

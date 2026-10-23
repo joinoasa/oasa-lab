@@ -565,3 +565,12 @@ class Links:
             self.station.close()
         self.ground.stop()
         self.drone.stop()
+
+
+def refuses_to_start(rig: Rig, flags: list[str]) -> bool:
+    """Does the drone-side oasa-link refuse these guard flags at start (non-zero exit, no session)?"""
+    cmd = [str(rig.bins.link), "--dir", str(rig.paired.drone.dir), "--peer", "gcs-1",
+           "--bind", f"{HOST}:{free_udp_port()}", "--plain-listen", f"{HOST}:{free_udp_port()}",
+           "--plain-send", f"{HOST}:{free_udp_port()}", "--duration", "2", *flags]
+    done = subprocess.run(cmd, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
+    return done.returncode != 0

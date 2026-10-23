@@ -4,7 +4,8 @@
         <-> pymavlink "ground station" (this test)
 
 The MAVLink signing key is paired with oasa-pair, so signing runs inside the link as a second layer.
-The drone-side link has the MAVLink guard on (its device folder holds the autopilot key).
+The drone-side link has the MAVLink guard on, with its default allowlist (its device folder holds the
+autopilot key). Flying, a mission upload and run, and the drop cases all go through it.
 Every test runs once per autopilot; see conftest.py. Without the binaries, simulators or pymavlink
 every test is SKIPPED with the reason, and the checker then fails the run (the guard tests are
 listed in `expectations`)."""
@@ -24,6 +25,9 @@ LOSS = 0.05
 # MAVLink message and command numbers used below.
 ATTITUDE, GLOBAL_POSITION_INT = 30, 33
 CMD_DO_SET_MODE, CMD_NAV_LAND, CMD_NAV_TAKEOFF, CMD_ARM_DISARM = 176, 21, 22, 400
+CMD_NAV_WAYPOINT, CMD_NAV_RTL, CMD_MISSION_START = 16, 20, 300
+FRAME_GLOBAL_RELATIVE_ALT_INT, FRAME_GLOBAL_RELATIVE_ALT, FRAME_MISSION = 6, 3, 2
+UNSET = 0x7FFFFFFF  # PX4: an unused latitude or longitude in a MISSION_ITEM_INT
 FLAG_ARMED = 128
 
 
@@ -107,21 +111,7 @@ def test_fly_arm_takeoff_hold_land_disarm(lab, rig):
         assert st.wait_for("GLOBAL_POSITION_INT", 20) is not None
         ground_amsl = st.last("GLOBAL_POSITION_INT").alt / 1000.0
 
-        if not px4:  # ArduCopter: GUIDED mode (custom mode 4) takes the commands below
-            assert st.command(CMD_DO_SET_MODE, 1, 4, timeout=15) == 0, "could not set GUIDED"
-        # Arm. Pre-arm checks need a GPS fix and a settled estimator; try for up to two minutes.
-        end = time.monotonic() + 120
-        res = None
-        while time.monotonic() < end:
-            res = st.command(CMD_ARM_DISARM, 1, timeout=8)
-            if res == 0 and wait_armed(st, True, 10):
-                break
-            if not px4 and time.monotonic() > end - 40:  # ArduPilot only: skip pre-arm checks if it still refuses
-                st.command(CMD_ARM_DISARM, 1, 2989, timeout=8)
-                if wait_armed(st, True, 10):
-                    break
-            time.sleep(2)
-        assert armed(st), f"the autopilot did not arm (last result {res})"
+        arm_when_ready(st, px4)
         lab.log("armed")
 
         # Take off to 10 m (PX4 wants the altitude above sea level, ArduPilot above home).
@@ -161,6 +151,141 @@ def test_fly_arm_takeoff_hold_land_disarm(lab, rig):
         assert wait_armed(st, False, 20), "still armed after landing"
         lk.finish()
     assert lk.blocked() == 0, "the guard dropped flight commands"
+
+
+def arm_when_ready(st, px4: bool) -> None:
+    """Arm. Pre-arm checks need a GPS fix and a settled estimator; try for up to two minutes."""
+    if not px4:  # ArduCopter: GUIDED mode (custom mode 4) first
+        assert st.command(CMD_DO_SET_MODE, 1, 4, timeout=15) == 0, "could not set GUIDED"
+    end = time.monotonic() + 120
+    res = None
+    while time.monotonic() < end:
+        res = st.command(CMD_ARM_DISARM, 1, timeout=8)
+        if res == 0 and wait_armed(st, True, 10):
+            break
+        if not px4 and time.monotonic() > end - 40:  # ArduPilot only: skip pre-arm checks if it still refuses
+            st.command(CMD_ARM_DISARM, 1, 2989, timeout=8)
+            if wait_armed(st, True, 10):
+                break
+        time.sleep(2)
+    assert armed(st), f"the autopilot did not arm (last result {res})"
+
+
+# --- 3b. a mission: upload, run, return -----------------------------------------------------------------------
+def mission_items(lat: int, lon: int, px4: bool):
+    """Takeoff to 10 m, two waypoints about 25 m away, then return to launch. Each item is
+    (command, p1, p2, p3, p4, lat, lon, alt); positions are degrees * 1e7. PX4 wants NaN in the
+    parameters a command does not use; ArduPilot wants zeros."""
+    d = 2500  # about 28 m north / 17 m east at the test site
+    u = NAN if px4 else 0.0
+    return [
+        (CMD_NAV_TAKEOFF, u, u, u, u, lat, lon, 10.0),
+        (CMD_NAV_WAYPOINT, 0.0, 0.0, u, u, lat + d, lon, 10.0),
+        (CMD_NAV_WAYPOINT, 0.0, 0.0, u, u, lat + d, lon + d, 10.0),
+        (CMD_NAV_RTL, u, u, u, u, UNSET if px4 else 0, UNSET if px4 else 0, u),
+    ]
+
+
+def upload_mission(st, items, timeout=60):
+    """MAVLink mission protocol over the lossy tunnel. Answers MISSION_REQUEST_INT with MISSION_ITEM_INT
+    and MISSION_REQUEST with MISSION_ITEM (both are on the guard's allowlist). Resends MISSION_COUNT when
+    nothing happens for two seconds. Returns the MISSION_ACK type (0 = accepted) or None."""
+    t0 = time.monotonic()
+    end = t0 + timeout
+    seen_req = t0
+    st.send("mission_count_encode", 1, 1, len(items), 0)
+    while time.monotonic() < end:
+        for t, m in st.of_type("MISSION_ACK", t0):
+            if m.get_srcSystem() == 1:
+                return m.type
+        reqs = [x for x in st.of_type("MISSION_REQUEST_INT", seen_req) + st.of_type("MISSION_REQUEST", seen_req)
+                if x[1].get_srcSystem() == 1]
+        for t, m in sorted(reqs, key=lambda x: x[0]):
+            seen_req = max(seen_req, t + 1e-6)
+            cmd, p1, p2, p3, p4, lat, lon, alt = items[m.seq]
+            first = 1 if m.seq == 0 else 0
+            nav = cmd != CMD_NAV_RTL  # RTL carries no position: PX4 takes it only in the mission frame
+            if m.get_type() == "MISSION_REQUEST_INT":
+                st.send("mission_item_int_encode", 1, 1, m.seq, FRAME_GLOBAL_RELATIVE_ALT_INT if nav else FRAME_MISSION, cmd, first, 1,
+                        p1, p2, p3, p4, lat, lon, alt)
+            else:
+                st.send("mission_item_encode", 1, 1, m.seq, FRAME_GLOBAL_RELATIVE_ALT if nav else FRAME_MISSION, cmd, first, 1,
+                        p1, p2, p3, p4, NAN if lat == UNSET else lat / 1e7, NAN if lon == UNSET else lon / 1e7, alt)
+        if time.monotonic() - max(seen_req, t0) > 2.0:
+            st.send("mission_count_encode", 1, 1, len(items), 0)
+            seen_req = time.monotonic()
+        time.sleep(0.1)
+    return None
+
+
+class home0:  # placeholder before the first position report
+    lat = 0
+
+
+def test_mission_upload_and_execute(lab, rig):
+    """Upload a four-item mission through the tunnel with the default allowlist, fly it (takeoff, two
+    waypoints, return to launch) and check the vehicle really went there and came back, landed, disarmed."""
+    px4 = rig.ap.kind == "px4"
+    with Links(lab, rig, loss=LOSS) as lk:
+        st = lk.station
+        wait_established_and_alive(st)
+        st.request_interval(GLOBAL_POSITION_INT, 5)
+        assert st.wait_for("GLOBAL_POSITION_INT", 20) is not None
+        # ArduPilot reports 0, 0 until the estimator has a position: wait for a real one.
+        assert wait_for_value(lambda: (st.last("GLOBAL_POSITION_INT") or home0).lat != 0, 120), "no position fix"
+        home = st.last("GLOBAL_POSITION_INT")
+        lat0, lon0 = home.lat, home.lon
+        items = mission_items(lat0, lon0, px4)
+        ack = upload_mission(st, items)
+        lab.log("mission_ack", type=ack)
+        assert ack == 0, f"the autopilot did not accept the mission (MISSION_ACK type {ack})"
+        lab.log("mission_uploaded", items=len(items))
+        arm_when_ready(st, px4)
+        lab.log("armed")
+        if not px4:  # ArduCopter: climb in GUIDED first; AUTO then carries on with the waypoints
+            res = st.command(CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 10, timeout=15)
+            assert res == 0, f"takeoff was not accepted (result {res})"
+            assert wait_for_value(lambda: (rel_alt_m(st) or 0) >= 9.0, 60), "did not climb"
+        if not px4:  # ArduCopter AUTO is custom mode 3
+            assert st.command(CMD_DO_SET_MODE, 1, 3, timeout=15) == 0, "could not set AUTO"
+        res = None
+        for _ in range(20):  # PX4 refuses for a while after arming; MISSION_START also switches to mission mode
+            res = st.command(CMD_MISSION_START, 0, 0, timeout=8)
+            if res == 0:
+                break
+            time.sleep(3)
+        lab.log("mission_start", result=res)
+        assert res == 0, f"MISSION_START was not accepted (result {res})"
+
+        far = 0.0
+        peak = 0.0
+        t0 = time.monotonic()
+        end = t0 + 360
+
+        def dist_m() -> float:
+            m = st.last("GLOBAL_POSITION_INT")
+            dn, de = (m.lat - lat0) * 1.1132e-2, (m.lon - lon0) * 1.1132e-2 * 0.9998  # 1e-7 deg ~ 1.1 cm
+            return (dn * dn + de * de) ** 0.5
+
+        landed = False
+        while time.monotonic() < end:
+            far, peak = max(far, dist_m()), max(peak, rel_alt_m(st) or 0.0)
+            if far > 33 and (rel_alt_m(st) or 99) < 0.6 and time.monotonic() - t0 > 30:
+                landed = True
+                break
+            time.sleep(0.5)
+        reached = sorted({m.seq for _, m in st.of_type("MISSION_ITEM_REACHED", t0)})
+        lab.log("mission_flown", far_m=round(far, 1), peak_m=round(peak, 1), reached=reached,
+                final_dist_m=round(dist_m(), 1))
+        assert far > 33, f"never got to the second waypoint, about 39 m from home ({far:.1f} m)"
+        assert peak >= 8.0, f"peak altitude {peak:.1f} m"
+        assert landed, f"did not land (at {rel_alt_m(st)} m)"
+        assert dist_m() < 15, f"landed {dist_m():.1f} m from home: no return to launch"
+        if not wait_armed(st, False, 60):
+            st.command(CMD_ARM_DISARM, 0, timeout=10)
+        assert wait_armed(st, False, 20), "still armed after the mission"
+        lk.finish()
+    assert lk.blocked() == 0, "the guard dropped mission traffic"
 
 
 def wait_for_value(cond, timeout, step=0.3):
@@ -245,32 +370,91 @@ def test_ftp_passes_when_allowed(lab, rig):
     assert lk.blocked() == 0
 
 
-def test_guard_drops_signing_param_set(lab, rig):
-    """A PARAM_SET of a signing setting is dropped; an ordinary PARAM_SET still works.
+def param_names(rig):
+    """(a parameter we may write, a value for it, another one, a signing setting)."""
+    if rig.ap.kind == "px4":
+        return "MPC_XY_VEL_MAX", 11.0, "MPC_Z_VEL_MAX_UP", "MAV_SIGN_CFG"
+    return "WP_SPD", 6.0, "WP_ACC", "MAV2_OPTIONS"
 
-    ArduPilot: MAV2_OPTIONS bit 0 turns signing off for SERIAL1 at the next restart (docs/sitl.md).
-    PX4 has no signing parameter, so the name is only a stand-in; the guard still drops it."""
-    px4 = rig.ap.kind == "px4"
-    bad = "MAV_SIGN_CFG" if px4 else "MAV2_OPTIONS"
-    ok_name, ok_val = ("MPC_XY_VEL_MAX", 11.0) if px4 else ("WP_SPD", 6.0)
-    real = 9  # MAV_PARAM_TYPE_REAL32
+
+def read_param(st, name: str, tries: int = 10):
+    """The parameter's value as the autopilot reports it, or None."""
+    t0 = time.monotonic()
+    for _ in range(tries):
+        st.send("param_request_read_encode", 1, 1, name.encode(), -1)
+        m = st.wait_for("PARAM_VALUE", 1.5, since=t0, pred=lambda m: m.param_id == name)
+        if m:
+            return m.param_value
+    return None
+
+
+def set_param(st, name: str, value: float, ptype: int = 9, tries: int = 8):
+    """PARAM_SET until the autopilot echoes it. Returns the echoed value or None."""
+    t0 = time.monotonic()
+    for _ in range(tries):
+        st.send("param_set_encode", 1, 1, name.encode(), value, ptype)
+        m = st.wait_for("PARAM_VALUE", 1.5, since=t0, pred=lambda m: m.param_id == name)
+        if m:
+            return m.param_value
+    return None
+
+
+def test_guard_drops_param_write_unless_allowed(lab, rig):
+    """A PARAM_SET of an ordinary parameter is dropped by default and the value stays. With
+    --allow-param NAME the same write works, for that name only."""
+    name, value, other, _ = param_names(rig)
     with Links(lab, rig, loss=LOSS) as lk:
         st = lk.station
         wait_established_and_alive(st)
         assert st.probe("own", window=15)
-        # An ordinary parameter first: must be changed and echoed back.
-        echoed = None
-        for _ in range(8):
-            st.send("param_set_encode", 1, 1, ok_name.encode(), ok_val, real)
-            echoed = st.wait_for("PARAM_VALUE", 1.5, pred=lambda m: m.param_id == ok_name)
-            if echoed:
-                break
-        assert echoed is not None, f"PARAM_SET of {ok_name} got no answer through the guard"
-        assert abs(echoed.param_value - ok_val) < 1e-3
-        assert lk.blocked() == 0, "the guard dropped an ordinary PARAM_SET"
-        # The signing setting: dropped.
+        before = read_param(st, name)
+        assert before is not None and abs(before - value) > 1e-3, f"{name} reads {before}"
         for _ in range(5):
-            st.send("param_set_encode", 1, 1, bad.encode(), 1.0, real if px4 else 6)
+            st.send("param_set_encode", 1, 1, name.encode(), value, 9)
+            time.sleep(0.3)
+        for _ in range(2):  # the extended message too
+            st.send("param_ext_set_encode", 1, 1, name.encode(), str(value).encode(), 9)
+            time.sleep(0.3)
+        assert wait_for_value(lambda: lk.blocked() >= 1, 10), "the guard did not drop the PARAM_SET"
+        assert any(e.get("why") == "param_write" and e.get("msgid") == 23 for e in lk.drone.seen("drop"))
+        assert any(e.get("why") == "param_write" and e.get("msgid") == 323 for e in lk.drone.seen("drop"))
+        time.sleep(1.5)
+        assert read_param(st, name) == before, f"{name} changed: the PARAM_SET got through"
+        lk.finish()
+    with Links(lab, rig, loss=LOSS, drone_flags=["--allow-param", name]) as lk:
+        st = lk.station
+        wait_established_and_alive(st)
+        assert st.probe("own", window=15)
+        assert any(name in str(e.get("what")) for e in lk.drone.seen("warning")), "no start-up warning for --allow-param"
+        echoed = set_param(st, name, value)
+        assert echoed is not None, f"PARAM_SET of {name} got no answer although it was allowed"
+        assert abs(echoed - value) < 1e-3
+        assert lk.blocked() == 0, "the guard dropped the allowed PARAM_SET"
+        # Only that name: another parameter is still refused, and keeps its value.
+        other_before = read_param(st, other)
+        assert other_before is not None, f"could not read {other}"
+        for _ in range(5):
+            st.send("param_set_encode", 1, 1, other.encode(), other_before + 1.0, 9)
+            time.sleep(0.3)
+        assert wait_for_value(lambda: lk.blocked() >= 1, 10), "the guard did not drop the write to another parameter"
+        time.sleep(1.5)
+        assert read_param(st, other) == other_before, f"{other} changed"
+        assert set_param(st, name, before) is not None, "could not put the parameter back"  # leave the simulator as found
+        lk.finish()
+
+
+def test_guard_drops_signing_param_set(lab, rig):
+    """A signing setting is dropped even when another parameter is allowed and nothing can allow it.
+
+    ArduPilot: MAV2_OPTIONS bit 0 turns signing off for SERIAL1 at the next restart (docs/sitl.md).
+    PX4 has no signing parameter, so the name is only a stand-in; the guard still drops it."""
+    name, _, _, bad = param_names(rig)
+    with Links(lab, rig, loss=LOSS, drone_flags=["--allow-param", name]) as lk:
+        st = lk.station
+        wait_established_and_alive(st)
+        assert st.probe("own", window=15)
+        for _ in range(5):
+            st.send("param_set_encode", 1, 1, bad.encode(), 1.0, 9 if rig.ap.kind == "px4" else 6)
             time.sleep(0.3)
         for _ in range(3):  # and the extended message
             st.send("param_ext_set_encode", 1, 1, bad.encode(), b"1", 6)
@@ -278,19 +462,53 @@ def test_guard_drops_signing_param_set(lab, rig):
         assert wait_for_value(lambda: lk.blocked() >= 1, 10), "the guard did not drop the signing PARAM_SET"
         assert any(e.get("why") == "signing_param" for e in lk.drone.seen("drop"))
         time.sleep(1.5)
-        if not px4:  # the setting did not change
-            t0 = time.monotonic()
-            val = None
-            for _ in range(8):
-                st.send("param_request_read_encode", 1, 1, bad.encode(), -1)
-                val = st.wait_for("PARAM_VALUE", 1.5, since=t0, pred=lambda m: m.param_id == bad)
-                if val:
-                    break
+        if rig.ap.kind != "px4":  # the setting did not change
+            val = read_param(st, bad)
             assert val is not None, f"could not read {bad} back"
-            assert val.param_value == 0, f"{bad} is {val.param_value}: the PARAM_SET got through"
+            assert val == 0, f"{bad} is {val}: the PARAM_SET got through"
         assert st.probe("own", window=10)
         lk.finish()
     assert lk.stats["drone"]["drops"].get("mavlink_blocked", 0) >= 1
+    # The flag that would allow it is refused at start (the unit tests in oasa-sec cover every name).
+    from oasa_lab.sitl import refuses_to_start  # noqa: PLC0415
+    assert refuses_to_start(rig, ["--allow-param", bad]), "oasa-link accepted --allow-param for a signing setting"
+
+
+def test_guard_drops_disallowed_command(lab, rig):
+    """A command that is not on the allowlist (PREFLIGHT_REBOOT_SHUTDOWN, 246) is dropped whether it comes
+    in COMMAND_LONG or COMMAND_INT. The autopilot never sees it: no answer, no reboot."""
+    with Links(lab, rig, loss=LOSS) as lk:
+        st = lk.station
+        wait_established_and_alive(st)
+        assert st.probe("own", window=15)
+        t0 = time.monotonic()
+        for _ in range(4):
+            st.send("command_long_encode", 1, 1, 246, 0, 1, 0, 0, 0, 0, 0, 0)  # reboot the autopilot
+            st.send("command_int_encode", 1, 1, 0, 246, 0, 0, 1, 0, 0, 0, 0, 0, 0)
+            time.sleep(0.4)
+        assert wait_for_value(lambda: lk.blocked() >= 2, 10), "the guard did not drop the reboot commands"
+        drops = [e for e in lk.drone.seen("drop") if e.get("why") == "command_not_allowed"]
+        assert any(e.get("msgid") == 76 and e.get("command") == 246 for e in drops)
+        assert any(e.get("msgid") == 75 and e.get("command") == 246 for e in drops)
+        time.sleep(2)
+        assert not [m for _, m in st.of_type("COMMAND_ACK", t0) if m.command == 246], "the autopilot answered"
+        assert st.probe("own", window=15), "the autopilot stopped answering (did it reboot?)"
+        lk.finish()
+
+
+def test_guard_drops_messages_not_on_the_list(lab, rig):
+    """SET_GPS_GLOBAL_ORIGIN (48) is not a message a ground station needs: dropped."""
+    with Links(lab, rig, loss=LOSS) as lk:
+        st = lk.station
+        wait_established_and_alive(st)
+        assert st.probe("own", window=15)  # also lets the start-up drop lines pass the log's rate limit
+        for _ in range(4):
+            st.send("set_gps_global_origin_encode", 1, 100000000, 100000000, 0)
+            time.sleep(0.3)
+        assert wait_for_value(lambda: lk.blocked() >= 1, 10)
+        assert any(e.get("why") == "msg_not_allowed" and e.get("msgid") == 48 for e in lk.drone.seen("drop"))
+        assert st.probe("own", window=15)
+        lk.finish()
 
 
 # --- 5. what is on the wire -------------------------------------------------------------------------------

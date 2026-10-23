@@ -1,12 +1,17 @@
-description = "Real PX4 and ArduPilot simulators behind the encrypted oasa-sec link: telemetry, signed commands, a flight, and the drone-side MAVLink guard (needs OASA_SEC_BIN_DIR, PX4_DIR, ARDUPILOT_DIR and pymavlink; about 10 minutes, not in CI)"
+description = "Real PX4 and ArduPilot simulators behind the encrypted oasa-sec link: telemetry, signed commands, a flight, a mission, and the drone-side MAVLink allowlist guard (needs OASA_SEC_BIN_DIR, PX4_DIR, ARDUPILOT_DIR and pymavlink; about 10 minutes, not in CI)"
 expectations = [
   "test_telemetry_through_the_link",
   "test_signed_commands_work",
   "test_unsigned_and_wrong_key_commands_are_ignored",
   "test_fly_arm_takeoff_hold_land_disarm",
+  "test_mission_upload_and_execute",
   "test_guard_drops_signed_setup_signing",
   "test_guard_drops_ftp",
+  "test_ftp_passes_when_allowed",
+  "test_guard_drops_param_write_unless_allowed",
   "test_guard_drops_signing_param_set",
+  "test_guard_drops_disallowed_command",
+  "test_guard_drops_messages_not_on_the_list",
   "test_captures_hold_no_plaintext",
   "test_negative_control_sees_autopilot_mavlink",
 ]

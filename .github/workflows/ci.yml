@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [l0-lab, l1-channel, l1-plaintext-control]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: python -m pip install -e .
+      - name: Run the suite (tests, evidence bundle, checker)
+        id: run
+        run: |
+          set -euo pipefail
+          oasa-lab run "${{ matrix.suite }}" --out runs | tee "$RUNNER_TEMP/run.txt"
+          BUNDLE="$(sed -n 's/^bundle: *//p' "$RUNNER_TEMP/run.txt")"
+          echo "bundle=$BUNDLE" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$BUNDLE")" >> "$GITHUB_OUTPUT"
+      - name: Show the summary
+        if: always()
+        run: cat runs/*/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Pack the bundle
+        run: |
+          set -euo pipefail
+          tar -C runs -czf "${{ matrix.suite }}-bundle.tar.gz" "${{ steps.run.outputs.name }}"
+          cp "runs/${{ steps.run.outputs.name }}.check.json" "${{ matrix.suite }}-check.json"
+      - name: A tampered copy must fail the checker
+        run: |
+          set -euo pipefail
+          rm -rf tamper && mkdir tamper
+          tar -C tamper -xzf "${{ matrix.suite }}-bundle.tar.gz"
+          B="tamper/${{ steps.run.outputs.name }}"
+          printf 'x' >> "$B/manifest.json"
+          if oasa-lab check "$B"; then echo "checker passed a tampered bundle"; exit 1; fi
+          echo "tampered bundle was rejected, as it should be"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.suite }}-evidence
+          path: |
+            ${{ matrix.suite }}-bundle.tar.gz
+            ${{ matrix.suite }}-check.json
+          if-no-files-found: error
+      - name: Attest the bundle
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ matrix.suite }}-bundle.tar.gz

@@ -13,10 +13,13 @@ jobs:
     name: ${{ matrix.suite }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # The L2 hardware suites run on the simulated bench here; real hardware runs happen on the lab PC.
+      OASA_LAB_SIM: "1"
     strategy:
       fail-fast: false
       matrix:
-        suite: [l0-lab, l1-channel, l1-plaintext-control, l1-profiles]
+        suite: [l0-lab, l1-channel, l1-plaintext-control, l1-profiles, l2-pluto-acceptance, l2-rf-control]
     permissions:
       contents: read
       id-token: write
@@ -30,6 +33,9 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install
         run: python -m pip install -e .
+      - name: Install pyserial (l0-lab tests the real serial driver against a pseudo-terminal)
+        if: matrix.suite == 'l0-lab'
+        run: python -m pip install pyserial
       - name: Run the suite (tests, evidence bundle, checker)
         id: run
         run: |
@@ -105,5 +111,52 @@ jobs:
         if: always()
         with:
           name: l1-oasa-link-evidence
+          path: runs/
+          if-no-files-found: error
+
+  # The encrypted link over simulated LoRa modems: oasa-link and oasa-radio bridges, both from main,
+  # on the simulated bench. The real-hardware run of this suite happens on the lab PC.
+  lora-link:
+    name: l2-lora-link, simulated bench (oasa-sec and oasa-radio main)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: joinoasa/oasa-sec
+          ref: main
+          path: oasa-sec
+      - uses: actions/checkout@v7
+        with:
+          repository: joinoasa/oasa-radio
+          ref: main
+          path: oasa-radio
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build oasa-sec and oasa-radio
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          (cd oasa-sec && cargo build --locked --bins)
+          (cd oasa-radio && cargo build --locked --bins)
+      - name: Install
+        run: python -m pip install -e .
+      - name: Run the suite (tests, evidence bundle, checker)
+        run: |
+          set -euo pipefail
+          OASA_LAB_SIM=1 \
+          OASA_SEC_BIN_DIR="$GITHUB_WORKSPACE/oasa-sec/target/debug" \
+          OASA_RADIO_BIN_DIR="$GITHUB_WORKSPACE/oasa-radio/target/debug" \
+            oasa-lab run l2-lora-link --out runs | tee "$RUNNER_TEMP/run.txt"
+      - name: Show the summary
+        if: always()
+        run: cat runs/*/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: l2-lora-link-evidence
           path: runs/
           if-no-files-found: error

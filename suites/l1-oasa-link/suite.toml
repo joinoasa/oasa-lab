@@ -1,0 +1,10 @@
+description = "The encrypted oasa-sec link through the simulated channel: delivery, no plaintext, corruption, attacker, rekey (needs OASA_SEC_BIN_DIR)"
+expectations = [
+  "test_untrusted_identity_gets_nothing",
+  "test_corrupted_packets_are_dropped_never_delivered",
+]
+
+[captures]
+encrypted = true
+# The first bytes of an oasa-link packet are protocol header, not ciphertext. Adjust to the link spec.
+skip_header_bytes = 8

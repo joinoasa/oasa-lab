@@ -126,6 +126,8 @@ Prices checked October 2026 where marked; others are estimates.
 | **2. Automated lab** | Adds a programmable attenuator (Mini-Circuits RCDAT-6000-60, $917), 10 MHz GPS reference (Leo Bodnar Mini GPSDO, $196), bladeRF 2.0 micro ($540), 2× WFB-ng Wi-Fi adapters ($79.99), mLRS kit ($41.99+), shielded box, switchable USB power, managed switch and WireGuard router | **+~$2,400** |
 | **3. Full lab** | Adds a spectrum analyzer (Siglent SSA3021X, about $1,400), LimeSDR Mini 2.0 ($630), USRP B210 ($2,387), RFD900x pair ($473.81) | **+~$4,900** |
 
+Itemized list: [lab-kit.md](lab-kit.md).
+
 Tier 0a lets anyone in the world help from day one. Tier 0b is enough for the first real encrypted packets over LoRa.
 
 ## 6. Milestones

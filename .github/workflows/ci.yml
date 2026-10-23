@@ -55,7 +55,7 @@ jobs:
           printf 'x' >> "$B/manifest.json"
           if oasa-lab check "$B"; then echo "checker passed a tampered bundle"; exit 1; fi
           echo "tampered bundle was rejected, as it should be"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ${{ matrix.suite }}-evidence

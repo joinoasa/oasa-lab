@@ -9,6 +9,7 @@ from importlib import metadata
 from pathlib import Path
 
 from . import __version__
+from .channel import ChannelSettings
 from .context import RunContext, git_info, sha256_file
 from .jsonl import now_rfc3339
 from .suites import repo_root
@@ -90,8 +91,11 @@ def write_summary(run_dir: Path) -> str:
                 "| Channel | Test | Settings | A to B (sent / dropped / forwarded) | B to A |", "|---|---|---|---|---|"]
         for c in manifest["channels"]:
             st = stats.get(c["id"], {})
+            defaults = ChannelSettings().to_dict()
             cfg = ", ".join(f"{k}={v}" for k, v in c["settings"].items()
-                            if v not in (0, 0.0) or k == "seed")
+                            if k == "seed" or (v != defaults.get(k) and k != "profile"))
+            if c["settings"].get("profile"):
+                cfg = f"profile {c['settings']['profile']}, " + cfg
             fmt = lambda d: (f"{d['sent']} / {d['dropped']} / {d['forwarded']}" if d else "n/a")  # noqa: E731
             out.append(f"| {c['id']} | `{c['test'].split('::')[-1]}` | {cfg} | "
                        f"{fmt(st.get('a_to_b'))} | {fmt(st.get('b_to_a'))} |")

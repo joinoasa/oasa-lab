@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="do not confirm expectations and capture flags against suites/<name>/suite.toml")
     c.add_argument("--json", action="store_true", help="print the full result as JSON")
     sub.add_parser("list", help="list suites")
+    pr = sub.add_parser("profiles", help="list the radio profiles of the simulated channel")
+    pr.add_argument("--bytes", type=int, default=64, help="packet size for the airtime column (default 64)")
     sub.add_parser("channel", help="run the simulated channel standalone (oasa-lab channel --help)")
     args = p.parse_args(argv)
 
@@ -35,6 +37,11 @@ def main(argv: list[str] | None = None) -> int:
         width = max((len(s.name) for s in suites), default=0)
         for s in suites:
             print(f"{s.name.ljust(width)}  {s.description}")
+        return 0
+    if args.cmd == "profiles":
+        from .profiles import format_table
+
+        print(format_table(args.bytes))
         return 0
     if args.cmd == "check":
         import json

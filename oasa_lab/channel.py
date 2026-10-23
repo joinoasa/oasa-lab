@@ -20,6 +20,23 @@ Impairments, applied per packet in this order:
   replay     with probability `replay` a packet seen earlier (last 32) is sent again, later
 
 The rate limiter uses real time, so it changes delays but never which packets are dropped.
+
+Airtime model (optional, see airtime.py and profiles.py). With `airtime` set, every packet takes
+its on-air time, worked out from its size. Packets of one direction go out one after another;
+with `half_duplex` both directions share one medium, so only one packet is on the air at a time.
+A packet that arrives while the medium is busy waits in a queue of at most `max_queue` packets
+(0 = no limit); a packet that finds the queue full is dropped and counted as `queue_dropped`.
+`duty_cycle` (0 to 1) keeps each direction's average transmit time under that share. A lost
+packet still uses the air; it is just never delivered. In the pcap, a packet's time stamp is the
+moment it started to go on the air; it arrives one airtime (plus any delay) later.
+
+Which packets are lost, duplicated, corrupted or replayed still depends only on the seed and
+the packet's place in the sequence. The clock decides only *when*, and (with `max_queue`) whether
+the queue had room: a queue drop happens before those decisions are counted, so the other
+decisions for the same packet positions stay the same.
+
+Profiles (`ChannelSettings.for_profile("lora-sf7-bw125", loss=0.05)`) fill in the settings of a
+real radio. Settings you pass override the profile's.
 """
 
 from __future__ import annotations
@@ -27,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import json
+import math
 import random
 import socket
 import threading
@@ -35,12 +53,13 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
+from .airtime import MODELS, airtime_s
 from .pcap import PcapWriter
 
 DIRECTIONS = ("a_to_b", "b_to_a")
 STAT_KEYS = (
     "sent", "dropped", "duplicated", "reordered", "corrupted", "replayed", "too_big",
-    "unrouted", "abandoned", "forwarded",
+    "unrouted", "abandoned", "queue_dropped", "forwarded",
 )
 HISTORY = 32
 Addr = tuple[str, int]
@@ -60,9 +79,35 @@ class ChannelSettings:
     replay: float = 0.0
     replay_delay_ms: float = 200.0
     seed: int = 0
+    # --- airtime model (all off by default) ---
+    profile: str = ""  # name of the profile these settings came from (a label; the numbers below rule)
+    airtime: str = ""  # "", "lora", "bitrate" or "slots"; see airtime.py
+    half_duplex: bool = False  # both directions share one medium
+    max_queue: int = 0  # packets waiting to transmit, per direction; 0 = no limit
+    duty_cycle: float = 0.0  # 0 = off; else each direction's average transmit time share (0 to 1)
+    serial_bps: int = 0  # 0 = off; else each packet first crosses a serial port at this rate (8N1)
+    # lora
+    lora_sf: int = 0
+    lora_bw_hz: int = 0
+    lora_cr: int = 1  # 1..4 = coding rate 4/5..4/8
+    lora_preamble: int = 8
+    lora_explicit_header: bool = True
+    lora_crc: bool = True
+    lora_ldro: int = -1  # -1 = automatic
+    # bitrate
+    air_kbps: float = 0.0
+    fixed_us: float = 0.0
+    overhead_bytes: int = 0
+    fec_ratio: float = 1.0
+    symbol_us: float = 0.0
+    extra_bits: int = 0
+    # slots
+    slot_ms: float = 0.0
+    slot_payload: int = 0
+    slot_payload_rev: int = 0  # B to A; 0 = same as slot_payload
 
     def __post_init__(self) -> None:
-        for name in ("loss", "reorder", "duplicate", "corrupt", "replay"):
+        for name in ("loss", "reorder", "duplicate", "corrupt", "replay", "duty_cycle"):
             if not 0.0 <= getattr(self, name) <= 1.0:
                 raise ValueError(f"{name} must be between 0 and 1")
         for name in ("delay_ms", "jitter_ms", "reorder_delay_ms", "rate_kbps", "replay_delay_ms"):
@@ -72,6 +117,35 @@ class ChannelSettings:
             raise ValueError("mtu must be 0 (no limit) to 65507")
         if not (isinstance(self.seed, int) and 0 <= self.seed < 2**63):
             raise ValueError("seed must be an integer from 0 to 2**63-1")
+        if self.max_queue < 0 or self.serial_bps < 0:
+            raise ValueError("max_queue and serial_bps must not be negative")
+        if self.airtime and self.airtime not in MODELS:
+            raise ValueError(f"airtime must be empty or one of {', '.join(MODELS)}")
+        if not self.airtime:
+            if self.half_duplex or self.max_queue or self.duty_cycle or self.serial_bps:
+                raise ValueError("half_duplex, max_queue, duty_cycle and serial_bps need an airtime model")
+            return
+        if self.rate_kbps:
+            raise ValueError("rate_kbps and an airtime model cannot be combined (use one or the other)")
+        if self.airtime == "lora":
+            if not 5 <= self.lora_sf <= 12:
+                raise ValueError("lora_sf must be 5 to 12")
+            if self.lora_bw_hz <= 0:
+                raise ValueError("lora_bw_hz must be positive (for example 125000)")
+            if not 1 <= self.lora_cr <= 4:
+                raise ValueError("lora_cr must be 1 to 4 (coding rate 4/5 to 4/8)")
+            if self.lora_preamble < 0 or self.lora_ldro not in (-1, 0, 1):
+                raise ValueError("lora_preamble must not be negative; lora_ldro must be -1, 0 or 1")
+        elif self.airtime == "bitrate":
+            if self.air_kbps <= 0:
+                raise ValueError("air_kbps must be positive")
+            if min(self.fixed_us, self.symbol_us) < 0 or min(self.overhead_bytes, self.extra_bits) < 0:
+                raise ValueError("fixed_us, symbol_us, overhead_bytes and extra_bits must not be negative")
+            if self.fec_ratio < 1.0:
+                raise ValueError("fec_ratio must be 1 or more")
+        else:  # slots
+            if self.slot_ms <= 0 or self.slot_payload < 1 or self.slot_payload_rev < 0:
+                raise ValueError("slot_ms and slot_payload must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -84,11 +158,23 @@ class ChannelSettings:
             raise ValueError(f"unknown channel setting(s): {sorted(unknown)}")
         return cls(**d)
 
+    @classmethod
+    def for_profile(cls, profile: str | None, **overrides: Any) -> "ChannelSettings":
+        """The settings of a named radio profile (see profiles.py), with `overrides` on top."""
+        from .profiles import profile_settings
+
+        base = profile_settings(profile) if profile else {}
+        return cls(**{**base, **overrides})
+
+    def airtime_s(self, nbytes: int, direction: str = "a_to_b") -> float:
+        return airtime_s(self.to_dict(), nbytes, direction)
+
 
 class Emission(NamedTuple):
-    delay: float  # seconds from now
+    delay: float  # seconds from now until delivery (without an airtime model)
     data: bytes
-    kind: str  # "primary", "duplicate" or "replay"
+    kind: str  # "primary", "duplicate", "replay", or "lost" (airtime model only: used the air, never arrives)
+    offer: float = 0.0  # airtime model: seconds from now until it asks for the air (a replay waits)
 
 
 class Direction:
@@ -108,11 +194,15 @@ class Direction:
         self.stats["unrouted"] += 1
         self.trace.append("U")
 
-    def process(self, data: bytes, now: float = 0.0) -> list[Emission]:
+    def process(self, data: bytes, now: float = 0.0, queue_full: bool = False) -> list[Emission]:
         """Decide what happens to one packet.
 
-        Trace code per packet: `L` lost, `B` too big, `.` forwarded, then flags
+        Trace code per packet: `L` lost, `B` too big, `Q` queue full, `.` forwarded, then flags
         `c` corrupted, `r` reordered, `d` duplicated, `p` replay attached.
+
+        `queue_full` (airtime model) is told by the caller from the clock: the packet found the
+        transmit queue full. Every other decision is drawn as usual, so the random stream stays
+        in step with the packet count whether or not the queue had room.
         """
         s, st, rnd = self.s, self.stats, self.rng.random
         # Fixed number of draws per packet, whatever happens, so streams stay aligned.
@@ -124,33 +214,45 @@ class Direction:
             st["too_big"] += 1
             self.trace.append("B")
             return []
-        if u_loss < s.loss:
+        lost = u_loss < s.loss
+        code, out = ".", []
+        corrupted = reordered = duplicated = replayed = False
+        if not lost:
+            if u_cor < s.corrupt and data:
+                buf = bytearray(data)
+                buf[int(f_idx * len(buf))] ^= 1 + int(f_xor * 255)
+                data = bytes(buf)
+                corrupted = True
+                code += "c"
+            delay = max(0.0, s.delay_ms + (f_jit * 2 - 1) * s.jitter_ms) / 1000.0
+            if u_reo < s.reorder:
+                delay += s.reorder_delay_ms * (0.5 + f_reo) / 1000.0
+                reordered = True
+                code += "r"
+            out = [Emission(delay, data, "primary")]
+            if u_dup < s.duplicate:
+                out.append(Emission(delay + (1 + 4 * f_gap) / 1000.0, data, "duplicate"))
+                duplicated = True
+                code += "d"
+            if u_rep < s.replay and self._history:
+                old = self._history[int(f_pick * len(self._history))]
+                gap = s.replay_delay_ms * (0.5 + f_rdel) / 1000.0
+                out.append(Emission(delay + gap, old, "replay", offer=gap))
+                replayed = True
+                code += "p"
+            self._history.append(data)
+        if queue_full:  # never transmitted: none of the decisions above count
+            st["queue_dropped"] += 1
+            self.trace.append("Q")
+            return []
+        if lost:
             st["dropped"] += 1
             self.trace.append("L")
-            return []
-        code = "."
-        if u_cor < s.corrupt and data:
-            buf = bytearray(data)
-            buf[int(f_idx * len(buf))] ^= 1 + int(f_xor * 255)
-            data = bytes(buf)
-            st["corrupted"] += 1
-            code += "c"
-        delay = max(0.0, s.delay_ms + (f_jit * 2 - 1) * s.jitter_ms) / 1000.0
-        if u_reo < s.reorder:
-            delay += s.reorder_delay_ms * (0.5 + f_reo) / 1000.0
-            st["reordered"] += 1
-            code += "r"
-        out = [Emission(delay, data, "primary")]
-        if u_dup < s.duplicate:
-            out.append(Emission(delay + (1 + 4 * f_gap) / 1000.0, data, "duplicate"))
-            st["duplicated"] += 1
-            code += "d"
-        if u_rep < s.replay and self._history:
-            old = self._history[int(f_pick * len(self._history))]
-            out.append(Emission(delay + s.replay_delay_ms * (0.5 + f_rdel) / 1000.0, old, "replay"))
-            st["replayed"] += 1
-            code += "p"
-        self._history.append(data)
+            return [Emission(0.0, data, "lost")] if s.airtime else []
+        st["corrupted"] += corrupted
+        st["reordered"] += reordered
+        st["duplicated"] += duplicated
+        st["replayed"] += replayed
         self.trace.append(code)
         if s.rate_kbps:
             out = [e._replace(delay=e.delay + self._serialize(len(e.data), now)) for e in out]
@@ -161,6 +263,105 @@ class Direction:
         start = max(now, self._busy_until)
         self._busy_until = start + tx
         return (start - now) + tx
+
+
+class Started(NamedTuple):
+    direction: str
+    start: float
+    end: float
+    item: Any
+
+
+class _Waiting(NamedTuple):
+    ready: float  # earliest start: the time it was offered, or when the serial port finished with it
+    size: int
+    item: Any
+
+
+class Air:
+    """The transmit scheduler of an airtime model. Pure logic: you give it the time.
+
+    `offer()` puts a packet in a direction's queue. `advance(now)` starts every transmission whose
+    start time is not after `now` and returns them. A start is the latest of: when the packet was
+    ready, when the medium is free, and when the duty cycle lets this direction transmit again.
+    The medium is shared by both directions when `half_duplex`, else each direction has its own.
+    Two directions ready at the same moment on a shared medium take turns. With nothing queued,
+    `next_start()` is None.
+    """
+
+    def __init__(self, settings: ChannelSettings, t0: float = 0.0):
+        self.s = settings
+        self.d = settings.to_dict()
+        self.t0 = t0  # slot grid origin
+        self.queue: dict[str, collections.deque[_Waiting]] = {n: collections.deque() for n in DIRECTIONS}
+        self.busy = dict.fromkeys(("shared",) + DIRECTIONS, 0.0)
+        self.next_ok = dict.fromkeys(DIRECTIONS, 0.0)
+        self.uart = dict.fromkeys(DIRECTIONS, 0.0)
+        self.on_air_s = dict.fromkeys(DIRECTIONS, 0.0)
+        self._last = ""  # direction that transmitted last
+
+    def depth(self, direction: str) -> int:
+        """Packets waiting (not counting the one on the air)."""
+        return len(self.queue[direction])
+
+    def waiting(self) -> int:
+        return sum(len(q) for q in self.queue.values())
+
+    def offer(self, direction: str, now: float, size: int, item: Any) -> None:
+        ready = now
+        if self.s.serial_bps:  # the serial port clocks bytes in one at a time (10 bits each: 8N1)
+            ready = max(now, self.uart[direction]) + size * 10 / self.s.serial_bps
+            self.uart[direction] = ready
+        self.queue[direction].append(_Waiting(ready, size, item))
+
+    def _align(self, t: float) -> float:
+        if self.s.airtime != "slots":
+            return t
+        slot = self.s.slot_ms / 1000.0
+        return self.t0 + max(0, math.ceil((t - self.t0) / slot - 1e-9)) * slot
+
+    def _candidate(self, name: str) -> tuple[float, float] | None:
+        q = self.queue[name]
+        if not q:
+            return None
+        head = q[0]
+        medium = "shared" if self.s.half_duplex else name
+        start = self._align(max(head.ready, self.next_ok[name], self.busy[medium]))
+        return start, head.ready
+
+    def next_start(self) -> float | None:
+        c = [x for x in (self._candidate(n) for n in DIRECTIONS) if x]
+        return min(c)[0] if c else None
+
+    def advance(self, now: float) -> list[Started]:
+        out: list[Started] = []
+        while True:
+            cands = [(n, *c) for n in DIRECTIONS if (c := self._candidate(n))]
+            if not cands:
+                return out
+            first = min(c[1] for c in cands)
+            if first > now + 1e-9:
+                return out
+            tied = [c for c in cands if c[1] - first < 1e-12]
+            # Two radios ready at the same moment on one medium take turns, so a long burst from
+            # one side cannot shut the other out.
+            pick = next((c for c in tied if c[0] != self._last), tied[0]) if self.s.half_duplex else tied[0]
+            name, start = pick[0], pick[1]
+            self._last = name
+            w = self.queue[name].popleft()
+            t = airtime_s(self.d, w.size, name)
+            end = start + t
+            self.busy["shared" if self.s.half_duplex else name] = end
+            self.next_ok[name] = start + (t / self.s.duty_cycle if self.s.duty_cycle else t)
+            self.on_air_s[name] += t
+            out.append(Started(name, start, end, w.item))
+
+    def drain(self) -> list[Any]:
+        """Take everything still waiting (at shutdown)."""
+        items = [w.item for q in self.queue.values() for w in q]
+        for q in self.queue.values():
+            q.clear()
+        return items
 
 
 class _Proto(asyncio.DatagramProtocol):
@@ -219,6 +420,9 @@ class Channel:
         self._seq = 0
         self._stopped = False
         self._ticker_task: asyncio.Task | None = None
+        self.air: Air | None = Air(self.settings) if self.settings.airtime else None
+        self._air_timer: asyncio.TimerHandle | None = None
+        self._wall0 = 0.0  # wall clock minus loop clock: turns a loop time into a pcap time stamp
 
     # --- lifecycle -------------------------------------------------------------------------
     def start(self) -> "Channel":
@@ -259,6 +463,9 @@ class Channel:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 * 1024 * 1024)
             except OSError:
                 pass
+        self._wall0 = time.time() - loop.time()
+        if self.air:
+            self.air.t0 = loop.time()
         self.addr_a = self._tr["a"].get_extra_info("sockname")[:2]
         self.addr_b = self._tr["b"].get_extra_info("sockname")[:2]
         if self.stats_interval > 0:
@@ -275,7 +482,7 @@ class Channel:
             return self.stats()
         self._stopped = True
         deadline = time.monotonic() + drain_timeout
-        while self._pending and time.monotonic() < deadline:
+        while (self._pending or (self.air and self.air.waiting())) and time.monotonic() < deadline:
             time.sleep(0.005)
         asyncio.run_coroutine_threadsafe(self._shutdown(), self._loop).result(10)
         self._loop.call_soon_threadsafe(self._loop.stop)
@@ -289,10 +496,16 @@ class Channel:
     async def _shutdown(self) -> None:
         if self._ticker_task:
             self._ticker_task.cancel()
+        if self._air_timer:
+            self._air_timer.cancel()
         for handle, name in list(self._pending.values()):
             handle.cancel()
             self.dirs[name].stats["abandoned"] += 1
         self._pending.clear()
+        if self.air:  # still waiting for the air: never sent
+            for name, _side, _src, _dst, e in self.air.drain():
+                if e.kind != "lost":
+                    self.dirs[name].stats["abandoned"] += 1
         for tr in self._tr.values():
             tr.close()
 
@@ -315,7 +528,20 @@ class Channel:
             d.unrouted()
             return
         assert self._loop
-        for e in d.process(data, self._loop.time()):
+        now = self._loop.time()
+        if self.air:
+            self._air_advance(now)  # so the queue depth below is the true one
+            full = bool(self.settings.max_queue) and self.air.depth(name) >= self.settings.max_queue
+            for e in d.process(data, now, queue_full=full):
+                if e.offer > 0:
+                    self._seq += 1
+                    key = self._seq
+                    handle = self._loop.call_later(e.offer, self._offer_later, key, name, side, src, dst, e)
+                    self._pending[key] = (handle, name)
+                else:
+                    self._offer(name, side, src, dst, e, now)
+            return
+        for e in d.process(data, now):
             if e.delay <= 0:
                 self._send(name, side, src, dst, e)
             else:
@@ -324,16 +550,53 @@ class Channel:
                 handle = self._loop.call_later(e.delay, self._send_later, key, name, side, src, dst, e)
                 self._pending[key] = (handle, name)
 
-    def _send_later(self, key: int, name: str, side: str, src: Addr, dst: Addr, e: Emission) -> None:
+    def _send_later(self, key: int, name: str, side: str, src: Addr, dst: Addr, e: Emission,
+                    ts: float | None = None) -> None:
         self._pending.pop(key, None)
-        self._send(name, side, src, dst, e)
+        self._send(name, side, src, dst, e, ts)
 
-    def _send(self, name: str, side: str, src: Addr, dst: Addr, e: Emission) -> None:
+    def _send(self, name: str, side: str, src: Addr, dst: Addr, e: Emission, ts: float | None = None) -> None:
         out = self._tr["b" if side == "a" else "a"]
         out.sendto(e.data, dst)
         self.dirs[name].stats["forwarded"] += 1
         if self._pcap:
-            self._pcap.write(src, dst, e.data)
+            self._pcap.write(src, dst, e.data, ts=ts)
+
+    # --- the air (airtime model) -------------------------------------------------------------
+    def _offer_later(self, key: int, name: str, side: str, src: Addr, dst: Addr, e: Emission) -> None:
+        self._pending.pop(key, None)
+        assert self._loop
+        self._offer(name, side, src, dst, e, self._loop.time())
+
+    def _offer(self, name: str, side: str, src: Addr, dst: Addr, e: Emission, now: float) -> None:
+        assert self.air
+        self.air.offer(name, now, len(e.data), (name, side, src, dst, e))
+        self._air_advance(now)
+
+    def _air_advance(self, now: float) -> None:
+        """Start every transmission that is due; deliver each one when its airtime is over."""
+        assert self.air and self._loop
+        for tx in self.air.advance(now):
+            name, side, src, dst, e = tx.item
+            if e.kind == "lost":
+                continue  # it used the air; nobody hears it
+            self._seq += 1
+            key = self._seq
+            deliver = max(0.0, tx.end + (e.delay - e.offer) - now)
+            handle = self._loop.call_later(deliver, self._send_later, key, name, side, src, dst, e,
+                                           self._wall0 + tx.start)
+            self._pending[key] = (handle, name)
+        nxt = self.air.next_start()
+        if self._air_timer:
+            self._air_timer.cancel()
+            self._air_timer = None
+        if nxt is not None:
+            self._air_timer = self._loop.call_at(max(nxt, now), self._air_tick)
+
+    def _air_tick(self) -> None:
+        assert self._loop
+        self._air_timer = None
+        self._air_advance(self._loop.time())
 
     # --- stats -----------------------------------------------------------------------------
     def stats(self) -> dict[str, dict[str, int]]:
@@ -376,10 +639,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pcap", help="write a capture of every forwarded packet here")
     p.add_argument("--duration", type=float, default=0, help="stop after this many seconds (0 = until signal)")
     p.add_argument("--stats-interval", type=float, default=5.0, help="seconds between stats lines (0 = off)")
+    p.add_argument("--profile", help="start from a radio profile (see `oasa-lab profiles`); other options override it")
     for f in fields(ChannelSettings):
-        p.add_argument("--" + f.name.replace("_", "-"), type=type(f.default), default=f.default)
+        if f.name == "profile":
+            continue
+        flag = "--" + f.name.replace("_", "-")
+        if isinstance(f.default, bool):
+            p.add_argument(flag, action=argparse.BooleanOptionalAction, default=None)
+        else:  # default None = "not given", so a profile's value is kept
+            p.add_argument(flag, type=type(f.default), default=None)
     args = p.parse_args(argv)
-    settings = ChannelSettings(**{f.name: getattr(args, f.name) for f in fields(ChannelSettings)})
+    given = {f.name: getattr(args, f.name) for f in fields(ChannelSettings)
+             if f.name != "profile" and getattr(args, f.name) is not None}
+    try:
+        settings = ChannelSettings.for_profile(args.profile, **given)
+    except ValueError as exc:
+        p.error(str(exc))
 
     def emit(event: str, **fields_: Any) -> None:
         print(json.dumps({"ts": now_rfc3339(), "event": event, **fields_}, separators=(",", ":")), flush=True)

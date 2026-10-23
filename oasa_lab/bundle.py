@@ -14,7 +14,7 @@ from .context import RunContext, git_info, sha256_file
 from .jsonl import now_rfc3339
 from .suites import repo_root
 
-MANIFEST_SCHEMA = 1
+MANIFEST_SCHEMA = 1  # new fields since 0.1 (hardware, recordings, transmits, requires) are optional for the checker
 
 
 def write_manifest(ctx: RunContext) -> dict:
@@ -39,6 +39,11 @@ def write_manifest(ctx: RunContext) -> dict:
         "channels": ctx.channels,
         "captures": ctx.captures,
         "binaries": sorted(ctx.binaries.values(), key=lambda b: b["path"]),
+        "transmits": ctx.suite.transmits,
+        "requires": list(ctx.suite.requires),
+        "hardware": {"devices": [ctx.hardware["devices"][k] for k in sorted(ctx.hardware["devices"])],
+                     "hub": ctx.hardware["hub"], "rf": ctx.hardware["rf"]},
+        "recordings": list(ctx.recordings),
         "expectations": list(ctx.suite.expectations),
         "markers": list(ctx.markers),
     }
@@ -99,6 +104,19 @@ def write_summary(run_dir: Path) -> str:
             fmt = lambda d: (f"{d['sent']} / {d['dropped']} / {d['forwarded']}" if d else "n/a")  # noqa: E731
             out.append(f"| {c['id']} | `{c['test'].split('::')[-1]}` | {cfg} | "
                        f"{fmt(st.get('a_to_b'))} | {fmt(st.get('b_to_a'))} |")
+    hw = manifest.get("hardware") or {}
+    if hw.get("devices"):
+        out += ["", "## Hardware", "", "| Device | Kind | Backend | Model | Serial | Firmware |", "|---|---|---|---|---|---|"]
+        for d in hw["devices"]:
+            out.append(f"| {d['id']} | {d['kind']} | {d['backend']} | {d['model']} | {d['serial']} | {d['firmware']} |")
+        rf = hw.get("rf")
+        if rf:
+            out += ["", f"RF setup: **{rf['setup']}**, wiring `{rf['wiring']}`. Paths (nominal loss): "
+                    + ", ".join(f"{p['name']} {p['loss_db']:g} dB" for p in rf["paths"])]
+    if manifest.get("recordings"):
+        out += ["", "## Recordings (SigMF)", ""]
+        out += [f"- [{r['meta']}]({r['meta']}), {r['samples']} samples of {r['datatype']} at {r['sample_rate']:g} Hz, "
+                f"{r['purpose']}" for r in manifest["recordings"]]
     if manifest["binaries"]:
         out += ["", "## Binaries", ""]
         out += [f"- `{b['name']}` {b.get('version') or ''} sha256 `{b['sha256'][:16]}...`" for b in manifest["binaries"]]

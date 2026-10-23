@@ -28,14 +28,15 @@ class RunResult:
         return self.pytest_exit == 0 and self.check["ok"]
 
 
-def run_suite(suite_name: str, seed: int = 0, out: Path | str = "runs", quiet: bool = False) -> RunResult:
+def run_suite(suite_name: str, seed: int = 0, out: Path | str = "runs", quiet: bool = False,
+              confirm_wiring: str | None = None) -> RunResult:
     suite: Suite = find_suite(suite_name)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = Path(out)
     run_id = uuid.uuid4().hex
     run_dir = out / f"{stamp}-{suite.name}-{run_id[:8]}"
     run_dir.mkdir(parents=True)
-    ctx = RunContext(suite, seed, run_dir, run_id)
+    ctx = RunContext(suite, seed, run_dir, run_id, confirm_wiring)
     context.set_current(ctx)
     ctx.log.write("run_start", run_id=ctx.run_id, suite=suite.name, seed=seed,
                   description=suite.description, bundle=str(run_dir))

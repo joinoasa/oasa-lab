@@ -1,0 +1,10 @@
+description = "Negative control for the air check: plaintext LoRa packets with a marker and MAVLink go between two modems on coax, and the checker must find them (needs 2 modems and an RTL-SDR)"
+expectations = ["test_plaintext_lora_packets_are_seen_on_the_air"]
+transmits = true
+requires = ["serial-radio:2", "rtlsdr"]
+wiring = "lora"
+
+[captures]
+encrypted = false
+expect_plaintext = true
+expect_mavlink = true

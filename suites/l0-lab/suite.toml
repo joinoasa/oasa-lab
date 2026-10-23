@@ -9,6 +9,19 @@ expectations = [
   "test_overlap_on_air_is_caught",
   "test_overlap_between_directions_on_a_half_duplex_channel_is_caught",
   "test_queue_drops_with_no_queue_limit_are_caught",
+  "test_changed_sigmf_data_with_fixed_sums_is_caught_by_core_sha512",
+  "test_unlisted_extra_recording_is_caught",
+  "test_recording_with_no_bursts_is_caught",
+  "test_too_little_loss_between_transmitters_is_caught",
+  "test_loosened_limits_are_caught",
+  "test_air_capture_without_the_marker_fails_the_negative_control",
+  "test_acceptance_catches_a_plain_crystal",
+  "test_acceptance_catches_a_weak_port",
+  "test_acceptance_catches_a_limited_tuning_range_and_a_missing_channel",
+  "test_ramp_stops_before_full_power_when_the_cable_is_wrong",
+  "test_rtlsdr_real_backend_with_fake_tools",
+  "test_hub_real_backend_with_fake_ykushcmd",
+  "test_pluto_real_backend_with_a_fake_adi",
 ]
 
 [captures]

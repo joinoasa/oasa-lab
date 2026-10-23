@@ -1,0 +1,29 @@
+description = "The encrypted oasa-sec link over two LoRa modems on coax, each through oasa-radio bridge: delivery both ways, handshake and goodput against the lora-sf7-bw125 model, ciphertext on the air, and an RTL-SDR recording whose bursts match the airtime (needs 2 modems, an RTL-SDR, OASA_SEC_BIN_DIR and OASA_RADIO_BIN_DIR)"
+expectations = ["test_encrypted_link_over_lora"]
+transmits = true
+requires = ["serial-radio:2", "rtlsdr"]
+wiring = "lora"
+
+[captures]
+encrypted = true
+# Data packets start with 5 (2-byte counter) or 7 (4-byte counter) header bytes; see oasa-sec docs/oasa-sec-v0-link.md §3.
+skip_header_bytes = 7
+
+# Limits for the numbers the test measures. The checker applies the same limits from this file,
+# so a test cannot loosen them. "est." = a first guess to tune on the real modems.
+
+[limits.handshake_excess_s]
+min = -0.05
+max = 2.0
+reason = """Handshake time minus the airtime of the handshake frames the modems actually carried (the model's floor).
+Cannot be negative: nothing is faster than the air (-0.05 s allows for clock reads). Above the floor
+we allow 2 s for process start, serial and USB latency and the firmware's turnaround (est.). A lost
+handshake packet costs a 5 s retry and fails this on purpose: on a cable at 60 dB or more there should be none."""
+
+[limits.goodput_ratio]
+min = 0.6
+max = 1.05
+reason = """Model time / measured time for a back-to-back burst. The model time is the sum of the airtime of every
+frame the modems carried in the window (both directions: the medium is shared). 1.0 means the radio
+was the only bottleneck. Above 1.05 would beat physics (so a bad clock, or frames the model double counts).
+Below 0.6 means the modem or the bridge wastes more than 40 % (est.; carrier sense, queueing, turnaround)."""

@@ -19,17 +19,23 @@ Follow the [OASA software standard](https://joinoasa.org/docs/software-standard/
 | `pip install -e .` | Install (Python 3.11+) |
 | `oasa-lab list` | List suites |
 | `oasa-lab run SUITE [--seed N] [--out DIR]` | Run a suite, write the evidence bundle to `runs/`, run the checker. Exit 1 if a test or the checker fails |
-| `oasa-lab check BUNDLE_DIR` | Run the independent checker only; writes `BUNDLE_DIR.check.json` |
+| `oasa-lab check BUNDLE_DIR [--require-hardware]` | Run the independent checker only; writes `BUNDLE_DIR.check.json`. `--require-hardware` rejects simulated devices |
+| `oasa-lab devices [--sim]` | Open every device in `lab.toml` and print what it reports |
+| `oasa-lab run SUITE --confirm-wiring NAME` | Needed to transmit on real hardware (see [hardware suites](docs/hardware-suites.md)) |
+| `OASA_LAB_SIM=1 oasa-lab run l2-pluto-acceptance` | Run a hardware suite on the simulated bench |
 | `oasa-lab channel --help` | Run the simulated channel standalone |
 | `tail -f runs/*/log.jsonl` | Watch a run live |
 | `pytest -p oasa_lab.pytest_plugin suites/l0-lab` | A suite without a bundle (quick local loop) |
 
-Run `l0-lab`, `l1-channel`, `l1-plaintext-control` and `l1-profiles` before every pull request; CI does the same. Details: [README](README.md), [checker](docs/checker.md), [software used](docs/software-used.md).
+Run `l0-lab`, `l1-channel`, `l1-plaintext-control`, `l1-profiles`, and with `OASA_LAB_SIM=1` `l2-pluto-acceptance` and `l2-rf-control` before every pull request; CI does the same (it also runs `l1-oasa-link` and `l2-lora-link` with the oasa-sec and oasa-radio binaries). Details: [README](README.md), [checker](docs/checker.md), [software used](docs/software-used.md).
 
 ## Adding a suite or test
 
 - A suite is `suites/<name>/` with a `suite.toml` (description, `expectations`, `[captures]` flags) and pytest files. Use the `lab` fixture: `lab.channel(...)`, `lab.marker()`, `lab.file()`, `lab.binary()`.
 - List known-bad cases (attacker, wrong key, replay) in `expectations`. The checker fails the run if one is missing or skipped.
+- A hardware suite adds to `suite.toml`: `transmits = true` if it radiates, `requires = ["pluto", ...]` (missing hardware skips it), `wiring = "NAME"`, and `[limits.METRIC]` with `min`/`max` (`optional = true` if it may stay unmeasured). Take numbers with `lab.measure(...)` so the checker can re-apply the limits; get devices from the `hw` fixture; save IQ with `lab.sigmf(...)`. Every device needs a simulated backend so CI can run the suite.
+- Never transmit without at least 60 dB between transmitters (40 dB toward a receive-only device). Put the loss of every path in `lab.example.toml`; the checker fails a run below the limit.
+- A hardware driver's library must be permissive. LGPL or GPL tools are allowed as optional extras or separate processes only, never shipped, and flagged in [docs/software-used.md](docs/software-used.md).
 - Mark captures `encrypted = true` only if the traffic is ciphertext. Add a plaintext control for any new scanner rule.
 - The checker (`oasa_lab/checker/`) imports the standard library only. Keep it that way. It has its own copy of the airtime formulas (`checker/air.py`); change both together (a test compares them).
 - A radio profile (`oasa_lab/profiles.py`) needs a source for every number in [docs/profiles.md](docs/profiles.md); mark anything unconfirmed *est.* and say why.

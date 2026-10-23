@@ -15,11 +15,18 @@ dependencies = [
   "pytest-json-ctrf>=0.6.1,<0.7",
 ]
 
+[project.optional-dependencies]
+# Only for the lab PC with real hardware. Test tools; never shipped. Licenses: docs/software-used.md.
+hw = [
+  "pyserial>=3.5,<4",
+  "pyadi-iio>=0.0.20,<0.1",
+]
+
 [project.scripts]
 oasa-lab = "oasa_lab.cli:main"
 
 [tool.setuptools]
-packages = ["oasa_lab", "oasa_lab.checker"]
+packages = ["oasa_lab", "oasa_lab.checker", "oasa_lab.devices"]
 
 [tool.pytest.ini_options]
 # Direct `pytest suites/<name>` also works: load the lab plugin.

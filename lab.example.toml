@@ -1,0 +1,118 @@
+# lab.toml: which device is which, and how the cables run. Copy to lab.toml and edit.
+# lab.toml is not committed. `oasa-lab devices` opens every device below and shows what it reports.
+# Docs: docs/hardware-suites.md. Run on the simulated bench with OASA_LAB_SIM=1 (no file needed).
+
+[lab]
+name = "bench-1"
+backend = "hardware"          # "hardware", or "sim" to run everything simulated
+
+# USB hub with per-port power switching. Used to power-cycle a radio from a script.
+# kind = "ykush3" runs `ykushcmd` (Apache-2.0). kind = "uhubctl" runs `uhubctl` (GPL-2.0, a separate process).
+[hub]
+kind = "ykush3"
+serial = "YK3R0000"           # `ykushcmd -l` shows it
+# location = "1-1"            # uhubctl: the hub's location from `uhubctl`
+
+# --- Pluto+ (AD9363, 2 TX / 2 RX) over Ethernet or USB ---------------------------------------------
+[devices.pluto0]
+kind = "pluto"
+uri = "ip:192.168.2.1"        # or "usb:1.2.5". Only ever reach it on the lab network or over WireGuard.
+serial = "104400000000"       # `iio_info -u URI | grep hw_serial`. The suite refuses a different unit.
+hub_port = 1
+channels = 2
+# After a first good run, copy the measured levels here (see docs/hardware-suites.md, "Calibration"):
+# [devices.pluto0.calibration.rx_dbfs]
+# "433-rx1" = -23.0
+# "433-rx2" = -19.5
+
+# --- RTL-SDR Blog V4 (receive only) -----------------------------------------------------------------
+[devices.rtl0]
+kind = "rtlsdr"
+serial = "00000001"           # `rtl_test` lists it as SN. Set a unique one with rtl_eeprom if you have two.
+hub_port = 2
+# Optional: this dongle's own frequency error in ppm, measured against a better reference (a GPSDO, or a
+# known stable carrier). With it the Pluto's crystal is judged against its 0.5 ppm spec directly.
+# known_ppm = -0.4
+
+# --- Two Heltec WiFi LoRa 32 V3 running the OASA LoRa modem firmware --------------------------------
+[devices.heltec_a]
+kind = "serial-radio"
+model = "Heltec WiFi LoRa 32 V3"
+port = "/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_AA:AA:AA:AA:AA:AA-if00"
+usb_serial = "AA:AA:AA:AA:AA:AA"   # the board's USB serial; the suite refuses a port that belongs to another board
+serial = "AA:AA:AA:AA:AA:AA"
+firmware = "oasa-lora-modem 0.1.0"  # what you flashed (the modem has no way to tell us yet)
+firmware_sha256 = ""                # sha256 of the flashed image
+hub_port = 3
+# dtr = true                        # serial control lines at open; some boards reset on RTS
+# rts = false
+[devices.heltec_a.radio]            # must equal what the firmware was built with
+profile = "lora-sf7-bw125"          # airtime model: see `oasa-lab profiles`
+freq_mhz = 915.0
+tx_power_dbm = 10
+
+[devices.heltec_b]
+kind = "serial-radio"
+model = "Heltec WiFi LoRa 32 V3"
+port = "/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_BB:BB:BB:BB:BB:BB-if00"
+usb_serial = "BB:BB:BB:BB:BB:BB"
+serial = "BB:BB:BB:BB:BB:BB"
+firmware = "oasa-lora-modem 0.1.0"
+firmware_sha256 = ""
+hub_port = 4
+[devices.heltec_b.radio]
+profile = "lora-sf7-bw125"
+freq_mhz = 915.0
+tx_power_dbm = 10
+
+# --- Cabling ------------------------------------------------------------------------------------------
+# A suite that transmits names one of these in suite.toml. `loss_db` is the nominal loss of everything
+# between the two ends (fixed attenuators, splitter legs, cables): add it up from the parts. The
+# checker requires 60 dB or more wherever the far end can transmit (40 dB for the RTL-SDR).
+# A transmitting suite on real hardware runs only with: oasa-lab run SUITE --confirm-wiring NAME
+
+[wiring.pluto]
+rf_setup = "cabled"             # "cabled" or "shielded"
+description = "TX1 -30 dB- 2-way splitter -30 dB- RX1 (splitter 2nd leg -30 dB- RTL-SDR); TX2 -30 dB- -30 dB- RX2"
+[[wiring.pluto.paths]]
+name = "tx1-rx1"
+from = "pluto0:tx1"
+to = "pluto0:rx1"
+loss_db = 63.5                  # 30 + 3.5 (splitter) + 30
+[[wiring.pluto.paths]]
+name = "tx2-rx2"
+from = "pluto0:tx2"
+to = "pluto0:rx2"
+loss_db = 60.0                  # 30 + 30
+[[wiring.pluto.paths]]
+name = "tx1-rtl"
+from = "pluto0:tx1"
+to = "rtl0"
+loss_db = 63.5                  # 30 + 3.5 + 30
+receiver_transmits = false
+
+[wiring.lora]
+rf_setup = "cabled"
+description = "Heltec A -30 dB- 4-way splitter -30 dB- Heltec B; RTL-SDR on a third splitter leg through 30 dB; 4th leg terminated 50 ohm"
+[[wiring.lora.paths]]
+name = "a-to-b"
+from = "heltec_a"
+to = "heltec_b"
+loss_db = 72.0                  # 30 + 6 + 6 + 30
+[[wiring.lora.paths]]
+name = "b-to-a"
+from = "heltec_b"
+to = "heltec_a"
+loss_db = 72.0
+[[wiring.lora.paths]]
+name = "a-to-rtl"
+from = "heltec_a"
+to = "rtl0"
+loss_db = 66.0                  # 30 + 6 + 30
+receiver_transmits = false
+[[wiring.lora.paths]]
+name = "b-to-rtl"
+from = "heltec_b"
+to = "rtl0"
+loss_db = 66.0
+receiver_transmits = false

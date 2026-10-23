@@ -1,0 +1,93 @@
+description = "Acceptance of a Pluto+ clone: identity and firmware, tuning range, frequency error against an RTL-SDR, and a TX-to-RX loopback on each of the 4 ports at 433, 915 and 2400 MHz (needs a Pluto+ and an RTL-SDR)"
+expectations = [
+  "test_pluto_boots_and_reports_identity",
+  "test_tunes_across_70mhz_to_6ghz",
+  "test_frequency_error_within_spec",
+  "test_every_port_loopback",
+]
+transmits = true
+requires = ["pluto", "rtlsdr"]
+wiring = "pluto"
+
+# Limits for what the suite measures. The checker applies the same limits from this file, so a test
+# cannot loosen them. "est." = a first guess to tune on the first good unit. Why each number:
+
+[limits.tune_error_hz]
+min = -100
+max = 100
+reason = """After setting the LO at 70 MHz, 433, 915, 2400 MHz and 6 GHz, the chip reads back within 100 Hz. The AD9361
+synthesizer rounds to a few Hz; 100 Hz leaves room. A clone that is really a 325 MHz to 3.8 GHz part refuses or
+misses at the ends: this is the test that catches a mislabelled unit."""
+
+[limits.freq_error_ppm_vs_rtl]
+min = -2.0
+max = 2.0
+reason = """Pluto minus RTL-SDR, from a tone at 433 and 915 MHz. The Pluto+ claims a 0.5 ppm TCXO; the RTL-SDR Blog V4 has
+a 1 ppm TCXO. Worst case together: 1.5 ppm. We allow 2.0 ppm: 0.5 ppm for the RTL-SDR's tuner step, warm-up
+and the measurement (a few Hz, under 0.01 ppm at these bands). A plain crystal (20 to 25 ppm, as in a genuine
+ADALM-Pluto or a cheap clone) is ten times over. Warm both radios for 10 minutes first."""
+
+[limits.freq_error_ppm_vs_spec]
+min = -1.0
+max = 1.0
+optional = true
+reason = """The Pluto's own crystal error, judged against its 0.5 ppm spec, when lab.toml gives the RTL-SDR's error
+(known_ppm, measured against a better reference such as a GPSDO). 0.5 ppm spec plus 0.5 ppm for how well that
+reference measurement is known. Skipped (optional) without known_ppm: the RTL-SDR comparison above still
+applies, with its wider limit."""
+
+[limits.freq_error_ppm_band_spread]
+min = 0.0
+max = 0.6
+reason = """The same crystal gives the same ppm error at 433 and 915 MHz. The two readings may differ by 0.6 ppm (est.): the
+RTL-SDR's tuner is fractional-N and its step error differs per band. More means a broken synthesizer or an
+unstable reference."""
+
+[limits.rtl_tone_snr_db]
+min = 15
+max = 200
+reason = "The frequency estimate is good to a few Hz only when the tone is clearly above the RTL-SDR's noise. Below 15 dB the ppm number is not trustworthy, so the run fails rather than guesses."
+
+[limits.loopback_offset_error_ppm]
+min = -0.25
+max = 0.25
+reason = """In loopback one crystal drives both LOs, so a tone must come back exactly where it was sent (its crystal error
+cancels). 0.25 ppm (60 Hz at 250 MHz equivalents, 600 Hz at 2.4 GHz; est.) means the PLLs lock and round correctly.
+This does NOT measure the crystal; the RTL-SDR comparison does."""
+
+[limits.rx_level_dbfs]
+min = -50
+max = -10
+reason = """The received tone must be clearly there (below -50 dBFS the port is weak, dead or the cable is loose) and
+well short of clipping (above -10 dBFS the cable is too short or an attenuator is missing; est.)."""
+
+[limits.rx_level_vs_expected_db]
+min = -3
+max = 3
+optional = true
+reason = """Against the level a known-good unit gave (the model in the simulation, the calibration in lab.toml on real
+hardware). A good port repeats within 1 dB. 3 dB catches a weak port, a loose SMA connector, a wrong attenuator
+or a gain error. Skipped on real hardware until lab.toml holds a calibration for the unit (docs/hardware-suites.md)."""
+
+[limits.port_level_spread_db]
+min = 0.0
+max = 3.0
+reason = """RX1 and RX2 hear their own TX through cables of known loss. After subtracting that loss, the two levels agree
+within 3 dB (est.): both channels share the chip's LO and the same gain setting. A larger gap means one port
+is weak or bad, even when there is no calibration yet."""
+
+[limits.tone_snr_db]
+min = 25
+max = 200
+reason = "Tone against the whole-band noise at the suite's gains. A good port gives 35 dB or more (est.); under 25 dB is a noisy or weak port."
+
+[limits.spur_snr_db_tx_off]
+min = -200
+max = 15
+reason = """With the transmitter muted the strongest line outside the DC guard must be under 15 dB above the noise.
+A larger line is a leaking, oscillating or badly shielded port, or an outside signal getting in (est.)."""
+
+[limits.power_cycle_s]
+min = 0
+max = 60
+reason = "After the hub cuts and restores power the Pluto must be back (iiod reachable) within 60 s. Boot takes about 20 s (est.)."

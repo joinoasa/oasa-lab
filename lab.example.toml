@@ -30,6 +30,9 @@ channels = 2
 kind = "rtlsdr"
 serial = "00000001"           # `rtl_test` lists it as SN. Set a unique one with rtl_eeprom if you have two.
 hub_port = 2
+# Optional: this dongle's own frequency error in ppm, measured against a better reference (a GPSDO, or a
+# known stable carrier). With it the Pluto's crystal is judged against its 0.5 ppm spec directly.
+# known_ppm = -0.4
 
 # --- Two Heltec WiFi LoRa 32 V3 running the OASA LoRa modem firmware --------------------------------
 [devices.heltec_a]

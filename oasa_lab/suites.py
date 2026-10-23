@@ -16,6 +16,7 @@ Hardware suites (L2) add:
     [limits.METRIC]                     # pass/fail limits of measurements; the checker re-applies them
     min = 0.6
     max = 1.05
+    optional = true                     # may stay unmeasured (for example, needs a calibration); never loosens the limit
     reason = "why these numbers"
 """
 

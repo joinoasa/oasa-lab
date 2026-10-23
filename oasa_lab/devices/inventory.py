@@ -24,7 +24,7 @@ DEFAULT_SIM: dict[str, Any] = {
     "devices": {
         "pluto0": {"kind": "pluto", "uri": "ip:192.168.2.1", "serial": "SIM-PLUTO-0001", "hub_port": 1,
                    "channels": 2},
-        "rtl0": {"kind": "rtlsdr", "serial": "SIM-RTL-0001", "hub_port": 2},
+        "rtl0": {"kind": "rtlsdr", "serial": "SIM-RTL-0001", "hub_port": 2, "known_ppm": -0.4},
         "heltec_a": {"kind": "serial-radio", "model": "Heltec WiFi LoRa 32 V3", "port": "sim:a",
                      "serial": "SIM-HELTEC-A", "hub_port": 3, "firmware": "sim-modem 0.1",
                      "radio": {"profile": "lora-sf7-bw125", "freq_mhz": 915.0, "tx_power_dbm": 10}},

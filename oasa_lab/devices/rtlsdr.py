@@ -11,6 +11,7 @@ import cmath
 import math
 import os
 import re
+import select
 import shutil
 import signal
 import subprocess
@@ -64,13 +65,7 @@ class RtlSdr(Device):
         test = shutil.which("rtl_test")
         if not self._exe or not test:
             raise Unavailable("rtl_sdr / rtl_test not found (install the RTL-SDR Blog driver fork)")
-        try:
-            r = subprocess.run([test, "-d", self.selector, "-t"], capture_output=True, text=True, timeout=6,
-                               stdin=subprocess.DEVNULL)
-            text = (r.stdout or "") + (r.stderr or "")
-        except subprocess.TimeoutExpired as exc:  # rtl_test keeps running; the header is all we want
-            text = ((exc.stdout or b"").decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else exc.stdout or "") + \
-                   ((exc.stderr or b"").decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else exc.stderr or "")
+        text = self._probe(test)
         m = re.search(r"\d+:\s*([^,\n]+),\s*([^,\n]+),\s*SN:\s*(\S+)", text)
         if not m:
             raise DeviceError(f"{self.id}: no RTL-SDR found for {self.selector!r}: {text.strip()[:200]}")
@@ -81,13 +76,39 @@ class RtlSdr(Device):
         self._facts = {"vendor": m.group(1).strip(), "product": m.group(2).strip(), "serial": m.group(3),
                        "tuner": tuner.group(1) if tuner else None, "blog_v4": "Blog V4" in text}
 
+    def _probe(self, test_exe: str, timeout: float = 8.0) -> str:
+        """Start rtl_test, read its start-up lines (device list, tuner), then stop it: it never ends by itself."""
+        proc = subprocess.Popen([test_exe, "-d", self.selector, "-t"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL)
+        text = ""
+        end = time.time() + timeout
+        try:
+            while time.time() < end:
+                ready, _, _ = select.select([proc.stdout], [], [], 0.1)
+                if ready:
+                    chunk = os.read(proc.stdout.fileno(), 4096)
+                    if not chunk:
+                        break
+                    text += chunk.decode("utf-8", "replace")
+                    if re.search(r"Found .+ tuner|No supported devices|usb_claim_interface error|Failed to open", text):
+                        end = min(end, time.time() + 0.5)      # a moment more: the Blog driver prints its V4 line nearby
+                elif proc.poll() is not None:
+                    break
+        finally:
+            proc.kill()
+            proc.wait(5)
+            proc.stdout.close()
+        return text
+
     def _info(self) -> dict[str, Any]:
         if self.backend == "sim":
             return {"model": "RTL-SDR Blog V4 (simulated)", "serial": self.cfg.get("serial", "SIM-RTL"),
-                    "firmware": "n/a", "tuner": "Rafael Micro R828D", "tcxo_ppm_spec": 1.0}
+                    "firmware": "n/a", "tuner": "Rafael Micro R828D", "tcxo_ppm_spec": 1.0,
+                    "known_ppm": self.cfg.get("known_ppm")}
         f = self._facts
         return {"model": f"{f['vendor']} {f['product']}".strip(), "serial": f["serial"], "firmware": "n/a",
-                "tuner": f["tuner"], "blog_v4": f["blog_v4"], "tcxo_ppm_spec": 1.0}
+                "tuner": f["tuner"], "blog_v4": f["blog_v4"], "tcxo_ppm_spec": 1.0,
+                "known_ppm": self.cfg.get("known_ppm")}
 
     def _close(self) -> None:
         if self._proc is not None:

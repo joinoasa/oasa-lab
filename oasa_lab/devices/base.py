@@ -49,11 +49,18 @@ class Device:
     def open(self) -> "Device":
         if self.is_open:
             return self
-        if self.hub is not None and self.hub_port is not None and not self.hub.is_on(self.hub_port):
+        if self.hub is not None and self.hub_port is not None and not self._port_powered():
             raise Unavailable(f"{self.id}: hub port {self.hub_port} is powered off")
         self._open()
         self.is_open = True
         return self
+
+    def _port_powered(self) -> bool:
+        """Ask the hub. If the hub cannot answer (tool missing), assume on: opening the device will tell."""
+        try:
+            return self.hub.is_on(self.hub_port)
+        except DeviceError:
+            return True
 
     def info(self) -> dict[str, Any]:
         if not self.is_open:

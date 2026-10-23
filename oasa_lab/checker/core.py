@@ -914,8 +914,8 @@ def _measurement_errors(b: Bundle, decl: dict | None) -> tuple[list[str], int]:
                 errs.append(f"{r.get('name', metric)}: limits {lo}..{hi} differ from the suite file's "
                             f"{want.get('min')}..{want.get('max')}")
     if limits:
-        for metric in limits:
-            if metric not in seen:
+        for metric, want in limits.items():
+            if metric not in seen and not want.get("optional", False):
                 errs.append(f"limit {metric!r} is declared in the suite file but nothing was measured against it")
     return errs, len(rows)
 

@@ -432,6 +432,7 @@ def test_audit_log_records_who_what_when_and_never_a_secret(svc):
     svc.wait(job["id"])
     with svc.client("eve") as c:
         c.post("/api/jobs", json={"suite": "t-quick"})  # forbidden
+    svc.audit_where(lambda r: r.get("status") == 403 and r.get("path") == "/api/jobs")  # rows are written after the reply
     rows = svc.audit()
     sub = [r for r in rows if r.get("action") == "submit" and r.get("job") == job["id"]]
     assert sub and sub[0]["actor"] == "bob" and sub[0]["via"] == "api-token" and sub[0]["status"] == 202

@@ -53,7 +53,8 @@ class Lab:
         self.audit = AuditLog(cfg.state_dir / "audit.jsonl")
         self.provider = LabOAuthProvider(cfg, self.audit, http)
         self.inventory = inventory or make_inventory(cfg)
-        self.checkouts = Checkouts(cfg.repo, cfg.branch, cfg.state_dir / "git", cfg.keep_checkouts)
+        self.checkouts = Checkouts(cfg.repo, cfg.branch, cfg.state_dir / "git", cfg.keep_checkouts,
+                                  cfg.min_commit)
         self.jobs = JobManager(cfg, self.checkouts, self.inventory, self.audit)
         self.auth = Authenticator(cfg, self.provider.lookup)
         self.mcp = build_mcp(cfg, self.jobs, self.inventory, self.audit, self.provider)

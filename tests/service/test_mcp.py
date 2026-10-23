@@ -178,6 +178,7 @@ def test_tool_calls_are_audited_without_secrets(svc):
             await s.wait(job["id"])
             return job
     job = run(go())
+    svc.audit_where(lambda r: r.get("kind") == "tool" and r.get("tool") == "run_suite" and r.get("job") == job["id"])
     rows = svc.audit()
     tools = [r for r in rows if r["kind"] == "tool"]
     assert any(r["tool"] == "run_suite" and r["status"] == "ok" and r["actor"] == "bob" and r["job"] == job["id"] for r in tools)

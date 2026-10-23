@@ -1,7 +1,11 @@
 """The job queue. One job at a time, because the radios are shared.
 
-A job is `oasa-lab run SUITE --seed N` in a subprocess, from a clean checkout of the lab repo at a
-commit on main. Nothing a caller sends is ever run: only a suite name from the checkout's own list.
+A job is `oasa-lab run SUITE --seed N` in a subprocess, from a fresh copy of the lab repo at a commit
+on main, run by the sandbox (another user, its own cgroup; see sandbox.py). Nothing a caller sends is ever
+run: only a suite name from the checkout's own list.
+
+What a job wrote is never trusted. When it ends, the service copies the bundle out of the job's folder
+(plain files only, nothing followed), runs its own installed checker on the copy, and serves only the copy.
 """
 
 from __future__ import annotations
@@ -10,7 +14,7 @@ import asyncio
 import json
 import os
 import re
-import signal
+import shutil
 import sys
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -20,16 +24,19 @@ from typing import Any
 from ..jsonl import now_rfc3339
 from .audit import AuditLog
 from .auth import Principal
+from . import files
 from .checkout import SUITE_RE, Checkout, CheckoutError, Checkouts, read_suites
 from .config import RF_SAFE, Config
 from .inventory import Inventory
+from .sandbox import ENV_PASSTHROUGH, ENV_REQUEST, Launch, make_sandbox
 
 JOB_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 MAX_SEED = 2**31 - 1
 ACTIVE = ("queued", "running")
 FINISHED = ("passed", "failed", "stopped", "error", "cancelled", "interrupted")
-# The only things a job's environment inherits. The service's own secrets are never among them.
-ENV_PASSTHROUGH = ("PATH", "LANG", "LC_ALL", "TZ", "VIRTUAL_ENV", "OASA_SEC_BIN_DIR")
+MAX_READ = 1_000_000          # the most one log read returns
+MAX_STREAM_BYTES = 20_000_000  # the most one live stream sends before the client must reconnect
+MAX_STREAM_SECONDS = 3600
 
 
 class JobError(Exception):
@@ -59,6 +66,7 @@ class Job:
     counts: dict = field(default_factory=dict)
     transmits: bool = False
     wiring_confirmed: str | None = None  # the wiring the owner's config confirmed for this run
+    checker: str | None = None  # version of the checker that judged the evidence (the service's own copy)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -68,7 +76,9 @@ class JobManager:
     def __init__(self, cfg: Config, checkouts: Checkouts, inventory: Inventory, audit: AuditLog):
         self.cfg, self.checkouts, self.inventory, self.audit = cfg, checkouts, inventory, audit
         self.root = cfg.state_dir / "jobs"
-        self.pause_file = cfg.state_dir / "PAUSE"
+        self.pause_file = cfg.state_dir / "PAUSE"                # the API can set and clear this one
+        self.local_pause_file = Path(cfg.local_pause_file)       # the owner's, from a shell; the API cannot clear it
+        self.sandbox = make_sandbox(cfg)
         self.jobs: dict[str, Job] = {}
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._worker: asyncio.Task | None = None
@@ -86,6 +96,9 @@ class JobManager:
             except (OSError, ValueError, TypeError):
                 continue
             if job.status in ACTIVE:  # the service was restarted under it
+                if job.status == "running":
+                    await self.sandbox.stop(job.id, None)  # a unit may still be running; stop its cgroup
+                shutil.rmtree(self.job_dir(job) / "src", ignore_errors=True)
                 job.status = "interrupted" if job.status == "running" else "cancelled"
                 job.stop_reason = "service restarted"
                 job.finished = now_rfc3339()
@@ -113,19 +126,29 @@ class JobManager:
                 pass
 
     # --- pause (the global kill switch) ---------------------------------------------------------
-    @property
-    def paused(self) -> dict | None:
-        """None when running normally. Otherwise who paused and why. A file, so it survives restarts
-        and the owner can also pause from a shell: `touch <state_dir>/PAUSE`."""
+    @staticmethod
+    def _pause_info(path: Path, default_by: str) -> dict:
         try:
-            raw = self.pause_file.read_text()
-        except OSError:
-            return None
+            raw = path.read_text()
+        except OSError:  # a folder, a dangling link, no permission: it still counts as a pause
+            return {"by": default_by, "reason": "paused by file"}
         try:
             info = json.loads(raw)
         except ValueError:
             info = None
-        return info if isinstance(info, dict) else {"by": "shell", "reason": raw.strip()[:200] or "paused by file"}
+        return info if isinstance(info, dict) else {"by": default_by, "reason": raw.strip()[:200] or "paused by file"}
+
+    @property
+    def paused(self) -> dict | None:
+        """None when running normally. Otherwise who paused and why. Two files, and their mere existence
+        pauses the lab (even if unreadable, empty or not a regular file): the API's `PAUSE` in the state
+        folder, and the owner's local file (default `LOCAL_PAUSE`, set to a root-owned folder in the real
+        config) which no API call can clear. From a shell: `touch <file>`."""
+        if os.path.lexists(self.local_pause_file):
+            return {**self._pause_info(self.local_pause_file, "owner (local file)"), "local": True}
+        if os.path.lexists(self.pause_file):
+            return self._pause_info(self.pause_file, "shell")
+        return None
 
     async def pause(self, who: str, reason: str = "", stop_running: bool = False) -> dict:
         self.cfg.state_dir.mkdir(parents=True, exist_ok=True)
@@ -144,8 +167,12 @@ class JobManager:
         return {**info, "cancelled": cancelled, "stopped": stopped}
 
     def resume(self) -> bool:
+        """Clear the API's pause. A local pause stays until the owner removes the file."""
         try:
-            self.pause_file.unlink()
+            if self.pause_file.is_dir() and not self.pause_file.is_symlink():
+                self.pause_file.rmdir()
+            else:
+                self.pause_file.unlink()
             return True
         except FileNotFoundError:
             return False
@@ -156,7 +183,10 @@ class JobManager:
             co = await self.checkouts.latest()
         except CheckoutError as exc:
             raise JobError(502, f"cannot get the lab code: {exc}")
-        return co, read_suites(co)
+        try:
+            return co, await read_suites(co)
+        except CheckoutError as exc:
+            raise JobError(502, str(exc))
 
     @staticmethod
     def missing_requirements(requires: list[str], present: list) -> list[str]:
@@ -186,6 +216,9 @@ class JobManager:
     def _interlock(self, suite: dict) -> str | None:
         """The transmit rules. 1) rf_setup must be cabled or shielded. 2) On a real bench the owner must
         also have confirmed the suite's wiring in the config (the service passes --confirm-wiring)."""
+        if not self.simulated and suite["requires"] and not suite["transmits_declared"]:
+            return (f"refused: suite {suite['name']!r} needs hardware but its suite.toml does not say transmits = true "
+                    "or transmits = false")
         if not suite["transmits"]:
             return None
         if self.cfg.rf_setup not in RF_SAFE:
@@ -202,6 +235,12 @@ class JobManager:
         owner's config confirms exactly that one."""
         w = suite.get("wiring") or ""
         return w if w and self.cfg.confirm_wiring.get(suite["name"]) == w else None
+
+    def _disk_problem(self) -> str | None:
+        free = shutil.disk_usage(self.cfg.state_dir if self.cfg.state_dir.exists() else self.cfg.state_dir.parent).free
+        if free < self.cfg.min_free_mb * 1_000_000:
+            return f"not enough free disk to run a job ({free // 1_000_000} MB free, {self.cfg.min_free_mb} MB needed)"
+        return None
 
     async def submit(self, who: Principal, suite_name: Any, seed: Any = 0, profile: Any = None, commit: Any = None) -> Job:
         if not who.can("run"):
@@ -222,7 +261,10 @@ class JobManager:
             co = await self.checkouts.at(commit)
         except CheckoutError as exc:
             raise JobError(400 if commit else 502, str(exc))
-        suites = read_suites(co)
+        try:
+            suites = await read_suites(co)
+        except CheckoutError as exc:
+            raise JobError(502, str(exc))
         if suite_name not in suites:
             raise JobError(400, f"no suite named {suite_name!r}; known: {', '.join(suites) or 'none'}")
         suite = suites[suite_name]
@@ -230,6 +272,8 @@ class JobManager:
             raise JobError(403, why)
         if (why := await self._device_problem(suite, profile)):
             raise JobError(409, why)
+        if (why := self._disk_problem()):
+            raise JobError(507, why)
         job = Job(id=uuid.uuid4().hex[:12], suite=suite_name, seed=seed, profile=profile,
                   requested_by=who.name, via=who.via, commit=co.sha, created=now_rfc3339(),
                   transmits=suite["transmits"],
@@ -275,25 +319,9 @@ class JobManager:
         return job
 
     async def _kill(self) -> None:
-        """SIGTERM the whole process group, wait for the grace period, then SIGKILL."""
-        proc = self._proc
-        if proc is None or proc.returncode is not None:
-            return
-        pgid = proc.pid  # started with start_new_session, so the group id is the pid
-        self._signal(pgid, signal.SIGTERM)
-        try:
-            await asyncio.wait_for(proc.wait(), self.cfg.stop_grace_seconds)
-        except asyncio.TimeoutError:
-            self._signal(pgid, signal.SIGKILL)
-            await proc.wait()
-        self._signal(pgid, signal.SIGKILL)  # anything the run left behind (radio tools, proxies)
-
-    @staticmethod
-    def _signal(pgid: int, sig: int) -> None:
-        try:
-            os.killpg(pgid, sig)
-        except (ProcessLookupError, PermissionError):
-            pass
+        """Stop the running job: SIGTERM, a grace period, then SIGKILL (the whole cgroup in systemd mode)."""
+        if self._running_id:
+            await self.sandbox.stop(self._running_id, self._proc)
 
     # --- the worker ---------------------------------------------------------------------------
     async def _work(self) -> None:
@@ -312,82 +340,115 @@ class JobManager:
                 self._proc = None
                 self._running_id = None
                 self.checkouts.prune({j.commit for j in self.jobs.values() if j.status in ACTIVE})
+                self.retain()
 
     def job_dir(self, job: Job) -> Path:
         return self.root / job.id
+
+    def _launch_env(self, job: Job) -> dict[str, str]:
+        env = {"OASA_LAB_JOB_ID": job.id, "OASA_LAB_REQUESTED_BY": job.requested_by}
+        env.update({k: os.environ[k] for k in ENV_REQUEST if k in os.environ})
+        if job.profile:
+            env["OASA_LAB_PROFILE"] = job.profile
+            env["OASA_LAB_DEVICES"] = ",".join(self.cfg.profiles[job.profile].requires)
+        if self.sandbox.mode == "none":  # in systemd mode the root helper takes these from the owner's config
+            env["OASA_LAB_RF_SETUP"] = self.cfg.rf_setup
+            if self.simulated:
+                env["OASA_LAB_SIM"] = "1"  # the simulated service runs the hardware suites on the simulated bench
+            elif self.cfg.devices_file:
+                env["OASA_LAB_INVENTORY"] = self.cfg.devices_file
+        return env
 
     async def _run(self, job: Job) -> None:
         if (p := self.paused) is not None:
             self._finish(job, "cancelled", f"lab paused by {p.get('by')}")
             return
         co = await self.checkouts.at(job.commit)
-        suite = read_suites(co).get(job.suite)
+        suite = (await read_suites(co)).get(job.suite)
         if suite is None:
             self._finish(job, "error", "suite is gone from this commit")
             return
-        if (why := self._interlock(suite)) or (why := await self._device_problem(suite, job.profile)):
+        if (why := self._interlock(suite)) or (why := await self._device_problem(suite, job.profile)) or (why := self._disk_problem()):
             self._finish(job, "error", why)
             return
         jd = self.job_dir(job)
-        (jd / "runs").mkdir(parents=True, exist_ok=True)
-        env = {k: os.environ[k] for k in ENV_PASSTHROUGH if k in os.environ}
-        env.update({
-            "HOME": str(jd), "PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1",
-            "OASA_LAB_JOB_ID": job.id, "OASA_LAB_REQUESTED_BY": job.requested_by,
-            "OASA_LAB_RF_SETUP": self.cfg.rf_setup,
-        })
-        if self.simulated:
-            env["OASA_LAB_SIM"] = "1"  # the simulated service runs the hardware suites on the simulated bench
-        elif self.cfg.devices_file:
-            env["OASA_LAB_INVENTORY"] = self.cfg.devices_file
-        cmd = [sys.executable, "-m", "oasa_lab", "run", job.suite, "--seed", str(job.seed), "--out", str(jd / "runs")]
-        if job.wiring_confirmed:
-            cmd += ["--confirm-wiring", job.wiring_confirmed]
-            env["OASA_LAB_WIRING_CONFIRMED"] = job.wiring_confirmed
-        if job.profile:
-            env["OASA_LAB_PROFILE"] = job.profile
-            env["OASA_LAB_DEVICES"] = ",".join(self.cfg.profiles[job.profile].requires)
+        jd.mkdir(parents=True, exist_ok=True)
+        src = await self.checkouts.export(job.commit, jd / "src")  # this job's own copy of the code
+        launch = Launch(job.id, jd, job.suite, job.seed, job.commit, job.wiring_confirmed, self._launch_env(job))
         job.status, job.started = "running", now_rfc3339()
         self._running_id = job.id
         self._save(job)
-        with open(jd / "stdout.log", "wb") as out:
-            self._proc = await asyncio.create_subprocess_exec(
-                *cmd, cwd=co.path, env=env, stdout=out, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
-            try:
-                if job.id in self._stop_requests:  # stop arrived before the process existed
+        try:
+            with open(jd / "stdout.log", "wb") as out:
+                self._proc = await self.sandbox.start(launch, out)
+                try:
+                    if job.id in self._stop_requests:  # stop arrived before the process existed
+                        await self._kill()
+                    await asyncio.wait_for(asyncio.shield(self._proc.wait()), self.cfg.job_timeout_seconds)
+                except asyncio.TimeoutError:
+                    self._stop_requests.setdefault(job.id, f"timed out after {self.cfg.job_timeout_seconds:g} s")
                     await self._kill()
-                await asyncio.wait_for(asyncio.shield(self._proc.wait()), self.cfg.job_timeout_seconds)
-            except asyncio.TimeoutError:
-                self._stop_requests.setdefault(job.id, f"timed out after {self.cfg.job_timeout_seconds:g} s")
-                await self._kill()
-            except asyncio.CancelledError:
-                self._stop_requests.setdefault(job.id, "service shutting down")
-                await self._kill()
-                raise
-        job.exit_code = self._proc.returncode
-        bundle = self.bundle_dir(job)
-        if bundle:
-            job.bundle = bundle.name
-            check = self._read_json(bundle.parent / (bundle.name + ".check.json"))
-            job.check_ok = bool(check["ok"]) if check else None
-            job.counts = self._counts(bundle)
+                except asyncio.CancelledError:
+                    self._stop_requests.setdefault(job.id, "service shutting down")
+                    await self._kill()
+                    raise
+            job.exit_code = self._proc.returncode
+            problem = await self._collect(job, jd, src)
+        finally:
+            shutil.rmtree(src, ignore_errors=True)
+            await self.sandbox.clean(job.id, jd)
         stop = self._stop_requests.pop(job.id, None)
         if stop:
             self._finish(job, "stopped", stop)
+        elif problem:
+            self._finish(job, "error", problem)
         elif job.exit_code == 0 and job.check_ok:
             self._finish(job, "passed")
-        elif job.exit_code == 1 and job.check_ok is not None:
+        elif job.exit_code in (0, 1) and job.check_ok is not None:
             self._finish(job, "failed")
         else:
             self._finish(job, "error", f"oasa-lab exited with {job.exit_code}")
 
+    async def _collect(self, job: Job, jd: Path, src: Path) -> str | None:
+        """Take the evidence out of the job's folder and judge it ourselves. Returns a problem, or None."""
+        names = files.list_dirs(jd / "runs")
+        if not names:
+            return None
+        name = names[0]
+        dest = jd / "verified" / name
+        try:
+            stats = await asyncio.to_thread(files.copy_tree, jd / "runs", name, dest, self.cfg.max_bundle_mb * 1_000_000)
+        except (OSError, files.TooBig) as exc:
+            return f"evidence rejected: {exc}"[:300]
+        if stats["skipped"]:
+            self.audit.write(kind="job", event="evidence_skipped", job=job.id, names=stats["skipped"][:20])
+        job.bundle = name
+        verdict = await self._check(dest, src / "suites")
+        job.check_ok = bool(verdict["ok"]) if verdict else None
+        job.checker = ((verdict or {}).get("checker") or {}).get("version")
+        job.counts = self._counts(dest)
+        return None
+
+    async def _check(self, bundle: Path, suites_dir: Path) -> dict | None:
+        """The independent checker, this service's own installed copy, on the copy of the evidence."""
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-I", "-m", "oasa_lab.checker", str(bundle), "--suites-dir", str(suites_dir),
+            cwd="/", env={}, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL)
+        try:
+            await asyncio.wait_for(proc.wait(), 600)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return None
+        return self._read_json(bundle.parent / (bundle.name + ".check.json"))
+
     # --- evidence ------------------------------------------------------------------------------
     def bundle_dir(self, job: Job) -> Path | None:
-        runs = self.job_dir(job) / "runs"
-        if not runs.is_dir():
+        """The service's own verified copy of the evidence, once the job has ended."""
+        if not job.bundle:
             return None
-        found = sorted(p for p in runs.iterdir() if p.is_dir() and not p.is_symlink())
-        return found[0] if found else None
+        b = self.job_dir(job) / "verified" / job.bundle
+        return b if b.is_dir() and not b.is_symlink() else None
 
     @staticmethod
     def _read_json(p: Path) -> Any:
@@ -412,9 +473,11 @@ class JobManager:
         check = self.check_result(job)
         out: dict[str, Any] = {"job": job.to_dict(), "counts": job.counts}
         if check:
-            out["checker"] = {"ok": check.get("ok"), "version": (check.get("checker") or {}).get("version"),
+            ver = (check.get("checker") or {}).get("version")
+            out["checker"] = {"ok": check.get("ok"), "name": (check.get("checker") or {}).get("name"), "version": ver,
                               "checks": [{"name": c.get("name"), "status": c.get("status"), "reason": c.get("reason")}
                                          for c in check.get("checks", [])]}
+            out["judged_by"] = f"oasa-lab-checker {ver}, the job service's own copy, run on the evidence after the job ended"
         else:
             out["checker"] = None
         b = self.bundle_dir(job)
@@ -423,24 +486,56 @@ class JobManager:
         out["counted"] = bool(job.status == "passed" and check and check.get("ok"))
         return out
 
-    def read_log(self, job: Job, offset: int = 0, stream: str = "log", max_bytes: int = 256_000) -> tuple[list[str], int]:
-        """Complete lines of the live log from a byte offset. `stream` is "log" (log.jsonl) or "stdout"."""
+    def _log_source(self, job: Job, stream: str) -> tuple[Path, tuple[str, ...]] | None:
+        jd = self.job_dir(job)
         if stream == "stdout":
-            p = self.job_dir(job) / "stdout.log"
-        else:
-            b = self.bundle_dir(job)
-            p = (b / "log.jsonl") if b else None
-        if p is None or not p.is_file():
+            return jd, ("stdout.log",)
+        if job.bundle and self.bundle_dir(job):
+            return jd / "verified", (job.bundle, "log.jsonl")
+        names = files.list_dirs(jd / "runs")  # a run in progress: the job's own folder, read without trust
+        return (jd / "runs", (names[0], "log.jsonl")) if names else None
+
+    def read_log(self, job: Job, offset: int = 0, stream: str = "log", max_bytes: int = 256_000) -> tuple[list[str], int]:
+        """Complete lines of the live log from a byte offset. `stream` is "log" (log.jsonl) or "stdout".
+        Reads at most MAX_READ bytes."""
+        src = self._log_source(job, stream)
+        if src is None:
             return [], offset
-        with open(p, "rb") as fh:
-            fh.seek(offset)
-            data = fh.read(max_bytes)
+        try:
+            data = files.read_inside(src[0], *src[1], offset=max(0, offset), limit=max(1, min(max_bytes, MAX_READ)))
+        except OSError:
+            return [], offset
         end = data.rfind(b"\n") + 1
         lines = [ln[:4000] for ln in data[:end].decode("utf-8", errors="replace").splitlines()]
         return lines, offset + end
 
+    def log_end(self, job: Job, stream: str = "log") -> int:
+        """Byte offset just after the last complete line, without reading the whole log."""
+        src = self._log_source(job, stream)
+        if src is None:
+            return 0
+        try:
+            size = files.size_inside(src[0], *src[1])
+            tail = files.read_inside(src[0], *src[1], offset=max(0, size - 65536), limit=65536)
+        except OSError:
+            return 0
+        i = tail.rfind(b"\n")
+        return size - len(tail) + i + 1 if i >= 0 else max(0, size - len(tail))
+
     def tail_log(self, job: Job, n: int = 30, stream: str = "log") -> list[str]:
-        lines, _ = self.read_log(job, 0, stream, max_bytes=2_000_000)
+        src = self._log_source(job, stream)
+        if src is None:
+            return []
+        try:
+            size = files.size_inside(src[0], *src[1])
+            start = max(0, size - 262_144)
+            data = files.read_inside(src[0], *src[1], offset=start, limit=262_144)
+        except OSError:
+            return []
+        end = data.rfind(b"\n") + 1
+        lines = [ln[:4000] for ln in data[:end].decode("utf-8", errors="replace").splitlines()]
+        if start > 0 and lines:
+            lines = lines[1:]  # the first one is cut in the middle
         return lines[-max(1, min(n, 500)):]
 
     # --- state ---------------------------------------------------------------------------------
@@ -450,7 +545,7 @@ class JobManager:
             job.stop_reason = reason
         self._save(job)
         self.audit.write(kind="job", event="finished", job=job.id, suite=job.suite, status=status,
-                         reason=reason, exit_code=job.exit_code, check_ok=job.check_ok)
+                         reason=reason, exit_code=job.exit_code, check_ok=job.check_ok, checker=job.checker)
 
     def _save(self, job: Job) -> None:
         d = self.job_dir(job)
@@ -458,3 +553,15 @@ class JobManager:
         tmp = d / "job.json.tmp"
         tmp.write_text(json.dumps(job.to_dict(), indent=2))
         os.replace(tmp, d / "job.json")
+
+    def retain(self) -> list[str]:
+        """Delete the evidence of the oldest finished jobs beyond `keep_jobs`. Never a queued or running one."""
+        done = sorted((j for j in self.jobs.values() if j.status in FINISHED), key=lambda j: j.created, reverse=True)
+        gone = []
+        for j in done[self.cfg.keep_jobs:]:
+            shutil.rmtree(self.job_dir(j), ignore_errors=True)
+            del self.jobs[j.id]
+            gone.append(j.id)
+        if gone:
+            self.audit.write(kind="job", event="retention", removed=len(gone), kept=self.cfg.keep_jobs)
+        return gone

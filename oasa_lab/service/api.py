@@ -6,6 +6,7 @@ import asyncio
 import json
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 
 from starlette.background import BackgroundTask
@@ -17,7 +18,7 @@ from . import audit
 from .auth import Authenticator, Principal
 from .config import Config
 from .inventory import Inventory
-from .jobs import FINISHED, Job, JobError, JobManager
+from .jobs import FINISHED, MAX_STREAM_BYTES, MAX_STREAM_SECONDS, Job, JobError, JobManager
 from .views import job_view, lab_view
 
 MAX_BODY = 4096
@@ -122,9 +123,16 @@ def build_routes(cfg: Config, jobs: JobManager, inventory: Inventory, auth: Auth
         async def events():
             off = offset
             idle = 0.0
+            sent = 0
+            began = time.monotonic()
             while True:
+                if sent > MAX_STREAM_BYTES or time.monotonic() - began > MAX_STREAM_SECONDS:
+                    # a long stream ends politely; the client reconnects with the offset it was given
+                    yield f"event: end\ndata: {json.dumps({'status': job.status, 'offset': off, 'truncated': True})}\n\n"
+                    return
                 lines, off = jobs.read_log(job, off, stream)
                 for ln in lines:
+                    sent += len(ln)
                     yield f"data: {ln}\n\n"
                 if lines:
                     yield f"id: {off}\n\n"
@@ -218,7 +226,10 @@ def build_routes(cfg: Config, jobs: JobManager, inventory: Inventory, auth: Auth
     @authed("pause")
     async def resume(request, who):
         audit.note(action="resume")
-        return JSONResponse({"resumed": jobs.resume()})
+        out: dict = {"resumed": jobs.resume()}
+        if (still := jobs.paused) is not None:
+            out["still_paused"] = still  # the owner's local pause file; only they can remove it
+        return JSONResponse(out)
 
     return [
         Route("/healthz", healthz, methods=["GET"]),

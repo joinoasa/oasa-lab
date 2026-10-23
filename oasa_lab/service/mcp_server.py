@@ -142,9 +142,9 @@ def build_mcp(cfg: Config, jobs: JobManager, inventory: Inventory, audit: AuditL
         job = jobs.get(job_id)
         if since is None:
             recent = jobs.tail_log(job, lines)
-            _, off = jobs.read_log(job, 0, max_bytes=50_000_000)
+            off = jobs.log_end(job)
         else:
-            recent, off = jobs.read_log(job, since, max_bytes=200_000)
+            recent, off = jobs.read_log(job, since, max_bytes=200_000)  # at most 1 MB however much is asked
             recent = recent[:lines]
         return {"id": job.id, "status": job.status, "queue_position": jobs.queue_position(job),
                 "lines": recent, "offset": off}

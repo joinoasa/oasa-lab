@@ -57,6 +57,18 @@ NEEDS = '''
 def test_needs(hw):
     hw.open(hw.inv.ids_of("pluto")[0])  # the checker wants the required device in the manifest
 '''
+DIRTY = '''
+import os
+def test_dirty():
+    assert not os.path.exists("leftover.txt"), "a file from an earlier job is still here"
+    open("leftover.txt", "w").write("x")
+'''
+FLOOD = '''
+def test_flood(capsys):
+    with capsys.disabled():  # past pytest's capture, onto the job's stdout
+        for i in range(30000):
+            print("x" * 100)
+'''
 SLOW = '''
 import time
 def test_slow():
@@ -76,7 +88,8 @@ def test_env():
     assert "OASA_LAB_GITHUB_CLIENT_SECRET" not in os.environ
     assert "SECRET_FOR_TEST" not in os.environ
     assert os.environ["OASA_LAB_JOB_ID"]
-    assert os.environ["HOME"].endswith(os.environ["OASA_LAB_JOB_ID"])
+    # in the process-group sandbox HOME is the job folder; in the systemd sandbox it is a private /tmp
+    assert os.environ["HOME"].endswith(os.environ["OASA_LAB_JOB_ID"]) or os.environ["HOME"] == "/tmp"
 '''
 SUITES = {
     "t-quick": ('description = "passes fast"\n', QUICK),
@@ -84,6 +97,8 @@ SUITES = {
     "t-stubborn": ('description = "ignores SIGTERM"\n', STUBBORN),
     "t-env": ('description = "checks the job environment"\n', ENV),
     "t-tx": ('description = "pretends to transmit"\ntransmits = true\nwiring = "lora"\n', TX),
+    "t-dirty": ('description = "leaves a file behind"\n', DIRTY),
+    "t-flood": ('description = "writes 3 MB to stdout"\n', FLOOD),
     "t-needs2": ('description = "needs two plutos"\nrequires = ["pluto:2"]\n', QUICK),
     "t-needs": ('description = "needs a pluto"\nrequires = ["pluto"]\n', NEEDS),
 }
@@ -148,6 +163,16 @@ class Running:
     def audit(self) -> list[dict]:
         return self.lab.audit.read()
 
+    def audit_where(self, pred, timeout: float = 5.0) -> list[dict]:
+        """Audit rows matching `pred`. The line for a request is written just after its response goes out,
+        so wait for it instead of reading at once."""
+        end = time.time() + timeout
+        while True:
+            rows = [r for r in self.audit() if pred(r)]
+            if rows or time.time() > end:
+                return rows
+            time.sleep(0.05)
+
 
 def free_port() -> int:
     with socket.socket() as s:
@@ -169,6 +194,7 @@ def start(repo: Path, state: Path, *, extra: dict | None = None, env: dict | Non
     data = {
         "service": {"port": port, "public_url": f"http://127.0.0.1:{port}", "state_dir": str(state), "repo": str(repo),
                     "stop_grace_seconds": 1, "job_timeout_seconds": 120},
+        "sandbox": {"mode": "none"},  # the unit tests run jobs as the test user; test_sandbox.py covers the real sandbox's plumbing
         "lab": {"rf_setup": "unset"},
         "inventory": {"backend": "simulated", "devices": [
             {"id": "pluto", "kind": "pluto"}, {"id": "rtlsdr", "kind": "rtlsdr"}]},

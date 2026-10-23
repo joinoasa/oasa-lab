@@ -75,6 +75,17 @@ class Profile:
     description: str = ""
 
 
+@dataclass(frozen=True)
+class Sandbox:
+    """How jobs are run. `systemd`: as another user, in their own cgroup, through a small root-owned helper.
+    `none`: as the service's own user in a process group. For tests and development only."""
+    mode: str = "systemd"
+    user: str = "oasalab-job"
+    runner: tuple[str, ...] = ()        # the command that starts the helper; default: sudo -n <python> -I -m oasa_lab.service.jobrun
+    memory_max: str = "4G"
+    tasks_max: int = 512
+
+
 @dataclass
 class Config:
     host: str = "127.0.0.1"
@@ -91,6 +102,12 @@ class Config:
     rf_setup: str = "unset"
     devices_file: str = ""  # the hardware suites' device file (lab.toml: serials, ports, cabling), passed to jobs
     confirm_wiring: dict[str, str] = field(default_factory=dict)  # suite -> wiring the owner says is connected
+    min_commit: str = ""                  # REST callers may not pick a commit older than this
+    keep_jobs: int = 100                  # finished jobs whose evidence is kept; older ones are deleted
+    min_free_mb: int = 2000               # a job does not start with less free disk than this
+    max_bundle_mb: int = 500              # the largest evidence bundle the service accepts from a job
+    local_pause_file: str = ""            # an owner-only pause the API cannot clear (default: state_dir/LOCAL_PAUSE)
+    sandbox: Sandbox = field(default_factory=Sandbox)
     inventory_backend: str = "simulated"
     devices: list[Device] = field(default_factory=list)
     profiles: dict[str, Profile] = field(default_factory=dict)
@@ -164,6 +181,22 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
     cfg.keep_checkouts = int(s.get("keep_checkouts", cfg.keep_checkouts))
     cfg.devices_file = str(s.get("devices_file", ""))
     _need(not cfg.devices_file or os.path.isabs(cfg.devices_file), "service.devices_file must be an absolute path")
+    cfg.min_commit = str(s.get("min_commit", ""))
+    _need(not cfg.min_commit or bool(re.fullmatch(r"[0-9a-f]{40}", cfg.min_commit)), "service.min_commit must be a full 40-character commit id")
+    cfg.keep_jobs = int(s.get("keep_jobs", cfg.keep_jobs))
+    cfg.min_free_mb = int(s.get("min_free_mb", cfg.min_free_mb))
+    cfg.max_bundle_mb = int(s.get("max_bundle_mb", cfg.max_bundle_mb))
+    _need(cfg.keep_jobs >= 1 and cfg.min_free_mb >= 0 and cfg.max_bundle_mb >= 1, "keep_jobs, min_free_mb or max_bundle_mb out of range")
+    cfg.local_pause_file = str(s.get("local_pause_file", cfg.state_dir / "LOCAL_PAUSE"))
+    _need(os.path.isabs(cfg.local_pause_file), "service.local_pause_file must be an absolute path")
+    sb = data.get("sandbox", {})
+    mode = str(sb.get("mode", "systemd"))
+    _need(mode in ("systemd", "none"), "sandbox.mode must be systemd or none")
+    user = str(sb.get("user", "oasalab-job"))
+    _need(bool(re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user)) and user != "root", "sandbox.user must be an unprivileged user name")
+    _need(bool(re.fullmatch(r"[0-9]{1,6}[KMG]?", str(sb.get("memory_max", "4G")))), "sandbox.memory_max looks like 4G")
+    runner = tuple(str(x) for x in sb.get("runner", []))
+    cfg.sandbox = Sandbox(mode, user, runner, str(sb.get("memory_max", "4G")), int(sb.get("tasks_max", 512)))
     cfg.allowed_hosts = [str(h) for h in s.get("allowed_hosts", [])]
 
     cfg.rf_setup = str(lab.get("rf_setup", "unset"))

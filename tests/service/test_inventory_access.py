@@ -111,7 +111,7 @@ def test_a_valid_access_jwt_for_a_known_email_gets_in(access_svc, keys):
     t = make_jwt(keys[0])
     r = httpx.get(f"{access_svc.url}/api/lab", headers={"Cf-Access-Jwt-Assertion": t})
     assert r.status_code == 200
-    row = [x for x in access_svc.audit() if x.get("path") == "/api/lab" and x.get("status") == 200][-1]
+    row = access_svc.audit_where(lambda x: x.get("path") == "/api/lab" and x.get("status") == 200)[-1]
     assert row["actor"] == "owner" and row["via"] == "cf-access"
     # the role comes from the config: this email belongs to the admin
     assert httpx.post(f"{access_svc.url}/api/pause", headers={"Cf-Access-Jwt-Assertion": t}).status_code == 200

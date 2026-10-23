@@ -1,25 +1,27 @@
 [Unit]
 Description=OASA lab job service and Claude connector
 Documentation=https://github.com/joinoasa/oasa-lab/blob/main/docs/remote-lab.md
-After=network-online.target oasa-lab-jobrun.socket
+After=network-online.target
 Wants=network-online.target
-Requires=oasa-lab-jobrun.socket
 
 [Service]
 User=oasalab
 Group=oasalab
-# No radio groups here. Jobs run as oasalab-job (which has them); this service only reads USB ids from sysfs.
+# No radio groups here. Jobs run as oasalab-job (its own unit has them); this service only reads USB ids from sysfs.
+# It needs no root help: it asks systemd (over D-Bus, systemctl) to start and stop oasa-lab-job@<id>.service, and polkit
+# (deploy/polkit/50-oasa-lab.rules) allows exactly that and nothing else.
 EnvironmentFile=/etc/oasa-lab/env
 ExecStart=/opt/oasa-lab/venv/bin/oasa-lab serve --config /etc/oasa-lab/service.toml
 Restart=on-failure
 RestartSec=5
-# Jobs run in their own units (oasa-job-*); stopping the service stops the running job first.
+# Jobs run in their own units (oasa-lab-job@*), not in this cgroup; the service stops the running job itself on shutdown.
 KillMode=control-group
 TimeoutStopSec=30
 UMask=0027
-WorkingDirectory=/var/lib/oasa-lab
+WorkingDirectory=/var/lib/oasa-lab/state
 
-# Hardening. The service needs: its state folder, the job helper's socket, and outbound network (GitHub, git).
+# Hardening. The service needs: its state folder, the spool folder (to write job requests), the system bus (systemctl)
+# and outbound network (GitHub). The results folder and the git mirror are readable but not writable.
 NoNewPrivileges=yes
 ProtectProc=invisible
 ProcSubset=pid
@@ -35,7 +37,7 @@ LimitNOFILE=4096
 LimitCORE=0
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/oasa-lab
+ReadWritePaths=/var/lib/oasa-lab/state /var/lib/oasa-lab/spool
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes

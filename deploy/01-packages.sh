@@ -5,7 +5,7 @@ need_root; check_os
 
 say "Packages"
 run apt-get update
-pkg_install ca-certificates curl gpg git python3 python3-venv python3-pip usbutils \
+pkg_install ca-certificates curl gpg git python3 python3-venv python3-pip usbutils polkitd \
   libiio-utils libiio0 rtl-sdr uhubctl nftables wireguard-tools
 
 say "Keep the SDR control tools from running as network services"

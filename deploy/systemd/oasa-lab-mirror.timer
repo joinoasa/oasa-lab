@@ -1,0 +1,11 @@
+[Unit]
+Description=OASA lab: keep the git mirror of the lab repo current
+Documentation=https://github.com/joinoasa/oasa-lab/blob/main/docs/remote-lab.md
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

@@ -20,6 +20,7 @@ fi
 : "${SSH_FROM_LAN_CIDR:=}"    # empty = no SSH from the LAN, only over WireGuard
 : "${LAB_REF:=}"              # REQUIRED: the commit (40 hex characters) or release tag of oasa-lab to install
 : "${LAB_REPO_URL:=https://github.com/joinoasa/oasa-lab}"
+: "${LAB_BRANCH:=main}"         # the branch jobs may run (the mirror follows it; keep lab-policy.toml's branch the same)
 
 # resolve_ref REF -> prints the 40-character commit id. A full commit id is used as it is; a tag is looked up once
 # and the commit is what gets installed (a moved tag later changes nothing). A branch name is refused: it moves.

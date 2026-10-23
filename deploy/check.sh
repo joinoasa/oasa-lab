@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Read-only checks of the lab PC. Run any time; fails loudly. No changes are made.
 set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$HERE/setup.env" ] && . "$HERE/setup.env"
+LAB_BRANCH="${LAB_BRANCH:-main}"
 ok=0; bad=0
 pass() { printf '  ok    %s\n' "$*"; ok=$((ok+1)); }
 fail() { printf '  FAIL  %s\n' "$*"; bad=$((bad+1)); }
@@ -22,15 +25,24 @@ curl -fsS --max-time 3 http://127.0.0.1:8742/healthz >/dev/null && pass "healthz
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:8742/api/lab)"
 [ "$code" = 401 ] && pass "API without a token is refused (401)" || fail "API without a token returned $code"
 
-echo "Job sandbox:"
-id oasalab-job >/dev/null 2>&1 && pass "the job user oasalab-job exists" || fail "no oasalab-job user (run 05-service.sh)"
+echo "Job path (no OASA program runs as root):"
+for u in oasalab oasalab-job oasalab-mirror; do id "$u" >/dev/null 2>&1 && pass "user $u exists" || fail "no user $u (run 05-service.sh)"; done
 [ "$(id -u oasalab-job 2>/dev/null)" != "$(id -u oasalab 2>/dev/null)" ] && pass "jobs and the service are different users" || fail "jobs run as the service user"
-systemctl is-active --quiet oasa-lab-jobrun.socket && pass "the job helper socket is listening" || fail "oasa-lab-jobrun.socket is not active"
-[ "$(stat -c '%U:%a' /run/oasa-lab/jobrun.sock 2>/dev/null)" = "oasalab:600" ] && pass "only oasalab can open the helper socket" || fail "helper socket permissions are not oasalab:600"
-[ "$(stat -c '%U:%G:%a' /etc/oasa-lab 2>/dev/null)" = "root:oasalab:750" ] && pass "/etc/oasa-lab is root-owned (the service cannot edit its own config)" || fail "/etc/oasa-lab is not root:oasalab 750"
+[ "$(stat -c '%U:%a' /var/lib/oasa-lab 2>/dev/null)" = "root:755" ] && pass "/var/lib/oasa-lab is root-owned (the service cannot swap the folders below it)" || fail "/var/lib/oasa-lab is not root:755"
+[ "$(stat -c '%U:%G:%a' /var/lib/oasa-lab/spool 2>/dev/null)" = "oasalab:oasalab-job:2750" ] && pass "spool: service writes, job user reads" || fail "spool is not oasalab:oasalab-job 2750"
+[ "$(stat -c '%U:%G:%a' /var/lib/oasa-lab/results 2>/dev/null)" = "oasalab-job:oasalab:2750" ] && pass "results: job user writes, service reads" || fail "results is not oasalab-job:oasalab 2750"
+[ "$(stat -c '%U' /var/lib/oasa-lab/mirror.git 2>/dev/null)" = "oasalab-mirror" ] && pass "the git mirror belongs to oasalab-mirror (not the service, not the job user)" || fail "the git mirror is not owned by oasalab-mirror"
+systemctl is-active --quiet oasa-lab-mirror.timer && pass "the mirror timer is active" || fail "oasa-lab-mirror.timer is not active"
+git --git-dir=/var/lib/oasa-lab/mirror.git rev-parse --verify -q "refs/heads/$LAB_BRANCH" >/dev/null 2>&1 && pass "the mirror has $LAB_BRANCH" || fail "the mirror has no $LAB_BRANCH yet (sudo systemctl start oasa-lab-mirror.service)"
+[ -f '/etc/systemd/system/oasa-lab-job@.service' ] && pass "the job unit is installed" || fail "no oasa-lab-job@.service"
+[ -f /etc/polkit-1/rules.d/50-oasa-lab.rules ] && cmp -s /etc/polkit-1/rules.d/50-oasa-lab.rules "$HERE/polkit/50-oasa-lab.rules" && pass "the polkit rule is installed and matches this checkout" || fail "the polkit rule is missing or differs from deploy/polkit/50-oasa-lab.rules"
+[ ! -e /run/oasa-lab/jobrun.sock ] && pass "no root helper socket" || fail "the old root helper socket is still there (sudo systemctl disable --now oasa-lab-jobrun.socket)"
+[ "$(stat -c '%U:%G:%a' /etc/oasa-lab/lab-policy.toml 2>/dev/null)" = "root:root:644" ] && pass "the lab policy is root-owned and not writable by others" || fail "/etc/oasa-lab/lab-policy.toml is not root:root 644"
+[ "$(stat -c '%U:%G:%a' /etc/oasa-lab/service.toml 2>/dev/null)" = "root:oasalab:640" ] && pass "service.toml is root-owned (the service cannot edit its own config)" || fail "/etc/oasa-lab/service.toml is not root:oasalab 640"
+[ "$(stat -c '%U:%a' /etc/oasa-lab/env 2>/dev/null)" = "root:600" ] && pass "the secrets file is root-only" || fail "/etc/oasa-lab/env is not root:600"
 [ "$(stat -c '%U' /opt/oasa-lab/venv/bin/python 2>/dev/null)" = "root" ] && pass "the program is root-owned" || fail "the program is not root-owned"
 grep -q '^mode *= *"systemd"' /etc/oasa-lab/service.toml && pass "sandbox mode is systemd" || fail "sandbox mode is not systemd"
-/opt/oasa-lab/venv/bin/python -I -m oasa_lab.service.jobrun selftest >/dev/null 2>&1 && pass "sandbox self-test passed (other user, no access to the service's files, read-only code)" || fail "sandbox self-test failed: run it by hand to see why: sudo /opt/oasa-lab/venv/bin/python -I -m oasa_lab.service.jobrun selftest"
+"$HERE/selftest.sh" >/dev/null 2>&1 && pass "job self-test passed (polkit allows only job units, the unit is hardened as promised)" || fail "job self-test failed: run it by hand to see why: sudo $HERE/selftest.sh"
 [ -e /etc/oasa-lab/PAUSE ] && note_paused="  (note: the lab is paused by /etc/oasa-lab/PAUSE)" || note_paused=""
 echo "    pause file: /etc/oasa-lab/PAUSE${note_paused}"
 

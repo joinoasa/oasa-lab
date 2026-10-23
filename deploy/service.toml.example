@@ -8,46 +8,24 @@ port = 8742
 public_url = "https://lab-mcp.example.com"          # OWNER: your hostname
 # Optional: a second hostname for the REST API and downloads, behind Cloudflare Access.
 api_public_url = "https://lab-api.example.com"      # OWNER: your hostname, or delete this line
-state_dir = "/var/lib/oasa-lab"
-# The hardware suites' device file (see lab.example.toml). Jobs get it as OASA_LAB_INVENTORY.
-# Outside /etc/oasa-lab on purpose: jobs cannot see that folder, and this file has no secrets.
-devices_file = "/etc/oasa-lab.d/lab.toml"
+state_dir = "/var/lib/oasa-lab/state"
 repo = "https://github.com/joinoasa/oasa-lab"
-branch = "main"
-job_timeout_seconds = 1800
-stop_grace_seconds = 10
+# The branch, the oldest allowed commit, the job time limit, the device file, rf_setup and the wiring
+# confirmations are NOT here: they are in the root-owned /etc/oasa-lab/lab-policy.toml, which the job side
+# reads too (see lab-policy.toml.example). The service refuses to start if they appear here.
 max_queued = 20
-# The oldest commit a caller may ask for with "commit": (a full 40-character id). Leave empty to allow any commit on main.
-# Set it when a suite or the checker is fixed and the older versions must not run any more.
-min_commit = ""
 # Finished jobs whose evidence is kept on disk; the oldest beyond this are deleted.
 keep_jobs = 100
 min_free_mb = 2000                     # a job does not start with less free disk than this
 max_bundle_mb = 500                    # the largest evidence bundle accepted from a job
-# Your own pause switch, from a shell: `sudo touch /etc/oasa-lab/PAUSE`. While the file exists no job starts, and no
-# API or Claude call can remove it. (The folder is root's; the service can look but not change.)
-local_pause_file = "/etc/oasa-lab/PAUSE"
+# The owner's pause switch (`sudo touch /etc/oasa-lab/PAUSE`) is in the policy file too, and `job-run` honors it.
 
 [sandbox]
-# How jobs run: as the unprivileged user "oasalab-job", in their own systemd unit and cgroup, started by a small
-# root helper (oasa-lab-jobrun.socket). Do not set mode = "none" on the lab PC.
+# How jobs run. "systemd": the service asks systemd to start oasa-lab-job@<id>.service (hardened, as the job user,
+# installed by root). Do not set mode = "none" on the lab PC: it runs jobs as the service user.
 mode = "systemd"
-user = "oasalab-job"
-socket = "/run/oasa-lab/jobrun.sock"
-memory_max = "4G"
-tasks_max = 512
-
-[lab]
-# How the radios are connected. The service refuses suites that transmit unless this is
-# "cabled" or "shielded". Leave "unset" until you have verified the bench (cables, attenuators, box).
-rf_setup = "unset"                     # unset | cabled | shielded | open
-
-# Transmitting on real hardware also needs your say-so, one line per suite, naming the wiring you have
-# connected (the wiring named in the suite's suite.toml; see docs/hardware-suites.md). The service then
-# passes --confirm-wiring for you. Leave empty until the cables and attenuators are in place.
-[confirm_wiring]
-# l2-pluto-acceptance = "pluto"
-# l2-rf-control = "lora"
+policy = "/etc/oasa-lab/lab-policy.toml"
+systemctl = "/usr/bin/systemctl"
 
 [inventory]
 backend = "usb"                        # "usb" on the lab PC; "simulated" for trying it out anywhere

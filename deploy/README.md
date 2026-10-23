@@ -87,17 +87,18 @@ Keep the **client id** (not secret) and make a **client secret**. Do not put the
 sudo ./05-service.sh
 ```
 
-Creates two users with no login: `oasalab` (the service) and `oasalab-job` (runs the suites). Installs `oasa-lab serve` as the systemd service `oasa-lab`, plus a small root helper behind the socket `/run/oasa-lab/jobrun.sock` that only `oasalab` can open; the helper starts each job as `oasalab-job` in its own systemd unit with memory and task limits, and the service state folder hidden. It runs the helper's self-test, and copies `service.toml.example` and `.env.example` to `/etc/oasa-lab/`. The helper takes the RF setup, confirmed wiring and device file only from root-owned `/etc/oasa-lab/service.toml` and `/etc/oasa-lab.d/lab.toml`, which `oasalab` can read but not change. It does not start while the config still has placeholders.
+Creates three users with no login: `oasalab` (the service), `oasalab-job` (runs the suites) and `oasalab-mirror` (updates the read-only git mirror of the lab repo). Installs `oasa-lab serve` as the systemd service `oasa-lab`, a hardened job unit `oasa-lab-job@.service` that runs the installed `oasa-lab job-run` as `oasalab-job`, a timer that keeps the mirror current, and a polkit rule that lets `oasalab` start and stop only job units. No OASA program runs as root. The lab policy `/etc/oasa-lab/lab-policy.toml` (root-owned) holds the RF setup, confirmed wiring and device file; the service and `job-run` both read it, and the service cannot change it. The script then runs `selftest.sh`, which starts a job unit as `oasalab` and checks that nothing else can be started. It does not start the service while the config still has placeholders.
 
-OWNER: edit the two files.
+OWNER: edit the files.
 
 ```
 sudo nano /etc/oasa-lab/service.toml     # hostnames, GitHub client id, USB ids from lsusb
+sudo nano /etc/oasa-lab/lab-policy.toml  # rf_setup, wiring confirmations, device file (the bench)
 sudo nano /etc/oasa-lab/env          # OASA_LAB_GITHUB_CLIENT_SECRET=...
 sudo ./05-service.sh                 # checks the config and starts the service
 ```
 
-Leave `rf_setup = "unset"` until you have checked the bench: radios joined by cable with attenuators, or inside the shielded box. Then set `"cabled"` or `"shielded"` and `sudo systemctl restart oasa-lab`. Until then, suites that transmit are refused. Real transmitting also needs a `[confirm_wiring]` line per suite in `service.toml`, saying you connected that suite's wiring (see [remote lab](../docs/remote-lab.md)). The device file `/etc/oasa-lab.d/lab.toml` (root-owned; jobs read it) starts as a copy of `lab.example.toml`; fill in your serials and cable losses.
+Leave `rf_setup = "unset"` (in `lab-policy.toml`) until you have checked the bench: radios joined by cable with attenuators, or inside the shielded box. Then set `"cabled"` or `"shielded"` and `sudo systemctl restart oasa-lab`. Until then, suites that transmit are refused. Real transmitting also needs a `[confirm_wiring]` line per suite in `lab-policy.toml`, saying you connected that suite's wiring (see [remote lab](../docs/remote-lab.md)). The device file `/etc/oasa-lab.d/lab.toml` (root-owned; jobs read it) starts as a copy of `lab.example.toml`; fill in your serials and cable losses.
 
 Make an API token for scripts (optional):
 
@@ -145,7 +146,7 @@ Optional hardening: a Cloudflare WAF rule on the MCP hostname that blocks `/mcp`
 | Stop the service (kills any run) | `sudo systemctl stop oasa-lab` |
 | Close the internet door | `sudo systemctl stop cloudflared` |
 | Everything off | `sudo systemctl disable --now oasa-lab cloudflared` |
-| Cut off Claude only | Claude: remove the connector. PC: delete `/var/lib/oasa-lab/oauth.json` and restart the service |
+| Cut off Claude only | Claude: remove the connector. PC: delete `/var/lib/oasa-lab/state/oauth.json` and restart the service |
 | Look at what happened | `less /var/lib/oasa-lab/audit.jsonl`, `journalctl -u oasa-lab` |
 
 ## Files here
@@ -153,13 +154,17 @@ Optional hardening: a Cloudflare WAF rule on the MCP hostname that blocks `/mcp`
 | File | What |
 |---|---|
 | `01-packages.sh` to `06-cloudflared.sh` | The steps, in order |
-| `check.sh` | Read-only health and exposure check |
+| `check.sh` | Health and exposure check (also runs `selftest.sh`) |
+| `selftest.sh` | Starts a job unit as the service user and checks what it may and may not do |
 | `lib.sh` | Shared helpers (dry run, write only if changed) |
 | `setup.env.example` | Your choices for the scripts |
-| `service.toml.example` | The service config: users, roles, devices, RF setup |
+| `service.toml.example` | The service config: users, roles, devices |
+| `lab-policy.toml.example` | The root-owned lab policy: RF setup, wiring, device file, limits |
 | `.env.example` | The one secret the service needs (GitHub client secret) |
 | `cloudflared-config.yml.example` | What the tunnel config looks like |
 | `systemd/oasa-lab.service` | The service unit, with sandboxing |
-| `systemd/oasa-lab-jobrun.socket`, `oasa-lab-jobrun@.service` | The root helper that starts jobs as `oasalab-job` |
+| `systemd/oasa-lab-job@.service` | The job unit: `job-run` as `oasalab-job`, fully hardened |
+| `systemd/oasa-lab-mirror.service`, `.timer` | Keep `/var/lib/oasa-lab/mirror.git` current (user `oasalab-mirror`) |
+| `polkit/50-oasa-lab.rules` | Lets `oasalab` start and stop only job units |
 | `requirements.lock`, `requirements-build.lock` | Hashed package pins (made with `uv pip compile --generate-hashes`) |
 | `udev/99-oasa-lab.rules` | USB access for the radios |

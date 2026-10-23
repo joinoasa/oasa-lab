@@ -65,6 +65,6 @@ run cloudflared --config /etc/cloudflared/config.yml service install
 run systemctl enable --now cloudflared
 
 say "Done"
-owner "In Cloudflare Zero Trust > Access controls > Applications: add a Self-hosted application for ${API_HOSTNAME:-your API hostname} with one policy: Allow, Emails, your email. Copy its Application Audience (AUD) tag and your team domain into [cloudflare_access] in /etc/oasa-lab/lab.toml."
+owner "In Cloudflare Zero Trust > Access controls > Applications: add a Self-hosted application for ${API_HOSTNAME:-your API hostname} with one policy: Allow, Emails, your email. Copy its Application Audience (AUD) tag and your team domain into [cloudflare_access] in /etc/oasa-lab/service.toml."
 owner "Do NOT put an Access policy on $MCP_HOSTNAME: Claude's servers cannot pass a browser login. The service does its own sign-in there (GitHub, owner only)."
 note "Then add the connector in Claude: https://$MCP_HOSTNAME/mcp   (see docs/remote-lab.md)"

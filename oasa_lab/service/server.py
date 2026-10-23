@@ -9,7 +9,7 @@ import sys
 
 def serve(argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="oasa-lab serve", description="Run the lab's remote job service (localhost only).")
-    p.add_argument("--config", default=os.environ.get("OASA_LAB_CONFIG", "lab.toml"), help="config file (default lab.toml)")
+    p.add_argument("--config", default=os.environ.get("OASA_LAB_CONFIG", "service.toml"), help="config file (default service.toml)")
     p.add_argument("--check", action="store_true", help="check the config and exit")
     a = p.parse_args(argv)
     try:
@@ -40,10 +40,10 @@ def token(argv: list[str]) -> int:
     """Make an API token. The token is shown once; the config gets only its hash."""
     from .auth import new_api_token
 
-    p = argparse.ArgumentParser(prog="oasa-lab token", description="Make an API token for a user in lab.toml.")
+    p = argparse.ArgumentParser(prog="oasa-lab token", description="Make an API token for a user in service.toml.")
     p.add_argument("name", help="a label for the token, e.g. owner-laptop")
-    p.add_argument("--user", required=True, help="the user (name in lab.toml) the token acts as")
+    p.add_argument("--user", required=True, help="the user (name in service.toml) the token acts as")
     a = p.parse_args(argv)
     tok, digest = new_api_token()
-    print(f"Token (shown once, keep it secret):\n  {tok}\n\nAdd to lab.toml:\n\n[[tokens]]\nname   = \"{a.name}\"\nuser   = \"{a.user}\"\nsha256 = \"{digest}\"")
+    print(f"Token (shown once, keep it secret):\n  {tok}\n\nAdd to service.toml:\n\n[[tokens]]\nname   = \"{a.name}\"\nuser   = \"{a.user}\"\nsha256 = \"{digest}\"")
     return 0

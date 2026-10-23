@@ -50,14 +50,14 @@ Code: `oasa_lab/service/`. One process serves both the connector (`/mcp`) and th
 
 1. **Registration** only for Claude's own callback URLs (`claude.ai`, `claude.com`). Anyone can ask to register; nobody can register somewhere else. This blocks the classic attack on OAuth proxies: register a client that sends the owner's code to the attacker.
 2. **A consent page** on our host, so a link someone sends you never signs you in silently.
-3. **GitHub sign-in.** After you approve, GitHub tells us the account's numeric id. Only a user listed in `lab.toml` (matched by id, not by name) gets an authorization code. Anyone else gets `access_denied`. We read the id and throw GitHub's token away.
-4. **Tokens:** random, one hour for access, 30 days for refresh (rotated on use), stored only as SHA-256 hashes in a `0600` file. Removing a user from `lab.toml` ends their tokens on the next request.
+3. **GitHub sign-in.** After you approve, GitHub tells us the account's numeric id. Only a user listed in `service.toml` (matched by id, not by name) gets an authorization code. Anyone else gets `access_denied`. We read the id and throw GitHub's token away.
+4. **Tokens:** random, one hour for access, 30 days for refresh (rotated on use), stored only as SHA-256 hashes in a `0600` file. Removing a user from `service.toml` ends their tokens on the next request.
 
 No crypto is invented here: PKCE, token checks and metadata come from the SDK; GitHub does the identity.
 
 **Where Cloudflare Access does apply.** The REST API and downloads sit on a second hostname with an Access policy (Allow: the owner's email). The service also checks the signed `Cf-Access-Jwt-Assertion` itself (RS256, issuer, audience, email), so a request that skips Cloudflare gets nothing. ([Validating the Access JWT](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/))
 
-**Other ways in** (all end in a user and role from `lab.toml`): an API token (bearer; only its hash is stored) for scripts and other MCP clients. Nothing else is accepted. Identity headers such as `X-Forwarded-User` mean nothing.
+**Other ways in** (all end in a user and role from `service.toml`): an API token (bearer; only its hash is stored) for scripts and other MCP clients. Nothing else is accepted. Identity headers such as `X-Forwarded-User` mean nothing.
 
 ## Threat model, in plain words
 
@@ -138,7 +138,7 @@ curl -sNH "Authorization: Bearer $TOKEN" "https://lab-api.example.com/api/jobs/<
 
 ## Config: users, roles, devices
 
-`/etc/oasa-lab/lab.toml` (example: [deploy/lab.toml.example](../deploy/lab.toml.example)). Ships with one admin. More people later is a config change:
+`/etc/oasa-lab/service.toml` (example: [deploy/service.toml.example](../deploy/service.toml.example)). Ships with one admin. More people later is a config change:
 
 ```toml
 [[users]]
@@ -151,7 +151,14 @@ Roles live in `oasa_lab/service/config.py` (`PERMISSIONS`). Restart the service 
 
 **Devices** come from a pluggable inventory: `usb` (reads `/sys/bus/usb/devices`, and one TCP connect to the Pluto+'s iiod port to see that it answers; it never opens a radio) or `simulated` (tests and demos). A **profile** names devices that must be present; a suite may also list `requires = ["pluto"]` in its `suite.toml`. Missing devices stop the job before it starts.
 
-**Suites that transmit** declare `transmits = true` in `suite.toml`. Mark any suite that puts RF on a cable or the air.
+**Requirements.** `requires` in `suite.toml` is the hardware suites' form: a device kind (`pluto`, `rtlsdr`, `serial-radio`, `hub`), or `kind:N` for at least N (`serial-radio:2`). The inventory's device `kind` must use those names. A suite whose hardware is missing is refused before it starts.
+
+**Suites that transmit** declare `transmits = true` (and usually `wiring = "NAME"`) in `suite.toml`; the service reads them with the same parser as `oasa-lab run`. Two locks, both yours:
+
+1. `rf_setup` in `[lab]` must be `cabled` or `shielded`.
+2. On real hardware (inventory backend `usb`) you must also confirm the wiring, one suite at a time: `[confirm_wiring]` `l2-rf-control = "lora"` in `service.toml`, where the value is the suite's wiring name. Only then does the service run it with `--confirm-wiring lora`. A different name, or none, is refused with a message saying what to set. The simulated service never passes the flag; it runs the suites on the simulated bench (`OASA_LAB_SIM=1`).
+
+The jobs read the device file named by `devices_file` (`/etc/oasa-lab/lab.toml`; start from `lab.example.toml`). The confirmed wiring is recorded in the run's manifest (`job.wiring_confirmed`), next to `job.rf_setup`. Even then the hardware layer and the checker still enforce the 60 dB rule and the RF evidence; the service adds a lock, it does not replace theirs.
 
 ## Audit log
 

@@ -1,4 +1,4 @@
-# OASA lab job service config. 05-service.sh copies this to /etc/oasa-lab/lab.toml.
+# OASA lab job service config. 05-service.sh copies this to /etc/oasa-lab/service.toml.
 # Nothing secret in here: the GitHub client secret lives in /etc/oasa-lab/env, API tokens are stored as hashes.
 
 [service]
@@ -9,6 +9,8 @@ public_url = "https://lab-mcp.example.com"          # OWNER: your hostname
 # Optional: a second hostname for the REST API and downloads, behind Cloudflare Access.
 api_public_url = "https://lab-api.example.com"      # OWNER: your hostname, or delete this line
 state_dir = "/var/lib/oasa-lab"
+# The hardware suites' device file (see lab.example.toml). Jobs get it as OASA_LAB_INVENTORY.
+devices_file = "/etc/oasa-lab/lab.toml"
 repo = "https://github.com/joinoasa/oasa-lab"
 branch = "main"
 job_timeout_seconds = 1800
@@ -19,6 +21,13 @@ max_queued = 20
 # How the radios are connected. The service refuses suites that transmit unless this is
 # "cabled" or "shielded". Leave "unset" until you have verified the bench (cables, attenuators, box).
 rf_setup = "unset"                     # unset | cabled | shielded | open
+
+# Transmitting on real hardware also needs your say-so, one line per suite, naming the wiring you have
+# connected (the wiring named in the suite's suite.toml; see docs/hardware-suites.md). The service then
+# passes --confirm-wiring for you. Leave empty until the cables and attenuators are in place.
+[confirm_wiring]
+# l2-pluto-acceptance = "pluto"
+# l2-rf-control = "lora"
 
 [inventory]
 backend = "usb"                        # "usb" on the lab PC; "simulated" for trying it out anywhere
@@ -31,22 +40,22 @@ tcp = "192.168.2.1:30431"              # iiod on the lab network; the service on
 
 [[inventory.devices]]
 id = "rtlsdr"
-kind = "rtl-sdr"
+kind = "rtlsdr"
 usb = "0bda:2838"                      # RTL-SDR Blog V4 (RTL2838)
 
 [[inventory.devices]]
 id = "heltec-a"
-kind = "lora"
+kind = "serial-radio"
 usb = "10c4:ea60"                      # CP210x on the Heltec V3. Check with lsusb.
 
 [[inventory.devices]]
 id = "heltec-b"
-kind = "lora"
+kind = "serial-radio"
 usb = "10c4:ea60"
 
 [[inventory.devices]]
 id = "usbhub"
-kind = "usb-hub"
+kind = "hub"
 usb = "0000:0000"                      # OWNER: the switchable hub's id from lsusb
 
 [profiles.bench-cabled]

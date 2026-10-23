@@ -96,12 +96,12 @@ From Python: `from oasa_lab.channel import Channel, ChannelSettings`. Other repo
 
 ```
 pip install -e '.[service]'
-oasa-lab token owner-laptop --user citruscybersec   # an API token; paste the printed block in lab.toml
-oasa-lab serve --config lab.toml                    # localhost only
+oasa-lab token owner-laptop --user citruscybersec   # an API token; paste the printed block in service.toml
+oasa-lab serve --config service.toml                    # localhost only
 ```
 
 - Only suite names from the repo run. No code, shell or paths.
-- Suites that transmit (`transmits = true` in `suite.toml`) are refused unless the lab config says `rf_setup = "cabled"` or `"shielded"`.
+- Suites that transmit (`transmits = true` in `suite.toml`) are refused unless the lab config says `rf_setup = "cabled"` or `"shielded"`. On real hardware you also confirm each suite's wiring in the config (`[confirm_wiring]`); the service then passes `--confirm-wiring`.
 - Stop a job, or pause the whole lab, any time. Every request is in an audit log.
 - Sign-in for Claude is GitHub, owner only. The lab PC dials out through a Cloudflare Tunnel and opens no inbound port.
 

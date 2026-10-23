@@ -25,7 +25,7 @@ Follow the [OASA software standard](https://joinoasa.org/docs/software-standard/
 | `OASA_LAB_SIM=1 oasa-lab run l2-pluto-acceptance` | Run a hardware suite on the simulated bench |
 | `oasa-lab channel --help` | Run the simulated channel standalone |
 | `pip install -e '.[service]'` | Add the job service and Claude connector |
-| `oasa-lab serve --config lab.toml` | Run the remote job service (localhost only); `--check` only checks the config |
+| `oasa-lab serve --config service.toml` | Run the remote job service (localhost only); `--check` only checks the config |
 | `oasa-lab token NAME --user USER` | Make an API token (shown once; the config keeps only its hash) |
 | `pytest -o addopts="" tests/service` | Job service tests (needs the `service` extra; CI runs them) |
 | `tail -f runs/*/log.jsonl` | Watch a run live |
@@ -49,7 +49,7 @@ Run `l0-lab`, `l1-channel`, `l1-plaintext-control`, `l1-profiles`, and with `OAS
 
 - `oasa_lab/service/` runs suites for remote callers. Docs: [docs/remote-lab.md](docs/remote-lab.md). Setup scripts: `deploy/`.
 - **Never run anything a caller sends.** Only a suite name from the checked-out repo, a seed and a hardware profile from the config. Keep it that way; a test covers the bad inputs.
-- A suite that puts RF on a cable or the air sets `transmits = true` in `suite.toml`. The service refuses it unless the lab is `cabled` or `shielded`.
+- A suite that puts RF on a cable or the air sets `transmits = true` in `suite.toml`. The service reads it with the same parser as the runner and refuses it unless the lab is `cabled` or `shielded`, and, on real hardware, the owner has set that suite's wiring in `[confirm_wiring]`. Never add a second parser for `transmits` or `requires`.
 - No secrets in the repo, the audit log or job environments. Tokens are stored as hashes. `deploy/*.example` hold placeholders only.
 - A change to auth, the interlock or the audit log needs a test in `tests/service/`.
 

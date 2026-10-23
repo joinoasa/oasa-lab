@@ -87,17 +87,17 @@ Keep the **client id** (not secret) and make a **client secret**. Do not put the
 sudo ./05-service.sh
 ```
 
-Creates the `oasalab` user (no login, no shell), installs `oasa-lab serve` as the systemd service `oasa-lab`, and copies `lab.toml.example` and `.env.example` to `/etc/oasa-lab/`. It does not start while the config still has placeholders.
+Creates the `oasalab` user (no login, no shell), installs `oasa-lab serve` as the systemd service `oasa-lab`, and copies `service.toml.example` and `.env.example` to `/etc/oasa-lab/`. It does not start while the config still has placeholders.
 
 OWNER: edit the two files.
 
 ```
-sudo nano /etc/oasa-lab/lab.toml     # hostnames, GitHub client id, USB ids from lsusb
+sudo nano /etc/oasa-lab/service.toml     # hostnames, GitHub client id, USB ids from lsusb
 sudo nano /etc/oasa-lab/env          # OASA_LAB_GITHUB_CLIENT_SECRET=...
 sudo ./05-service.sh                 # checks the config and starts the service
 ```
 
-Leave `rf_setup = "unset"` until you have checked the bench: radios joined by cable with attenuators, or inside the shielded box. Then set `"cabled"` or `"shielded"` and `sudo systemctl restart oasa-lab`. Until then, suites that transmit are refused.
+Leave `rf_setup = "unset"` until you have checked the bench: radios joined by cable with attenuators, or inside the shielded box. Then set `"cabled"` or `"shielded"` and `sudo systemctl restart oasa-lab`. Until then, suites that transmit are refused. Real transmitting also needs a `[confirm_wiring]` line per suite in `service.toml`, saying you connected that suite's wiring (see [remote lab](../docs/remote-lab.md)). The device file `/etc/oasa-lab/lab.toml` starts as a copy of `lab.example.toml`; fill in your serials and cable losses.
 
 Make an API token for scripts (optional):
 
@@ -105,7 +105,7 @@ Make an API token for scripts (optional):
 sudo -u oasalab /opt/oasa-lab/venv/bin/oasa-lab token owner-laptop --user citruscybersec
 ```
 
-Paste the printed `[[tokens]]` block into `lab.toml`. The token itself is shown once; keep it in your password manager.
+Paste the printed `[[tokens]]` block into `service.toml`. The token itself is shown once; keep it in your password manager.
 
 ### 7. The tunnel (OWNER)
 
@@ -115,7 +115,7 @@ sudo ./06-cloudflared.sh       # installs cloudflared, then tells you the accoun
 
 You log in to Cloudflare, create the tunnel, point two hostnames at it, and copy the credentials file into `/etc/cloudflared/` (the script prints the exact commands). Run the script again. It writes the tunnel config that exposes **only** the job service, on fixed paths. Everything else returns 404. The SDR ports (iiod 30431, rtl_tcp 1234, SoapyRemote 55132) are never listed.
 
-Then in Cloudflare Zero Trust, Access controls, Applications, add a self-hosted application for the **API hostname** with one rule: Allow, Emails, your email. Copy the application's AUD tag and your team domain into `[cloudflare_access]` in `lab.toml`, and restart the service.
+Then in Cloudflare Zero Trust, Access controls, Applications, add a self-hosted application for the **API hostname** with one rule: Allow, Emails, your email. Copy the application's AUD tag and your team domain into `[cloudflare_access]` in `service.toml`, and restart the service.
 
 **Do not** put Access on the MCP hostname. Claude's servers cannot pass a browser login. See [docs/remote-lab.md](../docs/remote-lab.md) for why that is safe.
 
@@ -154,7 +154,7 @@ Optional hardening: a Cloudflare WAF rule on the MCP hostname that blocks `/mcp`
 | `check.sh` | Read-only health and exposure check |
 | `lib.sh` | Shared helpers (dry run, write only if changed) |
 | `setup.env.example` | Your choices for the scripts |
-| `lab.toml.example` | The service config: users, roles, devices, RF setup |
+| `service.toml.example` | The service config: users, roles, devices, RF setup |
 | `.env.example` | The one secret the service needs (GitHub client secret) |
 | `cloudflared-config.yml.example` | What the tunnel config looks like |
 | `systemd/oasa-lab.service` | The service unit, with sandboxing |

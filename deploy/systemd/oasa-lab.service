@@ -9,7 +9,7 @@ User=oasalab
 Group=oasalab
 SupplementaryGroups=plugdev dialout
 EnvironmentFile=/etc/oasa-lab/env
-ExecStart=/opt/oasa-lab/venv/bin/oasa-lab serve --config /etc/oasa-lab/lab.toml
+ExecStart=/opt/oasa-lab/venv/bin/oasa-lab serve --config /etc/oasa-lab/service.toml
 Restart=on-failure
 RestartSec=5
 # A stop kills every process of every job (radio tools included).

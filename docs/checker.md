@@ -34,7 +34,7 @@ Each check is `pass` or `fail`, with a reason in plain words.
 - `start` and `end` are RFC 3339 UTC times, and `end` is after `start` (and not in the future).
 - `lab.git_sha` is 40 lowercase hex characters; `git_dirty` is true or false (a dirty tree is allowed, and reported).
 - Python and OS versions are present; the package list includes pytest and oasa-lab.
-- Every channel has settings in range (probabilities 0 to 1, no negative delays).
+- Every channel has settings in range (probabilities 0 to 1, no negative delays). Airtime settings, if present, must be complete and give a positive airtime (older bundles without them still pass).
 - Every binary has a 64-hex SHA-256.
 - Markers are unique strings of 12 or more characters.
 - Every `.pcap` in `captures/` is declared. A capture the manifest doesn't mention would escape the scan, so it fails.
@@ -67,7 +67,14 @@ For every capture the manifest marks `encrypted: true`:
 From the final `channel_stats` line of each channel in the log, per direction:
 - `forwarded` = sent - dropped - too_big - unrouted + duplicated + replayed - abandoned.
 - The number of packets for that direction in the pcap equals `forwarded`. No packet goes to a stranger. No packet is larger than the MTU. Nothing was abandoned in flight.
-- Each measured rate (loss, duplicate, corrupt, reorder, replay) is within **5 standard deviations** (binomial) of the configured value. A rate of 0 must measure exactly 0. With fewer than 100 packets a rate can't be tested; the check says it skipped it.
+- Each measured rate (loss, duplicate, corrupt, reorder, replay) is within **5 standard deviations** (binomial) of the configured value. A rate of 0 must measure exactly 0. With fewer than 100 packets a rate can't be tested; the check says it skipped it. Packets the transmit queue dropped (`queue_dropped`) are left out of the trials, and a run with `max_queue` 0 can't have any.
+
+**Airtime.** For a channel with an airtime model (a radio [profile](profiles.md)), the checker works out each packet's time on the air itself, from the settings in the manifest, with its own copy of the formulas (`oasa_lab/checker/air.py`; it does not import the channel). From the capture's time stamps (when each packet started to go on the air) it checks, per direction, or across both directions if the channel is half-duplex:
+- a packet starts no sooner than the airtime of the one before it, so no two packets overlap on the air (a small allowance covers the whole-microsecond time stamps);
+- with a duty cycle, a direction's next packet starts no sooner than airtime / duty cycle after the previous one;
+- with fixed slots, every start is a whole number of slots from the first.
+
+A capture where two packets overlap on the air, or a manifest that claims a slower radio than the capture shows, fails check 5. `l0-lab` tampers with captures to prove it.
 
 ### 6. Known-bad cases really ran
 

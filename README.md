@@ -23,6 +23,7 @@ oasa-lab run l1-channel
 | `l0-lab` | The lab itself: channel is repeatable, pcap files are valid, the checker catches tampering |
 | `l1-channel` | The simulated radio channel does what its settings say, from a seed |
 | `l1-plaintext-control` | Negative control: the checker finds a marker and MAVLink in plaintext |
+| `l1-profiles` | Radio profiles (LoRa, SiK, mLRS, WFB-ng): measured airtime and throughput match the model, half-duplex shares one medium, queue drops are counted |
 | `l1-oasa-link` | The encrypted oasa-sec link under loss, reordering, replay and attack (needs `OASA_SEC_BIN_DIR`) |
 
 ## How an agent watches a run
@@ -33,7 +34,7 @@ oasa-lab run l1-channel
 tail -f runs/*/log.jsonl
 ```
 
-Every line is one JSON object with `ts` (RFC 3339 UTC), `event` and fields. Events: `run_start`, `test_start`, `test_end` (with `outcome`), `channel_stats` (every second, then a `final` one) and `run_end`. A test that stalls shows as a `test_start` with no `test_end`; stop the run with Ctrl-C or SIGTERM.
+Every line is one JSON object with `ts` (RFC 3339 UTC), `event` and fields. Events: `run_start`, `test_start`, `test_end` (with `outcome`), `channel_stats` (every second, then a `final` one) and `run_end`. Tests may add their own, such as `link_metrics` (handshake time and goodput of the oasa-sec link over a radio profile). A test that stalls shows as a `test_start` with no `test_end`; stop the run with Ctrl-C or SIGTERM.
 
 ## Where the evidence lands
 
@@ -59,12 +60,24 @@ Beside the folder: `runs/<same name>.check.json`, the checker's verdict. See [do
 oasa-lab channel --a 127.0.0.1:5001 --b 127.0.0.1:5002 --loss 0.1 --reorder 0.1 --seed 7 --pcap out.pcap
 ```
 
+### Radio profiles
+
+A profile makes the channel behave like a real radio: packets take their airtime, a half-duplex radio shares one medium, a transmit queue can overflow (`--max-queue`), and the radio's packet size limit applies. `oasa-lab profiles` lists them. Settings you pass override the profile's:
+
+```
+oasa-lab profiles
+oasa-lab channel --profile lora-sf9-bw125 --loss 0.05 --pcap out.pcap
+```
+
+From a test: `lab.channel(a=a.addr, b=b.addr, profile="lora-sf9-bw125", loss=0.05)`. The manifest records the profile and the resolved settings, and the checker recomputes airtime from them. Numbers and sources: [docs/profiles.md](docs/profiles.md).
+
 From Python: `from oasa_lab.channel import Channel, ChannelSettings`. Other repos can use either. Details are in the module docstring of [oasa_lab/channel.py](oasa_lab/channel.py). Captures are raw-IPv4 pcap files (link type 101), so Wireshark shows addresses, ports and UDP payload.
 
 ## More
 
 - Plan: [docs/r-com2-plan.md](docs/r-com2-plan.md)
 - Checker: [docs/checker.md](docs/checker.md)
+- Radio profiles: [docs/profiles.md](docs/profiles.md)
 - Outside software we use: [docs/software-used.md](docs/software-used.md)
 - Radios, adapters and waveforms live in [oasa-radio](https://github.com/joinoasa/oasa-radio). Encryption lives in [oasa-sec](https://github.com/joinoasa/oasa-sec).
 

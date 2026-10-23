@@ -88,8 +88,9 @@ def test_env():
     assert "OASA_LAB_GITHUB_CLIENT_SECRET" not in os.environ
     assert "SECRET_FOR_TEST" not in os.environ
     assert os.environ["OASA_LAB_JOB_ID"]
-    # in the process-group sandbox HOME is the job folder; in the systemd sandbox it is a private /tmp
-    assert os.environ["HOME"].endswith(os.environ["OASA_LAB_JOB_ID"]) or os.environ["HOME"] == "/tmp"
+    # in the process-group sandbox HOME is the job folder; under job-run it is a private folder in the job's own temp dir
+    assert os.environ["HOME"].endswith(os.environ["OASA_LAB_JOB_ID"]) or "/job-" in os.environ["HOME"]
+    assert not any(k.startswith("FAKE_") for k in os.environ)
 '''
 SUITES = {
     "t-quick": ('description = "passes fast"\n', QUICK),
@@ -181,7 +182,7 @@ def free_port() -> int:
 
 
 def start(repo: Path, state: Path, *, extra: dict | None = None, env: dict | None = None,
-          present: dict | None = None, http=None) -> Running:
+          present: dict | None = None, http=None, policy_uid: int = 0) -> Running:
     port = free_port()
     tokens, token_rows = {}, []
     users = [{"name": "owner", "role": "admin", "github_id": 1001, "github_login": "owner-gh", "email": "owner@example.invalid"},
@@ -193,7 +194,7 @@ def start(repo: Path, state: Path, *, extra: dict | None = None, env: dict | Non
         token_rows.append({"name": f"{u['name']}-token", "user": u["name"], "sha256": h})
     data = {
         "service": {"port": port, "public_url": f"http://127.0.0.1:{port}", "state_dir": str(state), "repo": str(repo),
-                    "stop_grace_seconds": 1, "job_timeout_seconds": 120},
+                    "stop_grace_seconds": 1, "job_timeout_seconds": 120, "min_free_mb": 100},
         "sandbox": {"mode": "none"},  # the unit tests run jobs as the test user; test_sandbox.py covers the real sandbox's plumbing
         "lab": {"rf_setup": "unset"},
         "inventory": {"backend": "simulated", "devices": [
@@ -204,7 +205,12 @@ def start(repo: Path, state: Path, *, extra: dict | None = None, env: dict | Non
     }
     for k, v in (extra or {}).items():
         data.setdefault(k, {}).update(v) if isinstance(v, dict) else data.__setitem__(k, v)
-    cfg = parse_config(data, state.parent, {"OASA_LAB_GITHUB_CLIENT_SECRET": "gh-secret", **(env or {})})
+    if data.get("sandbox", {}).get("mode") == "systemd":   # these live in the policy file there (the config refuses them)
+        for k in ("stop_grace_seconds", "job_timeout_seconds", "devices_file", "min_commit", "branch"):
+            data["service"].pop(k, None)
+        data.pop("lab", None)
+        data.pop("confirm_wiring", None)
+    cfg = parse_config(data, state.parent, {"OASA_LAB_GITHUB_CLIENT_SECRET": "gh-secret", **(env or {})}, policy_uid=policy_uid)
     inv = SimulatedInventory(cfg.devices, present or {})
     lab = Lab(cfg, inventory=inv, http=http)
     server = uvicorn.Server(uvicorn.Config(lab.app(), host="127.0.0.1", port=port, log_level="error"))

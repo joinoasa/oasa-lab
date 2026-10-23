@@ -80,8 +80,12 @@ def list_dirs(root: Path | str) -> list[str]:
         os.close(fd)
 
 
-def copy_tree(root: Path | str, name: str, dest: Path, max_bytes: int, max_files: int = 5000) -> dict:
-    """Copy folder root/name to dest: plain files and folders only, nothing followed, with size limits.
+MAX_DEPTH = 24
+
+
+def copy_tree(root: Path | str, name: str, dest: Path, max_bytes: int, max_files: int = 5000, max_depth: int = MAX_DEPTH) -> dict:
+    """Copy folder root/name to dest: plain files and folders only, nothing followed, with size, count and depth
+    limits (a deeper tree is rejected as a whole, never half copied).
     Returns {"files": n, "bytes": n, "skipped": [names of anything that was not a plain file or folder]}."""
     stats = {"files": 0, "bytes": 0, "skipped": []}
     if not _name_ok(name):
@@ -94,7 +98,9 @@ def copy_tree(root: Path | str, name: str, dest: Path, max_bytes: int, max_files
         raise UnsafePath(f"cannot open the bundle: {exc.strerror}") from None
     os.close(rfd)
 
-    def walk(dfd: int, out: Path, rel: str) -> None:
+    def walk(dfd: int, out: Path, rel: str, depth: int) -> None:
+        if depth > max_depth:
+            raise TooBig(f"folders nested more than {max_depth} deep")
         out.mkdir(mode=0o755, parents=True)
         with os.scandir(dfd) as it:
             entries = sorted(it, key=lambda e: e.name)
@@ -109,7 +115,7 @@ def copy_tree(root: Path | str, name: str, dest: Path, max_bytes: int, max_files
                     stats["skipped"].append(rel + e.name)
                     continue
                 try:
-                    walk(sub, out / e.name, rel + e.name + "/")
+                    walk(sub, out / e.name, rel + e.name + "/", depth + 1)
                 finally:
                     os.close(sub)
             elif e.is_file(follow_symlinks=False):
@@ -136,8 +142,11 @@ def copy_tree(root: Path | str, name: str, dest: Path, max_bytes: int, max_files
                 stats["skipped"].append(rel + e.name)
 
     try:
-        walk(top, Path(dest), "")
-    except TooBig:
+        walk(top, Path(dest), "", 1)
+    except RecursionError:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise TooBig("folders nested too deep") from None
+    except (TooBig, OSError):
         shutil.rmtree(dest, ignore_errors=True)
         raise
     finally:

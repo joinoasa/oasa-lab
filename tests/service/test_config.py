@@ -10,7 +10,7 @@ USER = {"name": "owner", "role": "admin", "github_id": 1}
 
 
 def cfg(**kw):
-    data = {"users": [USER], **kw}
+    data = {"users": [USER], "sandbox": {"mode": "none"}, **kw}  # the default is the real sandbox, which needs the policy file
     return parse_config(data, Path("/tmp"), {})
 
 
@@ -27,12 +27,12 @@ def test_non_loopback_host_is_refused(host):
 
 def test_no_users_is_refused():
     with pytest.raises(ConfigError):
-        parse_config({}, Path("/tmp"), {})
+        parse_config({"sandbox": {"mode": "none"}}, Path("/tmp"), {})
 
 
 def test_unknown_role_is_refused():
     with pytest.raises(ConfigError, match="role"):
-        parse_config({"users": [{"name": "x", "role": "root"}]}, Path("/tmp"), {})
+        parse_config({"sandbox": {"mode": "none"}, "users": [{"name": "x", "role": "root"}]}, Path("/tmp"), {})
 
 
 def test_token_must_point_at_a_user():

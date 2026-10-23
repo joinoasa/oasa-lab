@@ -19,9 +19,7 @@ PERMISSIONS = {
     "runner": {"read", "run", "stop_own"},
     "admin": {"read", "run", "stop_own", "stop_any", "pause"},
 }
-RF_SAFE = ("cabled", "shielded")  # the only setups where a transmitting suite may run
-RF_SETUPS = ("unset", "cabled", "shielded", "open")
-NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+from ..policy import DEFAULT_POLICY, NAME_RE, RF_SAFE, RF_SETUPS, Policy, PolicyError, load_policy  # noqa: F401
 
 # Where Claude's hosted apps send people back to after sign-in. Claude Code uses a loopback address
 # instead (http://localhost/callback); add it under [oauth] redirect_uris only if you use Claude Code.
@@ -77,13 +75,12 @@ class Profile:
 
 @dataclass(frozen=True)
 class Sandbox:
-    """How jobs are run. `systemd`: as another user, in their own cgroup, through a small root-owned helper.
-    `none`: as the service's own user in a process group. For tests and development only."""
+    """How jobs run. `systemd`: the service asks systemd to start `oasa-lab-job@ID.service` (a hardened unit that
+    runs the installed `oasa-lab job-run` as the job user); nothing runs as root. `none`: in-process child of
+    the service, same user. For tests and development only."""
     mode: str = "systemd"
-    user: str = "oasalab-job"
-    socket: str = "/run/oasa-lab/jobrun.sock"   # the root helper's socket (deploy/systemd/oasa-lab-jobrun.socket)
-    memory_max: str = "4G"
-    tasks_max: int = 512
+    policy: str = DEFAULT_POLICY        # the root-owned lab policy (rf_setup, confirm_wiring, folders, ...)
+    systemctl: str = "/usr/bin/systemctl"
 
 
 @dataclass
@@ -98,7 +95,6 @@ class Config:
     job_timeout_seconds: float = 1800
     stop_grace_seconds: float = 10
     max_queued: int = 20
-    keep_checkouts: int = 5
     rf_setup: str = "unset"
     devices_file: str = ""  # the hardware suites' device file (lab.toml: serials, ports, cabling), passed to jobs
     confirm_wiring: dict[str, str] = field(default_factory=dict)  # suite -> wiring the owner says is connected
@@ -108,6 +104,7 @@ class Config:
     max_bundle_mb: int = 500              # the largest evidence bundle the service accepts from a job
     local_pause_file: str = ""            # an owner-only pause the API cannot clear (default: state_dir/LOCAL_PAUSE)
     sandbox: Sandbox = field(default_factory=Sandbox)
+    policy: Policy | None = None          # systemd mode: the root-owned lab policy; its values replace the lines below
     inventory_backend: str = "simulated"
     devices: list[Device] = field(default_factory=list)
     profiles: dict[str, Profile] = field(default_factory=dict)
@@ -158,7 +155,22 @@ def _is_loopback(host: str) -> bool:
         return host == "localhost"
 
 
-def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, str] | None = None) -> Config:
+# In systemd mode these live in the root-owned policy file only. A copy in service.toml could disagree with
+# what the job side enforces, so it is an error rather than a second source.
+POLICY_ONLY = {"service": ("devices_file", "min_commit", "branch", "job_timeout_seconds", "stop_grace_seconds", "local_pause_file"), "lab": None, "confirm_wiring": None}
+
+
+def _policy_only_keys(data: dict[str, Any]) -> list[str]:
+    bad = []
+    for section, keys in POLICY_ONLY.items():
+        body = data.get(section, {})
+        bad += [f"[{section}] {k}" for k in (body if keys is None else keys) if k in body]
+    return bad
+
+
+def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, str] | None = None,
+                 policy_uid: int = 0) -> Config:
+    """`policy_uid`: who must own the policy file (root). Only tests pass another value."""
     env = os.environ if env is None else env
     base = base or Path.cwd()
     s = data.get("service", {})
@@ -178,7 +190,6 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
     cfg.job_timeout_seconds = float(s.get("job_timeout_seconds", cfg.job_timeout_seconds))
     cfg.stop_grace_seconds = float(s.get("stop_grace_seconds", cfg.stop_grace_seconds))
     cfg.max_queued = int(s.get("max_queued", cfg.max_queued))
-    cfg.keep_checkouts = int(s.get("keep_checkouts", cfg.keep_checkouts))
     cfg.devices_file = str(s.get("devices_file", ""))
     _need(not cfg.devices_file or os.path.isabs(cfg.devices_file), "service.devices_file must be an absolute path")
     cfg.min_commit = str(s.get("min_commit", ""))
@@ -192,12 +203,11 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
     sb = data.get("sandbox", {})
     mode = str(sb.get("mode", "systemd"))
     _need(mode in ("systemd", "none"), "sandbox.mode must be systemd or none")
-    user = str(sb.get("user", "oasalab-job"))
-    _need(bool(re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user)) and user != "root", "sandbox.user must be an unprivileged user name")
-    _need(bool(re.fullmatch(r"[0-9]{1,6}[KMG]?", str(sb.get("memory_max", "4G")))), "sandbox.memory_max looks like 4G")
-    sock = str(sb.get("socket", Sandbox.socket))
-    _need(os.path.isabs(sock), "sandbox.socket must be an absolute path")
-    cfg.sandbox = Sandbox(mode, user, sock, str(sb.get("memory_max", "4G")), int(sb.get("tasks_max", 512)))
+    unknown = set(sb) - {"mode", "policy", "systemctl"}
+    _need(not unknown, f"sandbox: unknown key(s) {', '.join(sorted(unknown))}")
+    policy_path, systemctl = str(sb.get("policy", DEFAULT_POLICY)), str(sb.get("systemctl", Sandbox.systemctl))
+    _need(os.path.isabs(policy_path) and os.path.isabs(systemctl), "sandbox.policy and sandbox.systemctl must be absolute paths")
+    cfg.sandbox = Sandbox(mode, policy_path, systemctl)
     cfg.allowed_hosts = [str(h) for h in s.get("allowed_hosts", [])]
 
     cfg.rf_setup = str(lab.get("rf_setup", "unset"))
@@ -207,6 +217,20 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
         _need(bool(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", suite_name)) and bool(NAME_RE.match(str(wiring))),
               f"confirm_wiring: bad entry {suite_name!r} = {wiring!r}")
         cfg.confirm_wiring[suite_name] = str(wiring)
+    if cfg.sandbox.mode == "systemd":
+        stray = _policy_only_keys(data)
+        _need(not stray, f"{', '.join(stray)}: in systemd mode set these in the lab policy file ({policy_path}) only")
+        try:
+            pol = load_policy(policy_path, policy_uid)
+        except PolicyError as exc:
+            raise ConfigError(str(exc)) from None
+        cfg.policy = pol
+        cfg.rf_setup, cfg.confirm_wiring, cfg.devices_file = pol.rf_setup, dict(pol.confirm_wiring), pol.devices_file
+        cfg.min_commit, cfg.branch, cfg.job_timeout_seconds = pol.min_commit, pol.branch, pol.job_timeout_seconds
+        cfg.stop_grace_seconds, cfg.local_pause_file = pol.stop_grace_seconds, pol.pause_file
+        backend_in = str(data.get("inventory", {}).get("backend", "simulated"))
+        _need((backend_in == "simulated") == pol.simulated,
+              "inventory.backend must be 'simulated' exactly when the policy says simulated = true")
 
     inv = data.get("inventory", {})
     cfg.inventory_backend = str(inv.get("backend", "simulated"))

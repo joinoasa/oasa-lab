@@ -423,7 +423,7 @@ def test_redirect_uris_are_compared_by_parts(oauth_svc, uri):
 def test_config_redirect_hosts_are_parsed_not_prefix_matched():
     from pathlib import Path
     from oasa_lab.service.config import ConfigError, parse_config
-    base = {"service": {"port": 8765, "public_url": "http://127.0.0.1:8765"}, "users": [{"name": "o", "role": "admin", "github_id": 1}]}
+    base = {"service": {"port": 8765, "public_url": "http://127.0.0.1:8765"}, "sandbox": {"mode": "none"}, "users": [{"name": "o", "role": "admin", "github_id": 1}]}
     for bad in ("http://localhost.evil.example/cb", "http://127.0.0.1.evil.example/cb", "https://u@evil.example/cb"):
         with pytest.raises(ConfigError):
             parse_config({**base, "oauth": {"redirect_uris": [bad]}}, Path("."), {})

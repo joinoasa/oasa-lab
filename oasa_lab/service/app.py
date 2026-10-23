@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlparse
 
 from mcp.server.transport_security import TransportSecuritySettings
@@ -53,9 +54,11 @@ class Lab:
         self.audit = AuditLog(cfg.state_dir / "audit.jsonl")
         self.provider = LabOAuthProvider(cfg, self.audit, http)
         self.inventory = inventory or make_inventory(cfg)
-        self.checkouts = Checkouts(cfg.repo, cfg.branch, cfg.state_dir / "git", cfg.keep_checkouts,
-                                  cfg.min_commit)
+        pol = cfg.policy   # systemd mode: the git mirror belongs to root's timer; we only read it
+        self.checkouts = Checkouts(cfg.repo, cfg.branch, cfg.state_dir / "git", cfg.min_commit,
+                                  mirror=Path(pol.mirror) if pol else None, git_config=pol.git_config if pol else None)
         self.jobs = JobManager(cfg, self.checkouts, self.inventory, self.audit)
+        self.checkouts.refresh = getattr(self.jobs.sandbox, "refresh_mirror", None)
         self.auth = Authenticator(cfg, self.provider.lookup)
         self.mcp = build_mcp(cfg, self.jobs, self.inventory, self.audit, self.provider)
 

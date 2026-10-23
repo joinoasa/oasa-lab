@@ -1,8 +1,9 @@
 """The job queue. One job at a time, because the radios are shared.
 
-A job is `oasa-lab run SUITE --seed N` in a subprocess, from a fresh copy of the lab repo at a commit
-on main, run by the sandbox (another user, its own cgroup; see sandbox.py). Nothing a caller sends is ever
-run: only a suite name from the checkout's own list.
+A job is `oasa-lab run SUITE --seed N` for a commit on main, started by the sandbox (see sandbox.py): in the
+real lab a systemd unit that runs the installed `oasa-lab job-run` as another user, which checks the request
+again and applies the transmit lock itself. The service runs no code from any commit. Nothing a caller sends is
+ever run: only a suite name from the commit's own list.
 
 What a job wrote is never trusted. When it ends, the service copies the bundle out of the job's folder
 (plain files only, nothing followed), runs its own installed checker on the copy, and serves only the copy.
@@ -13,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import shutil
 import sys
 import uuid
@@ -25,12 +25,12 @@ from ..jsonl import now_rfc3339
 from .audit import AuditLog
 from .auth import Principal
 from . import files
+from ..policy import JOB_ID_RE, interlock, wiring_to_confirm
 from .checkout import SUITE_RE, Checkout, CheckoutError, Checkouts, read_suites
-from .config import RF_SAFE, Config
+from .config import Config
 from .inventory import Inventory
-from .sandbox import ENV_PASSTHROUGH, ENV_REQUEST, Launch, make_sandbox
+from .sandbox import ENV_REQUEST, Launch, make_sandbox
 
-JOB_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 MAX_SEED = 2**31 - 1
 ACTIVE = ("queued", "running")
 FINISHED = ("passed", "failed", "stopped", "error", "cancelled", "interrupted")
@@ -97,8 +97,10 @@ class JobManager:
                 continue
             if job.status in ACTIVE:  # the service was restarted under it
                 if job.status == "running":
-                    await self.sandbox.stop(job.id, None)  # a unit may still be running; stop its cgroup
-                shutil.rmtree(self.job_dir(job) / "src", ignore_errors=True)
+                    await self.sandbox.stop(job.id, None)  # a unit may still be running; stop it
+                await self.sandbox.clean(job.id, self.job_dir(job))
+                for leftover in ("src", "judge"):
+                    shutil.rmtree(self.job_dir(job) / leftover, ignore_errors=True)
                 job.status = "interrupted" if job.status == "running" else "cancelled"
                 job.stop_reason = "service restarted"
                 job.finished = now_rfc3339()
@@ -184,7 +186,7 @@ class JobManager:
         except CheckoutError as exc:
             raise JobError(502, f"cannot get the lab code: {exc}")
         try:
-            return co, await read_suites(co)
+            return co, await read_suites(self.checkouts, co)
         except CheckoutError as exc:
             raise JobError(502, str(exc))
 
@@ -214,27 +216,11 @@ class JobManager:
         return self.cfg.inventory_backend == "simulated"
 
     def _interlock(self, suite: dict) -> str | None:
-        """The transmit rules. 1) rf_setup must be cabled or shielded. 2) On a real bench the owner must
-        also have confirmed the suite's wiring in the config (the service passes --confirm-wiring)."""
-        if not self.simulated and suite["requires"] and not suite["transmits_declared"]:
-            return (f"refused: suite {suite['name']!r} needs hardware but its suite.toml does not say transmits = true "
-                    "or transmits = false")
-        if not suite["transmits"]:
-            return None
-        if self.cfg.rf_setup not in RF_SAFE:
-            return (f"refused: suite {suite['name']!r} transmits, and this lab's rf_setup is "
-                    f"{self.cfg.rf_setup!r} (must be one of: {', '.join(RF_SAFE)})")
-        if not self.simulated and not self.wiring_to_confirm(suite):
-            return (f"refused: suite {suite['name']!r} transmits on real hardware. Connect wiring "
-                    f"{suite['wiring'] or '(the suite names none)'!r} as in docs/hardware-suites.md, then set "
-                    f"[confirm_wiring] {suite['name']} = {suite['wiring']!r} in service.toml and restart the service")
-        return None
+        """The transmit rules (oasa_lab/policy.py, the same function `job-run` applies on its own side)."""
+        return interlock(suite, self.cfg.rf_setup, self.simulated, self.cfg.confirm_wiring)
 
     def wiring_to_confirm(self, suite: dict) -> str | None:
-        """The wiring name to pass as --confirm-wiring, or None. Only when the suite names a wiring and the
-        owner's config confirms exactly that one."""
-        w = suite.get("wiring") or ""
-        return w if w and self.cfg.confirm_wiring.get(suite["name"]) == w else None
+        return wiring_to_confirm(self.cfg.confirm_wiring, suite)
 
     def _disk_problem(self) -> str | None:
         free = shutil.disk_usage(self.cfg.state_dir if self.cfg.state_dir.exists() else self.cfg.state_dir.parent).free
@@ -262,7 +248,7 @@ class JobManager:
         except CheckoutError as exc:
             raise JobError(400 if commit else 502, str(exc))
         try:
-            suites = await read_suites(co)
+            suites = await read_suites(self.checkouts, co)
         except CheckoutError as exc:
             raise JobError(502, str(exc))
         if suite_name not in suites:
@@ -274,7 +260,7 @@ class JobManager:
             raise JobError(409, why)
         if (why := self._disk_problem()):
             raise JobError(507, why)
-        job = Job(id=uuid.uuid4().hex[:12], suite=suite_name, seed=seed, profile=profile,
+        job = Job(id=uuid.uuid4().hex, suite=suite_name, seed=seed, profile=profile,
                   requested_by=who.name, via=who.via, commit=co.sha, created=now_rfc3339(),
                   transmits=suite["transmits"],
                   wiring_confirmed=self.wiring_to_confirm(suite) if suite["transmits"] and not self.simulated else None)
@@ -339,7 +325,6 @@ class JobManager:
             finally:
                 self._proc = None
                 self._running_id = None
-                self.checkouts.prune({j.commit for j in self.jobs.values() if j.status in ACTIVE})
                 self.retain()
 
     def job_dir(self, job: Job) -> Path:
@@ -351,7 +336,7 @@ class JobManager:
         if job.profile:
             env["OASA_LAB_PROFILE"] = job.profile
             env["OASA_LAB_DEVICES"] = ",".join(self.cfg.profiles[job.profile].requires)
-        if self.sandbox.mode == "none":  # in systemd mode the root helper takes these from the owner's config
+        if self.sandbox.mode == "none":  # in systemd mode `job-run` takes these from the root-owned policy file
             env["OASA_LAB_RF_SETUP"] = self.cfg.rf_setup
             if self.simulated:
                 env["OASA_LAB_SIM"] = "1"  # the simulated service runs the hardware suites on the simulated bench
@@ -364,7 +349,7 @@ class JobManager:
             self._finish(job, "cancelled", f"lab paused by {p.get('by')}")
             return
         co = await self.checkouts.at(job.commit)
-        suite = (await read_suites(co)).get(job.suite)
+        suite = (await read_suites(self.checkouts, co)).get(job.suite)
         if suite is None:
             self._finish(job, "error", "suite is gone from this commit")
             return
@@ -373,7 +358,10 @@ class JobManager:
             return
         jd = self.job_dir(job)
         jd.mkdir(parents=True, exist_ok=True)
-        src = await self.checkouts.export(job.commit, jd / "src")  # this job's own copy of the code
+        if self.sandbox.mode == "none":
+            src = await self.checkouts.export(job.commit, jd / "src")  # this job's own copy of the code
+        else:  # the job's code is cloned by `job-run`; we only need the suites folder, as data, to judge the evidence
+            src = await self.checkouts.export_suites(job.commit, jd / "judge")
         launch = Launch(job.id, jd, job.suite, job.seed, job.commit, job.wiring_confirmed, self._launch_env(job))
         job.status, job.started = "running", now_rfc3339()
         self._running_id = job.id
@@ -407,17 +395,18 @@ class JobManager:
         elif job.exit_code in (0, 1) and job.check_ok is not None:
             self._finish(job, "failed")
         else:
-            self._finish(job, "error", f"oasa-lab exited with {job.exit_code}")
+            self._finish(job, "error", getattr(self._proc, "detail", None) or f"oasa-lab exited with {job.exit_code}")
 
     async def _collect(self, job: Job, jd: Path, src: Path) -> str | None:
         """Take the evidence out of the job's folder and judge it ourselves. Returns a problem, or None."""
-        names = files.list_dirs(jd / "runs")
+        runs = self.sandbox.runs_dir(job.id, jd)
+        names = files.list_dirs(runs)
         if not names:
             return None
         name = names[0]
         dest = jd / "verified" / name
         try:
-            stats = await asyncio.to_thread(files.copy_tree, jd / "runs", name, dest, self.cfg.max_bundle_mb * 1_000_000)
+            stats = await asyncio.to_thread(files.copy_tree, runs, name, dest, self.cfg.max_bundle_mb * 1_000_000)
         except (OSError, files.TooBig) as exc:
             return f"evidence rejected: {exc}"[:300]
         if stats["skipped"]:
@@ -492,8 +481,9 @@ class JobManager:
             return jd, ("stdout.log",)
         if job.bundle and self.bundle_dir(job):
             return jd / "verified", (job.bundle, "log.jsonl")
-        names = files.list_dirs(jd / "runs")  # a run in progress: the job's own folder, read without trust
-        return (jd / "runs", (names[0], "log.jsonl")) if names else None
+        runs = self.sandbox.runs_dir(job.id, jd)  # a run in progress: the job's own folder, read without trust
+        names = files.list_dirs(runs)
+        return (runs, (names[0], "log.jsonl")) if names else None
 
     def read_log(self, job: Job, offset: int = 0, stream: str = "log", max_bytes: int = 256_000) -> tuple[list[str], int]:
         """Complete lines of the live log from a byte offset. `stream` is "log" (log.jsonl) or "stdout".

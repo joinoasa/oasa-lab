@@ -65,6 +65,39 @@ def test_copy_tree_takes_plain_files_only_and_obeys_the_limits(tmp_path):
         files.copy_tree(root, "../runs", tmp_path / "copy4", 1000)
 
 
+def _nest(root: Path, depth: int) -> None:
+    """A folder `depth` levels deep, made one level at a time from a file descriptor (no path gets too long)."""
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    for _ in range(depth):
+        os.mkdir("d", dir_fd=fd)
+        nxt = os.open("d", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+        os.close(fd)
+        fd = nxt
+    os.close(fd)
+
+
+def test_copy_tree_rejects_deep_folders_whole(tmp_path):
+    root = tmp_path / "runs"
+    (root / "b").mkdir(parents=True)
+    (root / "b" / "a.txt").write_text("a")
+    _nest(root / "b", 10)
+    assert files.copy_tree(root, "b", tmp_path / "ok", 10**6)["files"] == 1
+    (root / "c").mkdir()
+    _nest(root / "c", 40)
+    with pytest.raises(files.TooBig, match="nested"):
+        files.copy_tree(root, "c", tmp_path / "deep", 10**6)
+    assert not (tmp_path / "deep").exists(), "nothing half-copied"
+
+
+def test_copy_tree_turns_a_recursion_error_into_a_clean_rejection(tmp_path):
+    root = tmp_path / "runs"
+    (root / "b").mkdir(parents=True)
+    _nest(root / "b", 3000)                                  # far past Python's recursion limit
+    with pytest.raises(files.TooBig):                        # not an uncaught RecursionError
+        files.copy_tree(root, "b", tmp_path / "deeper", 10**6, max_depth=10**6)
+    assert not (tmp_path / "deeper").exists()
+
+
 def _finished_job(svc):
     done = svc.wait(svc.submit("t-quick")["id"])
     assert done["status"] == "passed"
@@ -89,8 +122,8 @@ def test_a_forged_verdict_a_planted_link_and_a_swapped_result_do_not_count(make_
     (bundle / "leak.txt").symlink_to("/etc/hostname")                                 # planted link
     forged = jd / "runs" / (job.bundle + ".check.json")
     forged.write_text(json.dumps({"ok": True, "checker": {"name": "oasa-lab-checker", "version": "forged"}, "checks": []}))
-    suites = Path(jobs.checkouts.dirs) / job.commit / "suites"
-    problem = run(jobs._collect(fake, jd, suites.parent))
+    judge = run(jobs.checkouts.export_suites(job.commit, tmp_path / "judge"))
+    problem = run(jobs._collect(fake, jd, judge))
     assert problem is None and fake.check_ok is False, "the service's own checker must fail the swapped evidence"
     assert fake.checker != "forged"
     assert not (jobs.bundle_dir(fake) / "leak.txt").exists()
@@ -132,54 +165,72 @@ def test_results_name_the_checker_that_judged_them(make_service):
     assert res["checker"]["version"] == done["checker"] and f"checker {done['checker']}" in res["judged_by"]
 
 
-# --- one suite parser, from the checkout (M3) ------------------------------------------------------------
-def _checkout_with(tmp_path, suites: dict[str, str], parser_edit=None) -> Checkout:
-    co = tmp_path / "co"
-    (co / "oasa_lab").mkdir(parents=True)
-    src = (ROOT / "oasa_lab" / "suites.py").read_text()
-    (co / "oasa_lab" / "suites.py").write_text(parser_edit(src) if parser_edit else src)
+# --- suites are read as data, by the installed parser (M3) ------------------------------------------------
+EVIL_PARSER = "import os\nopen(os.environ.get('MARKER', '/tmp/oasa-evil-marker'), 'w').write('ran')\n"
+
+
+def _suite_repo(tmp_path, suites: dict[str, str], extra_files: dict[str, str] | None = None):
+    repo = tmp_path / "suite-repo"
+    repo.mkdir()
+    subprocess.run([*GIT, "init", "-q", "-b", "main", str(repo)], check=True)
     for name, toml in suites.items():
-        (co / "suites" / name).mkdir(parents=True)
-        (co / "suites" / name / "suite.toml").write_text(toml)
-    return Checkout("a" * 40, co)
+        (repo / "suites" / name).mkdir(parents=True)
+        (repo / "suites" / name / "suite.toml").write_text(toml)
+    for rel, text in (extra_files or {}).items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text)
+    (repo / "suites" / "linked").mkdir(parents=True, exist_ok=True)
+    (repo / "suites" / "linked" / "suite.toml").symlink_to("/etc/hostname")      # a link is not a suite file
+    subprocess.run([*GIT, "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run([*GIT, "-C", str(repo), "commit", "-q", "-m", "s"], check=True)
+    sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    return repo, sha
 
 
-def test_suites_come_from_the_checkouts_own_parser(tmp_path, monkeypatch):
+def test_suites_are_parsed_by_the_installed_parser_and_no_checkout_code_runs(tmp_path, monkeypatch):
     from oasa_lab.service import checkout as ck
 
     monkeypatch.setattr(ck, "_SUITES", {})
-    co = _checkout_with(tmp_path, {"l2-x": 'description = "x"\ntransmits = true\nrequires = ["pluto", "serial-radio:2"]\nwiring = "w"\n'},
-                        parser_edit=lambda s: s.replace('"wiring": s.wiring', '"wiring": "from-the-checkout"'))
-    found = run(read_suites(co))
+    marker = tmp_path / "marker"
+    monkeypatch.setenv("MARKER", str(marker))
+    # a commit that ships its own (hostile) oasa_lab/suites.py, sitecustomize.py and conftest.py
+    repo, sha = _suite_repo(tmp_path, {"l2-x": 'description = "x"\ntransmits = true\nrequires = ["pluto", "serial-radio:2"]\nwiring = "w"\n'},
+                            {"oasa_lab/suites.py": EVIL_PARSER, "sitecustomize.py": EVIL_PARSER, "conftest.py": EVIL_PARSER})
+    cks = Checkouts(str(repo), "main", tmp_path / "git")
+    co = run(cks.at(sha))
+    found = run(read_suites(cks, co))
     assert found["l2-x"] == {"name": "l2-x", "description": "x", "transmits": True, "transmits_declared": True,
-                             "wiring": "from-the-checkout", "requires": ["pluto", "serial-radio:2"]}
+                             "wiring": "w", "requires": ["pluto", "serial-radio:2"]}
+    assert not marker.exists(), "nothing from the commit may run in the service"
+    assert not (tmp_path / "git" / "checkouts").exists(), "the service makes no checkout at all"
 
 
 def test_suite_list_edge_cases(tmp_path, monkeypatch):
     from oasa_lab.service import checkout as ck
 
     monkeypatch.setattr(ck, "_SUITES", {})
-    co = _checkout_with(tmp_path, {
+    repo, sha = _suite_repo(tmp_path, {
         "ok": 'description = "fine"\n',
         "broken": "this is = not [toml",
         "stringy": 'description = "s"\ntransmits = "yes"\n',
         "_hidden": 'description = "h"\n',
         "bad-req": 'description = "b"\nrequires = ["Pluto; rm -rf /"]\n',
+        "huge": 'description = "' + "x" * 70000 + '"\n',
     })
-    (co.path / "suites" / "linked").symlink_to(co.path / "suites" / "ok")
-    found = run(read_suites(co))
+    cks = Checkouts(str(repo), "main", tmp_path / "git")
+    found = run(read_suites(cks, run(cks.at(sha))))
     assert set(found) == {"ok", "stringy"}
     # the runner's reading of a non-boolean is "yes, it transmits" (the cautious one); it is not a declaration
     assert found["stringy"]["transmits"] is True and found["stringy"]["transmits_declared"] is False
 
 
-def test_a_suite_list_that_hangs_is_cut_off(tmp_path, monkeypatch):
-    from oasa_lab.service import checkout as ck
-
-    monkeypatch.setattr(ck, "_SUITES", {})
-    co = _checkout_with(tmp_path, {}, parser_edit=lambda s: s.replace("from __future__ import annotations", "from __future__ import annotations\nimport time\ntime.sleep(60)", 1))
-    with pytest.raises(CheckoutError, match="timed out"):
-        run(read_suites(co, timeout=1))
+def test_the_suites_copy_for_the_checker_has_plain_files_only(tmp_path):
+    repo, sha = _suite_repo(tmp_path, {"ok": 'description = "fine"\n'}, {"suites/ok/test_a.py": "def test_a(): pass\n"})
+    cks = Checkouts(str(repo), "main", tmp_path / "git")
+    run(cks.at(sha))
+    root = run(cks.export_suites(sha, tmp_path / "judge"))
+    assert (root / "suites" / "ok" / "suite.toml").is_file() and (root / "suites" / "ok" / "test_a.py").is_file()
+    assert not any(p.is_symlink() for p in (root / "suites").rglob("*")), "a link in the commit is not copied"
 
 
 def test_the_service_does_not_keep_a_second_suite_parser():

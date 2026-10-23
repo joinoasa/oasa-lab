@@ -39,7 +39,9 @@ How to use it:
 - stop_job stops a run. pause_lab refuses new runs and cancels the queue (admin only).
 """
 
-JobId = Annotated[str, Field(description="Job id from run_suite or job_status", pattern=r"^[0-9a-f]{12}$")]
+# No pattern or range limits in the schemas on purpose: our own checks (jobs.py) run, and the audit log
+# records the refused call. The schema only types and describes.
+JobId = Annotated[str, Field(description="Job id (12 hex characters) from run_suite or job_status")]
 READ = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False)
 STOP = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False)
@@ -51,7 +53,7 @@ def build_mcp(cfg: Config, jobs: JobManager, inventory: Inventory, audit: AuditL
     from .oauth import SCOPE
 
     mcp = MCPServer(
-        "oasa-lab", title="OASA lab", instructions=INSTRUCTIONS, version="0.1",
+        "oasa-lab", title="OASA lab", instructions=INSTRUCTIONS, version="0.1", log_level="WARNING",
         auth_server_provider=provider,
         auth=AuthSettings(
             issuer_url=cfg.public_url, resource_server_url=cfg.mcp_url, validate_token_resource=True,
@@ -109,8 +111,8 @@ def build_mcp(cfg: Config, jobs: JobManager, inventory: Inventory, audit: AuditL
     @tool("run_suite", WRITE, "run", "Run a suite")
     async def run_suite(
         p: Principal,
-        suite: Annotated[str, Field(description="Suite name from list_suites, e.g. l1-channel", pattern=r"^[a-z0-9][a-z0-9-]*$", max_length=64)],
-        seed: Annotated[int, Field(description="Seed for every random choice", ge=0, le=2**31 - 1)] = 0,
+        suite: Annotated[str, Field(description="Suite name from list_suites, e.g. l1-channel")],
+        seed: Annotated[int, Field(description="Seed for every random choice, 0 to 2147483647")] = 0,
         profile: Annotated[str | None, Field(description="Hardware profile name from lab_status, if the suite needs radios")] = None,
     ) -> dict:
         """Queue a run of one suite on the lab's latest main. One job runs at a time. Returns the job;

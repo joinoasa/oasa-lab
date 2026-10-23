@@ -21,7 +21,8 @@ run /opt/oasa-lab/venv/bin/pip install --quiet --upgrade "oasa-lab[service] @ gi
 
 say "Config (kept if it already exists)"
 [ -f /etc/oasa-lab/lab.toml ] || run install -m 0640 -o root -g oasalab "$HERE/lab.toml.example" /etc/oasa-lab/lab.toml
-[ -f /etc/oasa-lab/env ] || run install -m 0640 -o root -g oasalab "$HERE/.env.example" /etc/oasa-lab/env
+# The env file holds the GitHub client secret. systemd reads it as root, so the service user need not.
+[ -f /etc/oasa-lab/env ] || run install -m 0600 -o root -g root "$HERE/.env.example" /etc/oasa-lab/env
 
 say "systemd unit"
 write_file /etc/systemd/system/oasa-lab.service 0644 root:root < "$HERE/systemd/oasa-lab.service"

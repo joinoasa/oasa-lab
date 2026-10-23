@@ -95,6 +95,10 @@ class JobManager:
         if self._running_id:
             self._stop_requests[self._running_id] = "service shutting down"
             await self._kill()
+            for _ in range(100):  # let the worker write the job's end before we cancel it
+                if self._running_id is None:
+                    break
+                await asyncio.sleep(0.05)
         if self._worker:
             self._worker.cancel()
             try:

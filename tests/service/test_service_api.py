@@ -395,7 +395,7 @@ def test_jobs_running_when_the_service_stopped_are_marked_interrupted(make_servi
     s2 = start(lab_repo, state)
     try:
         ja, jb = s2.lab.jobs.get(a["id"]), s2.lab.jobs.get(b["id"])
-        assert ja.status in ("stopped", "interrupted") and jb.status == "cancelled"
+        assert ja.status == "stopped" and ja.stop_reason == "service shutting down" and jb.status == "cancelled"
     finally:
         stop(s2)
 

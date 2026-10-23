@@ -65,6 +65,6 @@ jobs:
           if-no-files-found: error
       - name: Attest the bundle
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ matrix.suite }}-bundle.tar.gz

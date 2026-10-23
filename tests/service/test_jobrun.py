@@ -241,6 +241,18 @@ def test_a_second_job_is_refused_while_one_runs(bench, spy):
     assert job(bench) == 0 and len(spy) == 1
 
 
+@pytest.mark.parametrize("plant", ["folder", "symlink"])
+def test_a_planted_lock_refuses_cleanly(bench, spy, plant):
+    bench.request(ID)
+    lock = bench.results / ".lock"
+    if plant == "folder":
+        lock.mkdir()
+    else:
+        lock.symlink_to(bench.results / "elsewhere")
+    assert job(bench) == jobrunner.EX_REFUSED
+    assert not spy and not (bench.results / ID).exists()
+
+
 def test_the_owners_pause_file_stops_a_job_even_if_the_service_asks(bench, spy):
     bench.request(ID)
     (bench.root / "PAUSE").write_text("")

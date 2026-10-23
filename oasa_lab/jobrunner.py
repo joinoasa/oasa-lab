@@ -22,6 +22,7 @@ protected. The service does not run it, and cannot choose the user, the folders,
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
@@ -315,7 +316,15 @@ def run_job(job_id: str, policy_path: str = DEFAULT_POLICY, *, policy_uid: int =
     except (PolicyError, Refused) as exc:
         print(f"job-run: refused: {exc}", file=sys.stderr)
         return EX_REFUSED
-    lock = os.open(os.path.join(results, ".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        lock = os.open(os.path.join(results, ".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        if not stat.S_ISREG(os.fstat(lock).st_mode):
+            os.close(lock)
+            raise OSError(errno.EINVAL, "not a regular file")
+    except OSError as exc:
+        # A planted folder or symlink at .lock must refuse cleanly, not crash.
+        print(f"job-run: refused: results/.lock is unusable ({exc.strerror}); remove it as root", file=sys.stderr)
+        return EX_REFUSED
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:

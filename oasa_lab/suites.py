@@ -62,21 +62,32 @@ class Suite:
         }
 
 
-def load_suite(path: Path) -> Suite:
-    data = tomllib.loads((path / "suite.toml").read_text(encoding="utf-8"))
+def parse_suite(name: str, text: str, path: Path | None = None) -> Suite:
+    """Parse the text of a suite.toml. The one parser: `oasa-lab run`, the job service and `job-run` all use it."""
+    data = tomllib.loads(text)
     return Suite(
-        name=path.name,
-        path=path,
+        name=name,
+        path=path or Path(name),
         description=str(data.get("description", "")),
         expectations=[str(x) for x in data.get("expectations", [])],
         captures=dict(data.get("captures", {})),
-        hidden=path.name.startswith("_"),
+        hidden=name.startswith("_"),
         transmits=bool(data.get("transmits", False)),
         transmits_declared=isinstance(data.get("transmits"), bool),
         requires=[str(x) for x in data.get("requires", [])],
         wiring=str(data.get("wiring", "")),
         limits={str(k): dict(v) for k, v in (data.get("limits") or {}).items()},
     )
+
+
+def load_suite(path: Path) -> Suite:
+    return parse_suite(path.name, (path / "suite.toml").read_text(encoding="utf-8"), path)
+
+
+def suite_facts(s: Suite) -> dict:
+    """What the job service and `job-run` need to decide whether a suite may run."""
+    return {"name": s.name, "description": s.description, "transmits": s.transmits,
+            "transmits_declared": s.transmits_declared, "wiring": s.wiring, "requires": list(s.requires)}
 
 
 def list_suites(include_hidden: bool = False) -> list[Suite]:
@@ -91,35 +102,3 @@ def find_suite(name: str) -> Suite:
         known = ", ".join(s.name for s in list_suites()) or "none"
         raise SystemExit(f"oasa-lab: no suite named {name!r}. Suites: {known}")
     return load_suite(path)
-
-
-def main(argv: list[str] | None = None) -> int:
-    """`python -I oasa_lab/suites.py --json [--suites-dir DIR]`: what the job service reads from a checkout.
-
-    Standard library only, and it reads files without running anything. A suite whose suite.toml does not
-    parse is listed with an `error`, never skipped silently."""
-    import argparse
-    import json
-
-    ap = argparse.ArgumentParser(description="List the suites as JSON.")
-    ap.add_argument("--json", action="store_true", required=True)
-    ap.add_argument("--suites-dir")
-    args = ap.parse_args(argv)
-    root = Path(args.suites_dir).resolve() if args.suites_dir else suites_dir()
-    out = []
-    for p in sorted(root.iterdir()) if root.is_dir() else []:
-        if p.name.startswith("_") or p.is_symlink() or not (p / "suite.toml").is_file():
-            continue
-        try:
-            s = load_suite(p)
-        except (OSError, ValueError) as exc:
-            out.append({"name": p.name, "error": str(exc)[:200]})
-            continue
-        out.append({"name": s.name, "description": s.description, "transmits": s.transmits,
-                    "transmits_declared": s.transmits_declared, "requires": s.requires, "wiring": s.wiring})
-    print(json.dumps(out))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -19,6 +19,10 @@ def main(argv: list[str] | None = None) -> int:
         from .service import server
 
         return server.serve(argv[1:]) if argv[0] == "serve" else server.token(argv[1:])
+    if argv and argv[0] == "job-run":  # started by oasa-lab-job@.service, not by people
+        from .jobrunner import main as job_run_main
+
+        return job_run_main(argv[1:])
     p = argparse.ArgumentParser(prog="oasa-lab", description="OASA test lab.")
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a suite, write the evidence bundle, check it")
@@ -43,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("channel", help="run the simulated channel standalone (oasa-lab channel --help)")
     sub.add_parser("serve", help="run the remote job service and Claude connector (oasa-lab serve --help)")
     sub.add_parser("token", help="make an API token for the job service (oasa-lab token --help)")
+    sub.add_parser("job-run", help="run one queued job as the job user (started by oasa-lab-job@.service; not for people)")
     args = p.parse_args(argv)
 
     if args.cmd == "list":

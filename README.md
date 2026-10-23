@@ -101,7 +101,7 @@ oasa-lab serve --config service.toml                    # localhost only
 ```
 
 - Only suite names from the repo run. No code, shell or paths.
-- Suites that transmit (`transmits = true` in `suite.toml`) are refused unless the lab config says `rf_setup = "cabled"` or `"shielded"`. On real hardware you also confirm each suite's wiring in the config (`[confirm_wiring]`); the service then passes `--confirm-wiring`.
+- Suites that transmit (`transmits = true` in `suite.toml`) are refused unless the lab policy (`/etc/oasa-lab/lab-policy.toml`, root-owned) says `rf_setup = "cabled"` or `"shielded"`. On real hardware you also confirm each suite's wiring there (`[confirm_wiring]`); `oasa-lab job-run` checks the same file before any suite code runs and then passes `--confirm-wiring`.
 - Stop a job, or pause the whole lab, any time. Every request is in an audit log.
 - Sign-in for Claude is GitHub, owner only. The lab PC dials out through a Cloudflare Tunnel and opens no inbound port.
 

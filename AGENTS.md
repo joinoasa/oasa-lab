@@ -27,7 +27,7 @@ Follow the [OASA software standard](https://joinoasa.org/docs/software-standard/
 | `pip install -e '.[service]'` | Add the job service and Claude connector |
 | `oasa-lab serve --config service.toml` | Run the remote job service (localhost only); `--check` only checks the config |
 | `oasa-lab token NAME --user USER` | Make an API token (shown once; the config keeps only its hash) |
-| `pytest -o addopts="" tests/service` | Job service tests (needs the `service` extra; CI runs them) |
+| `pytest -o addopts="" tests/service` | Job service tests (needs the `service` extra; CI runs them; the polkit test uses node when present) |
 | `tail -f runs/*/log.jsonl` | Watch a run live |
 | `pytest -p oasa_lab.pytest_plugin suites/l0-lab` | A suite without a bundle (quick local loop) |
 
@@ -49,7 +49,8 @@ Run `l0-lab`, `l1-channel`, `l1-plaintext-control`, `l1-profiles`, and with `OAS
 
 - `oasa_lab/service/` runs suites for remote callers. Docs: [docs/remote-lab.md](docs/remote-lab.md). Setup scripts: `deploy/`.
 - **Never run anything a caller sends.** Only a suite name from the checked-out repo, a seed and a hardware profile from the config. Keep it that way; a test covers the bad inputs.
-- A suite that puts RF on a cable or the air sets `transmits = true` in `suite.toml`. The service reads it with the same parser as the runner and refuses it unless the lab is `cabled` or `shielded`, and, on real hardware, the owner has set that suite's wiring in `[confirm_wiring]`. Never add a second parser for `transmits` or `requires`.
+- A suite that puts RF on a cable or the air sets `transmits = true` in `suite.toml`. The service reads it with the same parser as the runner and refuses it unless the lab is `cabled` or `shielded`, and, on real hardware, the owner has set that suite's wiring in `[confirm_wiring]` of the root-owned `lab-policy.toml`. `oasa-lab job-run` (installed code, run as the job user) applies the same rule again (`oasa_lab/policy.py`) before any suite code runs. Never add a second parser for `transmits` or `requires`, and never run code from a commit in the service: read `suite.toml` as data.
+- No OASA program runs as root. The service may only write a job request and `systemctl start`/`stop` `oasa-lab-job@<id>.service` (polkit rule in `deploy/polkit/`). Keep the id pattern (32 lowercase hex) the same in `policy.py` and the rule; a test compares them.
 - No secrets in the repo, the audit log or job environments. Tokens are stored as hashes. `deploy/*.example` hold placeholders only.
 - A change to auth, the interlock or the audit log needs a test in `tests/service/`.
 

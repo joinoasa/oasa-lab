@@ -7,8 +7,18 @@
 . "$(dirname "$0")/lib.sh"
 need_root; check_os
 
+SAVED=/var/lib/oasa-fw/previous.nft     # the rules that were loaded before we changed anything
+PENDING=/var/lib/oasa-fw/pending          # present from "apply" until "--confirm"
+ROLLBACK=/usr/local/sbin/oasa-fw-rollback
+
+stop_rollback() {
+  run systemctl stop oasa-fw-rollback.timer oasa-fw-rollback.service 2>/dev/null || true
+  run systemctl reset-failed oasa-fw-rollback.timer oasa-fw-rollback.service 2>/dev/null || true
+}
+
 if [ "${1:-}" = "--confirm" ]; then
-  run systemctl stop oasa-fw-rollback.timer 2>/dev/null || true
+  stop_rollback
+  run rm -f "$PENDING"
   run systemctl enable --now nftables
   say "Firewall kept and enabled at boot"
   exit 0
@@ -53,11 +63,29 @@ EOF
 say "Checking the rules"
 run nft -c -f /etc/nftables.conf
 
+say "Saving the rules that are loaded now, so an undo puts them back (not an empty firewall)"
+run install -d -m 0700 /var/lib/oasa-fw
+if [ ! -e "$PENDING" ]; then
+  # First apply since the last confirm. If you run this script again before confirming, the saved set stays the original.
+  if [ "$DRY_RUN" = 1 ]; then note "DRY: would save nft list ruleset to $SAVED"; else
+    nft list ruleset > "$SAVED"
+    : > "$PENDING"
+    note "saved $(wc -l < "$SAVED") lines to $SAVED"
+  fi
+fi
+write_file "$ROLLBACK" 0750 root:root <<'EOF'
+#!/bin/sh
+# Undo an unconfirmed firewall change: put back the rules that were loaded before, or none if there were none.
+nft flush ruleset
+if [ -s /var/lib/oasa-fw/previous.nft ]; then nft -f /var/lib/oasa-fw/previous.nft; fi
+EOF
+
 say "Applying (undo timer: 2 minutes)"
-run systemd-run --unit=oasa-fw-rollback --on-active=120 --description="undo OASA firewall unless confirmed" /usr/sbin/nft flush ruleset
+stop_rollback                      # running this script again must not fail on an old timer
+run systemd-run --unit=oasa-fw-rollback --on-active=120 --description="undo OASA firewall unless confirmed" "$ROLLBACK"
 run nft -f /etc/nftables.conf
 
 say "Applied"
 owner "Open a NEW terminal and make sure you can still log in (over WireGuard, or the LAN if you set SSH_FROM_LAN_CIDR)."
 note "If it works, within 2 minutes run:  sudo ./03-firewall.sh --confirm"
-note "If you are locked out, wait 2 minutes: the firewall undoes itself."
+note "If you are locked out, wait 2 minutes: the firewall goes back to what it was before ($SAVED)."

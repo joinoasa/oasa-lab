@@ -12,3 +12,4 @@ dist/
 /service.toml
 /deploy/setup.env
 /state/
+*.whl

@@ -22,6 +22,18 @@ curl -fsS --max-time 3 http://127.0.0.1:8742/healthz >/dev/null && pass "healthz
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:8742/api/lab)"
 [ "$code" = 401 ] && pass "API without a token is refused (401)" || fail "API without a token returned $code"
 
+echo "Job sandbox:"
+id oasalab-job >/dev/null 2>&1 && pass "the job user oasalab-job exists" || fail "no oasalab-job user (run 05-service.sh)"
+[ "$(id -u oasalab-job 2>/dev/null)" != "$(id -u oasalab 2>/dev/null)" ] && pass "jobs and the service are different users" || fail "jobs run as the service user"
+systemctl is-active --quiet oasa-lab-jobrun.socket && pass "the job helper socket is listening" || fail "oasa-lab-jobrun.socket is not active"
+[ "$(stat -c '%U:%a' /run/oasa-lab/jobrun.sock 2>/dev/null)" = "oasalab:600" ] && pass "only oasalab can open the helper socket" || fail "helper socket permissions are not oasalab:600"
+[ "$(stat -c '%U:%G:%a' /etc/oasa-lab 2>/dev/null)" = "root:oasalab:750" ] && pass "/etc/oasa-lab is root-owned (the service cannot edit its own config)" || fail "/etc/oasa-lab is not root:oasalab 750"
+[ "$(stat -c '%U' /opt/oasa-lab/venv/bin/python 2>/dev/null)" = "root" ] && pass "the program is root-owned" || fail "the program is not root-owned"
+grep -q '^mode *= *"systemd"' /etc/oasa-lab/service.toml && pass "sandbox mode is systemd" || fail "sandbox mode is not systemd"
+/opt/oasa-lab/venv/bin/python -I -m oasa_lab.service.jobrun selftest >/dev/null 2>&1 && pass "sandbox self-test passed (other user, no access to the service's files, read-only code)" || fail "sandbox self-test failed: run it by hand to see why: sudo /opt/oasa-lab/venv/bin/python -I -m oasa_lab.service.jobrun selftest"
+[ -e /etc/oasa-lab/PAUSE ] && note_paused="  (note: the lab is paused by /etc/oasa-lab/PAUSE)" || note_paused=""
+echo "    pause file: /etc/oasa-lab/PAUSE${note_paused}"
+
 echo "Firewall:"
 nft list ruleset 2>/dev/null | grep -q 'policy drop' && pass "nftables input policy is drop" || fail "no default-deny firewall loaded"
 [ "$(sysctl -n net.ipv4.ip_forward)" = 0 ] && pass "IP forwarding is off" || fail "IP forwarding is on"

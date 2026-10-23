@@ -10,12 +10,32 @@ public_url = "https://lab-mcp.example.com"          # OWNER: your hostname
 api_public_url = "https://lab-api.example.com"      # OWNER: your hostname, or delete this line
 state_dir = "/var/lib/oasa-lab"
 # The hardware suites' device file (see lab.example.toml). Jobs get it as OASA_LAB_INVENTORY.
-devices_file = "/etc/oasa-lab/lab.toml"
+# Outside /etc/oasa-lab on purpose: jobs cannot see that folder, and this file has no secrets.
+devices_file = "/etc/oasa-lab.d/lab.toml"
 repo = "https://github.com/joinoasa/oasa-lab"
 branch = "main"
 job_timeout_seconds = 1800
 stop_grace_seconds = 10
 max_queued = 20
+# The oldest commit a caller may ask for with "commit": (a full 40-character id). Leave empty to allow any commit on main.
+# Set it when a suite or the checker is fixed and the older versions must not run any more.
+min_commit = ""
+# Finished jobs whose evidence is kept on disk; the oldest beyond this are deleted.
+keep_jobs = 100
+min_free_mb = 2000                     # a job does not start with less free disk than this
+max_bundle_mb = 500                    # the largest evidence bundle accepted from a job
+# Your own pause switch, from a shell: `sudo touch /etc/oasa-lab/PAUSE`. While the file exists no job starts, and no
+# API or Claude call can remove it. (The folder is root's; the service can look but not change.)
+local_pause_file = "/etc/oasa-lab/PAUSE"
+
+[sandbox]
+# How jobs run: as the unprivileged user "oasalab-job", in their own systemd unit and cgroup, started by a small
+# root helper (oasa-lab-jobrun.socket). Do not set mode = "none" on the lab PC.
+mode = "systemd"
+user = "oasalab-job"
+socket = "/run/oasa-lab/jobrun.sock"
+memory_max = "4G"
+tasks_max = 512
 
 [lab]
 # How the radios are connected. The service refuses suites that transmit unless this is

@@ -18,8 +18,19 @@ fi
 : "${OWNER_WG_PUBKEY:=}"
 : "${OWNER_WG_IP:=10.77.0.2/32}"
 : "${SSH_FROM_LAN_CIDR:=}"    # empty = no SSH from the LAN, only over WireGuard
-: "${LAB_REF:=main}"          # which branch or tag of oasa-lab to install the service from
+: "${LAB_REF:=}"              # REQUIRED: the commit (40 hex characters) or release tag of oasa-lab to install
 : "${LAB_REPO_URL:=https://github.com/joinoasa/oasa-lab}"
+
+# resolve_ref REF -> prints the 40-character commit id. A full commit id is used as it is; a tag is looked up once
+# and the commit is what gets installed (a moved tag later changes nothing). A branch name is refused: it moves.
+resolve_ref() {
+  local ref="$1" sha
+  [ -n "$ref" ] || die "set LAB_REF in deploy/setup.env to the oasa-lab commit or release tag to install (see: git ls-remote $LAB_REPO_URL 'refs/tags/*')"
+  if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then echo "$ref"; return 0; fi
+  sha="$(git ls-remote "$LAB_REPO_URL" "refs/tags/$ref^{}" "refs/tags/$ref" | awk 'NR==1{print $1}')"
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "LAB_REF='$ref' is not a full commit id or a tag of $LAB_REPO_URL. Branch names are not accepted: they move."
+  echo "$sha"
+}
 
 say()  { printf '\n==> %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }

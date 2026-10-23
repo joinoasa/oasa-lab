@@ -1,25 +1,38 @@
 [Unit]
 Description=OASA lab job service and Claude connector
 Documentation=https://github.com/joinoasa/oasa-lab/blob/main/docs/remote-lab.md
-After=network-online.target
+After=network-online.target oasa-lab-jobrun.socket
 Wants=network-online.target
+Requires=oasa-lab-jobrun.socket
 
 [Service]
 User=oasalab
 Group=oasalab
-SupplementaryGroups=plugdev dialout
+# No radio groups here. Jobs run as oasalab-job (which has them); this service only reads USB ids from sysfs.
 EnvironmentFile=/etc/oasa-lab/env
 ExecStart=/opt/oasa-lab/venv/bin/oasa-lab serve --config /etc/oasa-lab/service.toml
 Restart=on-failure
 RestartSec=5
-# A stop kills every process of every job (radio tools included).
+# Jobs run in their own units (oasa-job-*); stopping the service stops the running job first.
 KillMode=control-group
 TimeoutStopSec=30
 UMask=0027
 WorkingDirectory=/var/lib/oasa-lab
 
-# Hardening. The service needs: its state folder, USB devices, and outbound network (GitHub, git).
+# Hardening. The service needs: its state folder, the job helper's socket, and outbound network (GitHub, git).
 NoNewPrivileges=yes
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+DevicePolicy=closed
+DeviceAllow=char-usb_device rw
+DeviceAllow=char-ttyUSB rw
+DeviceAllow=char-ttyACM rw
+MemoryMax=2G
+TasksMax=256
+LimitNOFILE=4096
+LimitCORE=0
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/oasa-lab

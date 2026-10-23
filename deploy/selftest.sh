@@ -14,9 +14,10 @@ asservice() { runuser -u oasalab -- "$@"; }
 ID=00000000000000000000000000005e1f           # 32 hex, no request in the spool: job-run must refuse it, cleanly
 UNIT="oasa-lab-job@${ID}.service"
 RES=/var/lib/oasa-lab/results
+ERR="$(mktemp)"; trap 'rm -f "$ERR"' EXIT
 
 echo "The service user and the job unit:"
-if asservice systemctl --no-ask-password start --no-block "$UNIT" 2>/tmp/oasa-selftest.err; then pass "oasalab may start $UNIT"; else fail "oasalab could not start the job unit: $(cat /tmp/oasa-selftest.err)"; fi
+if asservice systemctl --no-ask-password start --no-block "$UNIT" 2>"$ERR"; then pass "oasalab may start $UNIT"; else fail "oasalab could not start the job unit: $(cat "$ERR")"; fi
 for _ in $(seq 1 60); do [ -s "$RES/$ID/exit.json" ] && break; sleep 0.5; done
 if [ -s "$RES/$ID/exit.json" ]; then pass "the job wrote results/$ID/exit.json"; else fail "no exit.json after 30 s (journalctl -u '$UNIT')"; fi
 [ "$(stat -c '%U' "$RES/$ID" 2>/dev/null)" = oasalab-job ] && pass "the results folder belongs to oasalab-job" || fail "results/$ID is not owned by oasalab-job"

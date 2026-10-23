@@ -86,7 +86,7 @@ done
 write_file /etc/polkit-1/rules.d/50-oasa-lab.rules 0644 root:root < "$HERE/polkit/50-oasa-lab.rules"
 run systemctl daemon-reload
 if [ ! -e /var/lib/oasa-lab/mirror.git/HEAD ]; then
-  run sudo -u oasalab-mirror git init --bare -q -b "$LAB_BRANCH" /var/lib/oasa-lab/mirror.git
+  run runuser -u oasalab-mirror -- git init --bare -q -b "$LAB_BRANCH" /var/lib/oasa-lab/mirror.git
 fi
 run systemctl enable --now oasa-lab-mirror.timer
 run systemctl start oasa-lab-mirror.service

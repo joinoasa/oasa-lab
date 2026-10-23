@@ -67,7 +67,7 @@ Installed with it:
 | click, idna, truststore | 8.5.0 / 3.20 | BSD-3-Clause / BSD-3-Clause / MIT | Pulled in by uvicorn, httpx2 |
 | typing-extensions | 4.16.0 | PSF-2.0 (Python's own permissive license) | Typing backports |
 
-The exact versions and file hashes are pinned in `deploy/requirements.lock`; the deploy installs with `--require-hashes`. The lock files are made with `uv` (Apache-2.0 OR MIT), a build-time tool only, never installed on the lab PC. The root job helper uses the standard library and `systemd-run` (LGPL, a system tool we call, not link).
+The exact versions and file hashes are pinned in `deploy/requirements.lock`; the deploy installs with `--require-hashes`. The lock files are made with `uv` (Apache-2.0 OR MIT), a build-time tool only, never installed on the lab PC. `oasa-lab job-run` uses the standard library and calls `git` and (through the service) `systemctl`; both are system tools we call, not link.
 
 The service itself uses only these and the standard library. It reads the lab's own suites from git; it adds no code from outside to a run.
 
@@ -78,11 +78,14 @@ The service itself uses only these and the standard library. It reads the lab's 
 | [cloudflared](https://github.com/cloudflare/cloudflared) | Apache-2.0 | The tunnel to Cloudflare. Outbound only. |
 | [WireGuard](https://www.wireguard.com) (`wireguard-tools`, kernel module) | GPL-2.0 | Maintenance access for the owner |
 | [nftables](https://netfilter.org/projects/nftables/) | GPL-2.0 | The firewall |
+| [polkit](https://gitlab.freedesktop.org/polkit/polkit) (`polkitd`) | LGPL-2.0-or-later | Lets the service user start and stop only job units (`deploy/polkit/50-oasa-lab.rules`) |
+| [systemd](https://systemd.io) | LGPL-2.1-or-later | Runs the service, the job unit (sandbox) and the mirror timer |
+| [git](https://git-scm.com) | GPL-2.0 | Mirror of the lab repo, clones for each job |
 | [libiio](https://github.com/analogdevicesinc/libiio) (`libiio-utils`) | LGPL-2.1 (library), GPL-2.0 (tools) | Pluto+ access by the tests |
 | [rtl-sdr](https://osmocom.org/projects/rtl-sdr/wiki) | GPL-2.0 | RTL-SDR access by the tests |
 | [uhubctl](https://github.com/mvp/uhubctl) | GPL-2.0 | Power-switching the USB hub |
 
-These are tools the owner installs and the tests may call. Copyleft licenses apply to them, not to this repo, because nothing links against them. If a test ever needs one as a library, it goes through review first.
+These are tools the owner installs and the tests may call. (For the service tests only: [node](https://nodejs.org) (MIT), optional, runs the polkit rule file in `tests/service/test_polkit.py`; the test is skipped without it.) Copyleft licenses apply to them, not to this repo, because nothing links against them. If a test ever needs one as a library, it goes through review first.
 
 ## Build only
 

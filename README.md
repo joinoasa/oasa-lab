@@ -90,11 +90,29 @@ From a test: `lab.channel(a=a.addr, b=b.addr, profile="lora-sf9-bw125", loss=0.0
 
 From Python: `from oasa_lab.channel import Channel, ChannelSettings`. Other repos can use either. Details are in the module docstring of [oasa_lab/channel.py](oasa_lab/channel.py). Captures are raw-IPv4 pcap files (link type 101), so Wireshark shows addresses, ports and UDP payload.
 
+## Run it remotely, from a Claude chat
+
+`oasa-lab serve` is a small job service for a lab PC with radios on it. It runs the lab's suites **one job at a time**, from a clean checkout of `main`, and every run leaves the usual evidence bundle and checker verdict. Claude (a custom connector), scripts and a terminal use the same queue.
+
+```
+pip install -e '.[service]'
+oasa-lab token owner-laptop --user citruscybersec   # an API token; paste the printed block in lab.toml
+oasa-lab serve --config lab.toml                    # localhost only
+```
+
+- Only suite names from the repo run. No code, shell or paths.
+- Suites that transmit (`transmits = true` in `suite.toml`) are refused unless the lab config says `rf_setup = "cabled"` or `"shielded"`.
+- Stop a job, or pause the whole lab, any time. Every request is in an audit log.
+- Sign-in for Claude is GitHub, owner only. The lab PC dials out through a Cloudflare Tunnel and opens no inbound port.
+
+How it fits together, threat model, using it from a chat, stopping everything: [docs/remote-lab.md](docs/remote-lab.md). One-time lab PC setup (scripts for Ubuntu 24.04): [deploy/README.md](deploy/README.md).
+
 ## More
 
 - Plan: [docs/r-com2-plan.md](docs/r-com2-plan.md)
 - Hardware suites: [docs/hardware-suites.md](docs/hardware-suites.md)
 - Checker: [docs/checker.md](docs/checker.md)
+- Remote lab (job service, Claude connector): [docs/remote-lab.md](docs/remote-lab.md), setup in [deploy/](deploy/README.md)
 - Radio profiles: [docs/profiles.md](docs/profiles.md)
 - Outside software we use: [docs/software-used.md](docs/software-used.md)
 - Radios, adapters and waveforms live in [oasa-radio](https://github.com/joinoasa/oasa-radio). Encryption lives in [oasa-sec](https://github.com/joinoasa/oasa-sec).

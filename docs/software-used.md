@@ -40,6 +40,48 @@ Tools run as **separate processes** (never imported, never shipped):
 
 The lab writes its own SigMF files and checks them with its own code (stdlib only), and has its own pure-Python FFT for tone measurement.
 
+## Job service and Claude connector (optional extra: `pip install -e '.[service]'`)
+
+For `oasa-lab serve` ([remote-lab.md](remote-lab.md)). The lab, the checker and CI suites do not need any of this. One direct dependency, `mcp>=2.3,<3`; it brings the web server and the rest. We use the SDK's own OAuth endpoints and Starlette (instead of adding FastAPI or an OAuth library). Versions as installed in October 2026.
+
+| Package | Version | License | Why |
+|---|---|---|---|
+| [mcp](https://github.com/modelcontextprotocol/python-sdk) (official MCP Python SDK) | 2.3.0 (`>=2.3,<3`) | MIT | The Claude connector (streamable HTTP) and the OAuth server endpoints Claude needs: discovery, dynamic registration, PKCE, token checks. |
+
+Installed with it:
+
+| Package | Version | License | Role |
+|---|---|---|---|
+| starlette | 1.9.0 | BSD-3-Clause | The web app (our REST API and sign-in pages sit on it) |
+| uvicorn | 0.54.0 | BSD-3-Clause | The server, bound to 127.0.0.1 |
+| httpx2 (+ httpcore2, h11) | 2.16.0 / 2.16.0 / 0.16.0 | BSD-3-Clause / BSD-3-Clause / MIT | HTTP client: the GitHub sign-in calls, and the MCP client in tests |
+| pydantic (+ pydantic-core, annotated-types, typing-inspection) | 2.14.1 / 2.50.1 / 0.8.0 / 0.4.4 | MIT | Tool argument checking |
+| mcp-types | 2.3.0 | MIT | MCP message types |
+| PyJWT | 2.15.1 | MIT | Checks the Cloudflare Access JWT (RS256) |
+| cryptography (+ cffi, pycparser) | 50.0.2 | Apache-2.0 OR BSD-3-Clause (cffi MIT, pycparser BSD-3-Clause) | RSA signature check for PyJWT (`pyjwt[crypto]`) |
+| anyio | 4.15.1 | MIT | Async I/O |
+| sse-starlette | 3.5.0 | BSD-3-Clause | Streaming for MCP |
+| python-multipart | 0.0.32 | Apache-2.0 | Reads the consent form |
+| jsonschema (+ jsonschema-specifications, referencing, rpds-py, attrs) | 4.26.0 / 2025.9.1 / 0.37.0 / 2026.9.1 / 26.1.0 | MIT | MCP schema checks |
+| opentelemetry-api | 1.45.1 | Apache-2.0 | Imported by the SDK; we turn nothing on |
+| click, idna, truststore | 8.5.0 / 3.20 | BSD-3-Clause / BSD-3-Clause / MIT | Pulled in by uvicorn, httpx2 |
+| typing-extensions | 4.16.0 | PSF-2.0 (Python's own permissive license) | Typing backports |
+
+The service itself uses only these and the standard library. It reads the lab's own suites from git; it adds no code from outside to a run.
+
+**Programs on the lab PC** (system packages by `deploy/01-packages.sh` and `06-cloudflared.sh`; run as separate programs, not linked or copied into this repo):
+
+| Program | License | Why |
+|---|---|---|
+| [cloudflared](https://github.com/cloudflare/cloudflared) | Apache-2.0 | The tunnel to Cloudflare. Outbound only. |
+| [WireGuard](https://www.wireguard.com) (`wireguard-tools`, kernel module) | GPL-2.0 | Maintenance access for the owner |
+| [nftables](https://netfilter.org/projects/nftables/) | GPL-2.0 | The firewall |
+| [libiio](https://github.com/analogdevicesinc/libiio) (`libiio-utils`) | LGPL-2.1 (library), GPL-2.0 (tools) | Pluto+ access by the tests |
+| [rtl-sdr](https://osmocom.org/projects/rtl-sdr/wiki) | GPL-2.0 | RTL-SDR access by the tests |
+| [uhubctl](https://github.com/mvp/uhubctl) | GPL-2.0 | Power-switching the USB hub |
+
+These are tools the owner installs and the tests may call. Copyleft licenses apply to them, not to this repo, because nothing links against them. If a test ever needs one as a library, it goes through review first.
+
 ## Build only
 
 | Package | Version | License | Why |
@@ -52,7 +94,7 @@ The radio profiles ([profiles.md](profiles.md)) take numbers and equations from 
 
 ## Standard library only
 
-The simulated channel, the pcap writer and the whole checker use only the Python 3.11+ standard library (`asyncio`, `socket`, `struct`, `hashlib`, `tomllib`, `xml.etree`). The checker takes no outside package on purpose, so it is easy to audit.
+The simulated channel, the pcap writer and the whole checker (also the job runner) use only the Python 3.11+ standard library (`asyncio`, `socket`, `struct`, `hashlib`, `tomllib`, `xml.etree`). The checker takes no outside package on purpose, so it is easy to audit.
 
 ## CI (GitHub Actions)
 
@@ -69,6 +111,9 @@ The `lora-link` job also checks out [oasa-sec](https://github.com/joinoasa/oasa-
 
 - **pyrtlsdr:** GPL-3.0-or-later. We run `rtl_sdr` as a process instead.
 - **SigMF Python library:** LGPL-3.0. SigMF is a small JSON format; the lab has its own writer, and the checker its own validator.
+- **FastAPI:** Starlette (already there through the MCP SDK) is enough for a dozen routes.
+- **Authlib or another OAuth library:** the MCP SDK already serves the OAuth endpoints Claude needs; we add only the provider, the consent page and the GitHub step.
+- **Cloudflare Access "Managed OAuth" as the connector's sign-in:** beta, no source says Claude.ai works with it. See [remote-lab.md](remote-lab.md).
 - **tcpdump / Wireshark:** handy for looking at the captures, but not a dependency. A unit test uses tcpdump if it is installed.
 - **scapy, dpkt:** a pcap writer is about 40 lines, so we wrote it.
 - **jsonschema:** not needed; the checker validates the manifest by hand.

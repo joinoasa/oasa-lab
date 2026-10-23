@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import re
 import secrets
 import threading
 import time
@@ -91,6 +92,14 @@ def begin(svc, client_id, challenge, redirect=CLAUDE_CB, state="st-1"):
         follow_redirects=False)
 
 
+def consent(browser, svc, flow_id, choice="approve"):
+    """What a browser does: open the consent page (gets the cookie and token), then post the form from that page."""
+    page = browser.get(f"/oauth/consent?id={flow_id}")
+    token = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+    return browser.post("/oauth/consent", data={"id": flow_id, "choice": choice, "csrf": token},
+                        headers={"Origin": svc.url, "Sec-Fetch-Site": "same-origin"})
+
+
 def sign_in(svc, gh, gh_id, login, approve=True):
     """Drive the whole browser flow. Returns (callback response, verifier, client_id, browser)."""
     client_id = register(svc).json()["client_id"]
@@ -101,7 +110,7 @@ def sign_in(svc, gh, gh_id, login, approve=True):
     page = browser.get(r.headers["location"])
     assert page.status_code == 200 and "Approve" in page.text and "claude.ai" in page.text
     flow_id = parse_qs(urlparse(r.headers["location"]).query)["id"][0]
-    r = browser.post("/oauth/consent", data={"id": flow_id, "choice": "approve" if approve else "deny"})
+    r = consent(browser, svc, flow_id, "approve" if approve else "deny")
     assert r.status_code == 302
     if not approve:
         return r, verifier, client_id, browser
@@ -193,7 +202,7 @@ def test_a_client_that_registers_without_an_auth_method_gets_a_secret_and_works(
     browser = httpx.Client(base_url=s.url, follow_redirects=False)
     loc = begin(s, reg["client_id"], challenge).headers["location"]
     flow_id = parse_qs(urlparse(loc).query)["id"][0]
-    browser.post("/oauth/consent", data={"id": flow_id, "choice": "approve"})
+    consent(browser, s, flow_id)
     cb = browser.get("/oauth/github/callback", params={"code": gh.sign_in_as(1001, "owner-gh"), "state": flow_id})
     code = code_of(cb)["code"][0]
     no_secret = exchange(s, reg["client_id"], code, verifier)
@@ -235,7 +244,7 @@ def test_a_callback_from_another_browser_is_rejected(oauth_svc, gh):
     loc = begin(s, client_id, challenge).headers["location"]
     flow_id = parse_qs(urlparse(loc).query)["id"][0]
     victim = httpx.Client(base_url=s.url, follow_redirects=False)
-    victim.post("/oauth/consent", data={"id": flow_id, "choice": "approve"})
+    consent(victim, s, flow_id)
     attacker = httpx.Client(base_url=s.url, follow_redirects=False)  # no cookie
     code = gh.sign_in_as(1001, "owner-gh")
     assert attacker.get("/oauth/github/callback", params={"code": code, "state": flow_id}).status_code == 400
@@ -270,9 +279,9 @@ def test_refresh_rotates_and_the_old_token_dies(oauth_svc, gh):
     assert r.status_code == 200
     t2 = r.json()
     assert t2["access_token"] != t["access_token"] and t2["refresh_token"] != t["refresh_token"]
+    assert httpx.get(f"{s.url}/api/lab", headers={"Authorization": f"Bearer {t2['access_token']}"}).status_code == 200
     again = httpx.post(f"{s.url}/token", data={"grant_type": "refresh_token", "refresh_token": t["refresh_token"], "client_id": client_id})
     assert again.status_code == 400 and again.json()["error"] == "invalid_grant"
-    assert httpx.get(f"{s.url}/api/lab", headers={"Authorization": f"Bearer {t2['access_token']}"}).status_code == 200
 
 
 def test_tokens_expire(oauth_svc, gh):
@@ -312,7 +321,7 @@ def test_github_failure_gives_no_token(oauth_svc, gh):
     _, challenge = pkce()
     flow_id = parse_qs(urlparse(begin(s, client_id, challenge).headers["location"]).query)["id"][0]
     browser = httpx.Client(base_url=s.url, follow_redirects=False)
-    browser.post("/oauth/consent", data={"id": flow_id, "choice": "approve"})
+    consent(browser, s, flow_id)
     r = browser.get("/oauth/github/callback", params={"code": "not-a-real-code", "state": flow_id})
     assert code_of(r).get("error") == ["server_error"]
 
@@ -322,7 +331,7 @@ def test_github_sign_in_unconfigured_is_a_clear_error(make_service):
     client_id = register(s).json()["client_id"]
     _, challenge = pkce()
     flow_id = parse_qs(urlparse(begin(s, client_id, challenge).headers["location"]).query)["id"][0]
-    r = httpx.post(f"{s.url}/oauth/consent", data={"id": flow_id, "choice": "approve"}, follow_redirects=False)
+    r = consent(httpx.Client(base_url=s.url, follow_redirects=False), s, flow_id)
     assert r.status_code == 503
 
 
@@ -335,3 +344,110 @@ def test_consent_page_escapes_what_a_client_calls_itself(oauth_svc):
     page = httpx.get(loc)
     assert "<script>alert" not in page.text and "&lt;script&gt;" in page.text
     assert "default-src 'none'" in page.headers["content-security-policy"]
+
+
+# --- CSRF on the consent form (H1) -----------------------------------------------------------------
+def _flow(s):
+    client_id = register(s).json()["client_id"]
+    _, challenge = pkce()
+    return parse_qs(urlparse(begin(s, client_id, challenge).headers["location"]).query)["id"][0]
+
+
+def test_a_cross_site_page_cannot_approve_a_flow(oauth_svc):
+    """The attack: a page on another site auto-submits the consent form in the owner's browser."""
+    s = oauth_svc
+    flow_id = _flow(s)
+    owner = httpx.Client(base_url=s.url, follow_redirects=False)
+    for headers in ({"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"},
+                    {"Origin": "https://evil.example"}, {"Origin": "null"}, {}, {"Origin": s.url, "Sec-Fetch-Site": "cross-site"},
+                    {"Origin": s.url, "Sec-Fetch-Site": "same-site"}):
+        r = owner.post("/oauth/consent", data={"id": flow_id, "choice": "approve", "csrf": "x.y"}, headers=headers)
+        assert r.status_code == 403 and "oasa_lab_flow" not in r.headers.get("set-cookie", "")
+    assert "oasa_lab_flow" not in owner.cookies
+
+
+def test_the_consent_post_needs_the_token_and_cookie_from_the_page(oauth_svc):
+    s = oauth_svc
+    flow_id = _flow(s)
+    same = {"Origin": s.url, "Sec-Fetch-Site": "same-origin"}
+    owner = httpx.Client(base_url=s.url, follow_redirects=False)
+    assert owner.post("/oauth/consent", data={"id": flow_id, "choice": "approve"}, headers=same).status_code == 403  # no token
+    page = owner.get(f"/oauth/consent?id={flow_id}")
+    token = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+    assert "oasa_lab_csrf" in page.headers["set-cookie"] and "SameSite=strict" in page.headers["set-cookie"]
+    # the token alone (attacker's own browser, no cookie)
+    attacker = httpx.Client(base_url=s.url, follow_redirects=False)
+    assert attacker.post("/oauth/consent", data={"id": flow_id, "choice": "approve", "csrf": token}, headers=same).status_code == 403
+    # a token minted for another flow
+    other = _flow(s)
+    owner.get(f"/oauth/consent?id={other}")
+    assert owner.post("/oauth/consent", data={"id": other, "choice": "approve", "csrf": token}, headers=same).status_code == 403
+    # a cookie that differs from the form's token
+    owner.cookies.set("oasa_lab_csrf", "forged.value", path="/oauth")
+    assert owner.post("/oauth/consent", data={"id": flow_id, "choice": "approve", "csrf": token}, headers=same).status_code == 403
+    # the real thing
+    good = httpx.Client(base_url=s.url, follow_redirects=False)
+    assert consent(good, s, flow_id).status_code == 302
+
+
+# --- registration and flow limits (L1), redirect hosts (L7), refresh families (L4) ---------------------
+def test_new_sign_ins_are_never_refused_the_oldest_is_dropped(oauth_svc, monkeypatch):
+    s = oauth_svc
+    monkeypatch.setattr("oasa_lab.service.oauth.MAX_FLOWS", 3)
+    ids = [_flow(s) for _ in range(5)]
+    assert len(s.lab.provider.flows) == 3 and ids[-1] in s.lab.provider.flows and ids[0] not in s.lab.provider.flows
+
+
+def test_a_flood_of_registrations_cannot_evict_a_client_that_signed_in(oauth_svc, gh, monkeypatch):
+    s = oauth_svc
+    cb, verifier, client_id, _ = sign_in(s, gh, 1001, "owner-gh")
+    assert "code" in code_of(cb)
+    monkeypatch.setattr("oasa_lab.service.oauth.MAX_CLIENTS", 5)
+    for _ in range(12):
+        register(s)
+    assert client_id in s.lab.provider.clients and len(s.lab.provider.clients) <= 5
+    # when every slot is a used client, new registrations are refused instead
+    for c in s.lab.provider.clients:
+        s.lab.provider.client_meta[c]["used"] = True
+    assert register(s).status_code == 400
+
+
+@pytest.mark.parametrize("uri", ["https://claude.ai.evil.example/api/mcp/auth_callback", "https://evil.example/https://claude.ai/api/mcp/auth_callback",
+                                 "https://claude.ai@evil.example/api/mcp/auth_callback", "https://claude.ai:8443/api/mcp/auth_callback",
+                                 "http://claude.ai/api/mcp/auth_callback", "https://claude.ai/api/mcp/auth_callback/x",
+                                 "https://claude.ai/api/mcp/auth_callback?x=1", "https://claude.ai/api/mcp/auth_callback#f"])
+def test_redirect_uris_are_compared_by_parts(oauth_svc, uri):
+    assert register(oauth_svc, uri).status_code == 400
+
+
+def test_config_redirect_hosts_are_parsed_not_prefix_matched():
+    from pathlib import Path
+    from oasa_lab.service.config import ConfigError, parse_config
+    base = {"service": {"port": 8765, "public_url": "http://127.0.0.1:8765"}, "users": [{"name": "o", "role": "admin", "github_id": 1}]}
+    for bad in ("http://localhost.evil.example/cb", "http://127.0.0.1.evil.example/cb", "https://u@evil.example/cb"):
+        with pytest.raises(ConfigError):
+            parse_config({**base, "oauth": {"redirect_uris": [bad]}}, Path("."), {})
+    parse_config({**base, "oauth": {"redirect_uris": ["http://localhost/callback", "https://claude.ai/cb"]}}, Path("."), {})
+    with pytest.raises(ConfigError):
+        parse_config({**base, "service": {"port": 8765, "public_url": "http://127.0.0.1.evil.example"}}, Path("."), {})
+
+
+def test_reusing_a_rotated_refresh_token_ends_the_whole_family(oauth_svc, gh):
+    s = oauth_svc
+    cb, verifier, client_id, _ = sign_in(s, gh, 1001, "owner-gh")
+    t1 = exchange(s, client_id, code_of(cb)["code"][0], verifier).json()
+
+    def refresh(rt):
+        return httpx.post(f"{s.url}/token", data={"grant_type": "refresh_token", "refresh_token": rt, "client_id": client_id})
+
+    t2 = refresh(t1["refresh_token"]).json()
+    t3 = refresh(t2["refresh_token"]).json()
+    assert httpx.get(f"{s.url}/api/lab", headers={"Authorization": f"Bearer {t3['access_token']}"}).status_code == 200
+    assert refresh(t1["refresh_token"]).status_code == 400  # a thief replays the first token
+    # the family is gone: the newest refresh and access tokens stop working too
+    assert refresh(t3["refresh_token"]).status_code == 400
+    assert httpx.get(f"{s.url}/api/lab", headers={"Authorization": f"Bearer {t3['access_token']}"}).status_code == 401
+    # a second sign-in is a separate family and is untouched
+    cb2, v2, cid2, _ = sign_in(s, gh, 1001, "owner-gh")
+    t4 = exchange(s, cid2, code_of(cb2)["code"][0], v2).json()
+    assert httpx.get(f"{s.url}/api/lab", headers={"Authorization": f"Bearer {t4['access_token']}"}).status_code == 200

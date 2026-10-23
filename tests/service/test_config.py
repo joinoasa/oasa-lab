@@ -64,6 +64,14 @@ def test_api_token_lookup_uses_the_hash():
 
 
 def test_more_users_and_roles_are_only_config():
-    c = cfg(users=[USER, {"name": "v", "role": "viewer", "github_login": "someone"}])
+    c = cfg(users=[USER, {"name": "v", "role": "viewer", "github_id": 77, "github_login": "someone"}])
     assert c.user("v").can("read") and not c.user("v").can("run")
     assert c.user("owner").can("pause")
+
+
+def test_github_id_is_required_for_every_user():
+    for bad in ({"name": "v", "role": "viewer"}, {"name": "v", "role": "viewer", "github_login": "someone"},
+                {"name": "v", "role": "viewer", "github_id": "12"}, {"name": "v", "role": "viewer", "github_id": True},
+                {"name": "v", "role": "viewer", "github_id": 0}):
+        with pytest.raises(ConfigError):
+            cfg(users=[USER, bad])

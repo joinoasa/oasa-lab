@@ -10,6 +10,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 ROLES = ("viewer", "runner", "admin")
 # What each role may do. Adding users or roles later is a config change.
@@ -196,7 +197,8 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
         _need(bool(NAME_RE.match(name)), f"bad user name {name!r}")
         _need(role in ROLES, f"user {name}: role must be one of {', '.join(ROLES)}")
         gid = u.get("github_id")
-        _need(gid is None or (isinstance(gid, int) and gid > 0), f"user {name}: github_id must be a number")
+        _need(isinstance(gid, int) and not isinstance(gid, bool) and gid > 0,
+              f"user {name}: github_id is required (the number, not the name: gh api users/NAME --jq .id)")
         cfg.users.append(User(name, role, gid, u.get("github_login"), u.get("email")))
     _need(len({u.name for u in cfg.users}) == len(cfg.users), "user names must be unique")
     for t in data.get("tokens", []):
@@ -213,8 +215,10 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
     if "redirect_uris" in data.get("oauth", {}):
         cfg.redirect_uris = tuple(str(x) for x in data["oauth"]["redirect_uris"])
     for r in cfg.redirect_uris:
-        _need(r.startswith("https://") or r.startswith("http://localhost") or r.startswith("http://127.0.0.1"),
+        pu = urlparse(r)
+        _need(pu.scheme == "https" or (pu.scheme == "http" and pu.hostname in ("localhost", "127.0.0.1", "::1")),
               f"oauth.redirect_uris: {r!r} must be https (or loopback)")
+        _need(bool(pu.hostname) and not pu.username and not pu.fragment, f"oauth.redirect_uris: {r!r} is not a clean URL")
         _need("*" not in r, "oauth.redirect_uris: no wildcards")
 
     acc = data.get("cloudflare_access", {})
@@ -225,7 +229,8 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
         _need(bool(cfg.access_team_domain and cfg.access_audience), "cloudflare_access needs team_domain and audience")
 
     _need(bool(cfg.users), "no [[users]] in the config: nobody could ever sign in")
-    if not cfg.public_url.startswith("https://") and not _is_loopback(cfg.public_url.split("//")[-1].split(":")[0].strip("[]")):
+    pub = urlparse(cfg.public_url)
+    if pub.scheme != "https" and not (pub.scheme == "http" and _is_loopback(pub.hostname or "")):
         raise ConfigError("service.public_url must be https (http only for localhost)")
     return cfg
 

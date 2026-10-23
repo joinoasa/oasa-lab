@@ -16,6 +16,7 @@ GitHub's own access token is used once to read the account id and then thrown aw
 from __future__ import annotations
 
 import hashlib
+import hmac
 import html
 import json
 import os
@@ -46,8 +47,14 @@ ACCESS_TTL = 3600
 REFRESH_TTL = 30 * 86400
 MAX_CLIENTS = 200
 MAX_FLOWS = 100
+SAME_SITE_OK = ('same-origin', 'none')
 COOKIE = "oasa_lab_flow"
+CSRF_COOKIE = "oasa_lab_csrf"
 LOOPBACK = ("localhost", "127.0.0.1", "[::1]", "::1")
+
+
+def now_t() -> float:
+    return time.time()
 
 
 def _h(token: str) -> str:
@@ -94,6 +101,9 @@ class LabOAuthProvider:
         self.refresh: dict[str, dict] = {}
         self.codes: dict[str, LabAuthCode] = {}
         self.flows: dict[str, _Flow] = {}
+        self.client_meta: dict[str, dict] = {}   # client id -> {"created": t, "used": bool}
+        self.rotated: dict[str, dict] = {}       # hash of a spent refresh token -> {"family", "expires_at"}
+        self._csrf_key = secrets.token_bytes(32)
         self._load()
 
     # --- storage: clients and hashed tokens in one 0600 file ----------------------------------------
@@ -101,6 +111,7 @@ class LabOAuthProvider:
         try:
             d = json.loads(self.path.read_text())
             self.clients, self.access, self.refresh = d["clients"], d["access"], d["refresh"]
+            self.client_meta, self.rotated = d.get("client_meta", {}), d.get("rotated", {})
         except (OSError, ValueError, KeyError):
             pass
 
@@ -108,11 +119,13 @@ class LabOAuthProvider:
         now = time.time()
         self.access = {k: v for k, v in self.access.items() if v["expires_at"] > now}
         self.refresh = {k: v for k, v in self.refresh.items() if v["expires_at"] > now}
+        self.rotated = {k: v for k, v in self.rotated.items() if v["expires_at"] > now}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as fh:
-            json.dump({"clients": self.clients, "access": self.access, "refresh": self.refresh}, fh)
+            json.dump({"clients": self.clients, "access": self.access, "refresh": self.refresh,
+                       "client_meta": self.client_meta, "rotated": self.rotated}, fh)
         os.replace(tmp, self.path)
 
     # --- client registration -------------------------------------------------------------------
@@ -125,9 +138,18 @@ class LabOAuthProvider:
         if not uris or not all(redirect_allowed(u, self.cfg.redirect_uris) for u in uris):
             self.audit.write(kind="oauth", event="register_refused", redirect_uris=uris)
             raise RegistrationError("invalid_redirect_uri", "this lab only accepts Claude's callback URLs")
-        if len(self.clients) >= MAX_CLIENTS:  # Claude registers anew on each connect; drop the oldest
-            del self.clients[next(iter(self.clients))]
-        self.clients[client_info.client_id or ""] = json.loads(client_info.model_dump_json())
+        if len(self.clients) >= MAX_CLIENTS:
+            # Claude registers anew on each connect. Only a client that never signed anyone in may be dropped,
+            # so a flood of registrations cannot push out the owner's working connector.
+            unused = [c for c in self.clients if not self.client_meta.get(c, {}).get("used")]
+            if not unused:
+                self.audit.write(kind="oauth", event="register_refused", reason="client table full")
+                raise RegistrationError("invalid_client_metadata", "too many clients registered")
+            del self.clients[min(unused, key=lambda c: self.client_meta.get(c, {}).get("created", 0))]
+            self.client_meta.pop(min(unused, key=lambda c: self.client_meta.get(c, {}).get("created", 0)), None)
+        cid = client_info.client_id or ""
+        self.clients[cid] = json.loads(client_info.model_dump_json())
+        self.client_meta[cid] = {"created": time.time(), "used": False}
         self._save()
         self.audit.write(kind="oauth", event="registered", client_name=client_info.client_name,
                          redirect_uris=uris)
@@ -138,8 +160,8 @@ class LabOAuthProvider:
             raise AuthorizeError("invalid_target", "unknown resource")
         now = time.time()
         self.flows = {k: v for k, v in self.flows.items() if now - v.created < FLOW_TTL}
-        if len(self.flows) >= MAX_FLOWS:
-            raise AuthorizeError("temporarily_unavailable", "too many sign-ins in progress")
+        while len(self.flows) >= MAX_FLOWS:  # drop the oldest unfinished sign-in; never refuse a new one
+            del self.flows[min(self.flows, key=lambda k: self.flows[k].created)]
         flow_id = secrets.token_urlsafe(24)
         self.flows[flow_id] = _Flow(client, params, now)
         return f"{self.cfg.public_url}/oauth/consent?{urlencode({'id': flow_id})}"
@@ -152,25 +174,56 @@ class LabOAuthProvider:
         return RedirectResponse(construct_redirect_uri(str(flow.params.redirect_uri), state=flow.params.state, **q),
                                 status_code=302)
 
+    # --- CSRF: a token tied to the flow, a cookie copy of it, and a same-origin check -----------------
+    def _csrf_token(self, flow_id: str) -> str:
+        nonce = secrets.token_urlsafe(16)
+        mac = hmac.new(self._csrf_key, f"{flow_id}.{nonce}".encode(), "sha256").hexdigest()[:32]
+        return f"{nonce}.{mac}"
+
+    def _csrf_ok(self, flow_id: str, token: str) -> bool:
+        nonce, _, mac = token.partition(".")
+        want = hmac.new(self._csrf_key, f"{flow_id}.{nonce}".encode(), "sha256").hexdigest()[:32]
+        return bool(nonce) and hmac.compare_digest(mac, want)
+
+    def _same_origin(self, request: Request) -> bool:
+        """A browser form post from our own page: Origin is ours and the browser says same-origin."""
+        u = urlparse(self.cfg.public_url)
+        ours = f"{u.scheme}://{u.netloc}"
+        if request.headers.get("origin") != ours:
+            return False
+        return request.headers.get("sec-fetch-site", "same-origin") in SAME_SITE_OK
+
     # --- step 2: consent page, then GitHub --------------------------------------------------------
     async def consent_page(self, request: Request) -> Response:
         flow_id = request.query_params.get("id")
         flow = self._flow(flow_id)
         if not flow:
             return _page("Link expired", "<p>This sign-in link has expired. Start again from Claude.</p>", 400)
+        csrf = self._csrf_token(flow_id or "")
         host = html.escape(urlparse(str(flow.params.redirect_uri)).netloc)
         name = html.escape(flow.client.client_name or "an app")
         body = (f"<p><b>{name}</b> wants to run and watch OASA lab tests.</p>"
                 f"<p>After you approve, it will send you back to <b>{host}</b>.</p>"
                 "<p>Only continue if you just started this from Claude. Next you sign in with GitHub.</p>"
                 f'<form method="post"><input type="hidden" name="id" value="{html.escape(flow_id or "")}">'
+                f'<input type="hidden" name="csrf" value="{html.escape(csrf)}">'
                 '<button name="choice" value="approve">Approve and sign in with GitHub</button> '
                 '<button name="choice" value="deny" class="n">Deny</button></form>')
-        return _page("Connect Claude to the OASA lab", body)
+        resp = _page("Connect Claude to the OASA lab", body)
+        resp.set_cookie(CSRF_COOKIE, csrf, max_age=FLOW_TTL, httponly=True, samesite="strict",
+                        secure=self.cfg.public_url.startswith("https://"), path="/oauth")
+        return resp
 
     async def consent_post(self, request: Request) -> Response:
+        if not self._same_origin(request):
+            self.audit.write(kind="oauth", event="consent_rejected", reason="cross-site request")
+            return _page("Refused", "<p>This request did not come from the sign-in page.</p>", 403)
         form = await request.form()
         flow_id = str(form.get("id", ""))
+        token = str(form.get("csrf", ""))
+        if not token or not hmac.compare_digest(token, request.cookies.get(CSRF_COOKIE, "")) or not self._csrf_ok(flow_id, token):
+            self.audit.write(kind="oauth", event="consent_rejected", reason="csrf token missing or wrong")
+            return _page("Refused", "<p>Open the sign-in page again from Claude and approve there.</p>", 403)
         flow = self._flow(flow_id)
         if not flow:
             return _page("Link expired", "<p>This sign-in link has expired. Start again from Claude.</p>", 400)
@@ -223,6 +276,7 @@ class LabOAuthProvider:
             code_challenge=flow.params.code_challenge, redirect_uri=flow.params.redirect_uri,
             redirect_uri_provided_explicitly=flow.params.redirect_uri_provided_explicitly,
             resource=self.cfg.mcp_url, subject=user.name)
+        self.client_meta.setdefault(flow.client.client_id or "", {"created": now_t()})["used"] = True
         audit.note(actor=user.name, via="oauth")
         self.audit.write(kind="oauth", event="login_ok", actor=user.name, client_name=flow.client.client_name)
         resp = self._back(flow, code=code)
@@ -258,11 +312,12 @@ class LabOAuthProvider:
             return None
         return c
 
-    def _issue(self, client_id: str, user: str) -> OAuthToken:
+    def _issue(self, client_id: str, user: str, family: str | None = None) -> OAuthToken:
         now = time.time()
+        family = family or secrets.token_hex(8)
         at, rt = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-        self.access[_h(at)] = {"client_id": client_id, "user": user, "expires_at": now + ACCESS_TTL}
-        self.refresh[_h(rt)] = {"client_id": client_id, "user": user, "expires_at": now + REFRESH_TTL}
+        self.access[_h(at)] = {"client_id": client_id, "user": user, "expires_at": now + ACCESS_TTL, "family": family}
+        self.refresh[_h(rt)] = {"client_id": client_id, "user": user, "expires_at": now + REFRESH_TTL, "family": family}
         self._save()
         return OAuthToken(access_token=at, expires_in=ACCESS_TTL, scope=SCOPE, refresh_token=rt)
 
@@ -274,6 +329,11 @@ class LabOAuthProvider:
         return self._issue(client.client_id or "", authorization_code.subject or "")
 
     async def load_refresh_token(self, client, refresh_token: str):
+        spent = self.rotated.get(_h(refresh_token))
+        if spent:  # a token that was already swapped for a new one: someone kept a copy. End the whole family.
+            self._revoke_family(spent["family"])
+            self.audit.write(kind="oauth", event="refresh_reuse", family=spent["family"])
+            return None
         r = self.refresh.get(_h(refresh_token))
         if not r or r["client_id"] != client.client_id or r["expires_at"] < time.time():
             return None
@@ -281,11 +341,18 @@ class LabOAuthProvider:
                             resource=self.cfg.mcp_url, subject=r["user"])
 
     async def exchange_refresh_token(self, client, refresh_token: RefreshToken, scopes: list[str]) -> OAuthToken:
-        self.refresh.pop(_h(refresh_token.token), None)  # rotate: the old one dies here
+        old = self.refresh.pop(_h(refresh_token.token), None)  # rotate: the old one dies here
+        family = (old or {}).get("family") or secrets.token_hex(8)
+        self.rotated[_h(refresh_token.token)] = {"family": family, "expires_at": time.time() + REFRESH_TTL}
         if not self.cfg.user(refresh_token.subject or ""):
             self._save()
             raise TokenError("invalid_grant", "user no longer allowed")
-        return self._issue(client.client_id or "", refresh_token.subject or "")
+        return self._issue(client.client_id or "", refresh_token.subject or "", family)
+
+    def _revoke_family(self, family: str) -> None:
+        self.access = {k: v for k, v in self.access.items() if v.get("family") != family}
+        self.refresh = {k: v for k, v in self.refresh.items() if v.get("family") != family}
+        self._save()
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         """Used for every MCP request: an OAuth token, or one of the configured API tokens."""

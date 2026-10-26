@@ -160,3 +160,43 @@ jobs:
           name: l2-lora-link-evidence
           path: runs/
           if-no-files-found: error
+
+  # OASA's own waveform (R-COM2 milestone W0): the modem from oasa-radio main, driven through its command line.
+  # Lab changes are tested against oasa-radio main, so oasa-radio's waveform pull request merges first.
+  waveform-w0:
+    name: l1-waveform-w0 (oasa-radio main)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: joinoasa/oasa-radio
+          ref: main
+          path: oasa-radio
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build oasa-radio
+        working-directory: oasa-radio
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          cargo build --locked --bins
+      - name: Install
+        run: python -m pip install -e .
+      - name: Run the suite (tests, evidence bundle, checker)
+        run: |
+          set -euo pipefail
+          OASA_RADIO_BIN_DIR="$GITHUB_WORKSPACE/oasa-radio/target/debug" \
+            oasa-lab run l1-waveform-w0 --out runs | tee "$RUNNER_TEMP/run.txt"
+      - name: Show the summary
+        if: always()
+        run: cat runs/*/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: l1-waveform-w0-evidence
+          path: runs/
+          if-no-files-found: error

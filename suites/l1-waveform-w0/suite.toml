@@ -1,0 +1,49 @@
+description = "OASA's own waveform, milestone W0, in simulation: the oasa-radio modem (2-FSK, BPSK, QPSK with preamble sync and CRC) has a bit error rate that matches theory across Eb/N0, the energy convention holds in the IQ it writes, frames survive phase, delay and frequency offsets, and a wrong claim, a missing preamble, noise and damage are all rejected (needs OASA_RADIO_BIN_DIR)"
+expectations = [
+  "test_wrong_ebn0_claim_is_rejected",
+  "test_frame_without_preamble_is_not_detected",
+  "test_noise_only_gives_no_frames",
+  "test_damaged_frame_fails_the_crc",
+]
+
+[captures]
+encrypted = false
+
+# Limits for the numbers the tests measure. The checker applies the same limits from this file,
+# so a test cannot loosen them.
+
+[limits.ber_z]
+min = -3.0
+max = 3.0
+reason = """Binomial z-score of the measured bit errors against the theory value, per Eb/N0 point:
+(errors - n p) / sqrt(n p (1 - p)), with p computed here in Python from math.erfc (not taken from the
+modem). Within 3 standard deviations. The points carry 40 000 to 400 000 bits each, so the receiver's
+own small implementation loss (a few percent of the BER at low Eb/N0, see oasa-radio docs/waveform-w0.md)
+stays inside the interval; a 1 dB error in Eb/N0 does not (test_wrong_ebn0_claim_is_rejected)."""
+
+[limits.detected_fraction]
+min = 0.999
+max = 1.0
+reason = """Frames the receiver found, over frames sent, at Eb/N0 of 2 dB and up. The preamble correlation
+has a large margin there (false alarm 1e-11 per position at the default threshold)."""
+
+[limits.theory_rel_error]
+min = 0.0
+max = 1e-9
+reason = """The modem prints the theory value it compared with; this is its relative difference from the
+value the suite computes with math.erfc. A wrong erfc, or Q written with the wrong argument, fails here."""
+
+[limits.symbol_energy]
+min = 0.99
+max = 1.01
+reason = """Noiseless frame: the sum of |x|^2 over all samples of the cf32 file, divided by the number of
+symbols in the frame (computed here from the payload length). 1.0 is the convention Es = 1: the energy of a
+symbol is the sum of |x|^2 over its samples, whatever the samples per symbol. The bound covers the
+cross terms between neighbouring pulses and float rounding (measured: within 0.1 %)."""
+
+[limits.noise_power_ratio]
+min = 0.97
+max = 1.03
+reason = """Noise-only part of a file made at a stated Eb/N0: measured mean |n|^2 over the expected N0
+(= Eb / (Eb/N0), Eb = 1 / bits per symbol). With 20 000 samples the estimate's own spread is 0.7 %, so
+3 % is more than four standard deviations. This is the check on Eb/N0 against per-sample SNR."""

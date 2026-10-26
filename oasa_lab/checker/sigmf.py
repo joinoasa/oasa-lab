@@ -17,6 +17,7 @@ DATATYPE = re.compile(r"^(?P<kind>c|r)(?P<t>f32|f64|i32|i16|u32|u16|i8|u8)(?P<en
 TYPE_BYTES = {"f32": 4, "f64": 8, "i32": 4, "i16": 2, "u32": 4, "u16": 2, "i8": 1, "u8": 1}
 VERSION = re.compile(r"^1\.\d+\.\d+")
 HEX128 = re.compile(r"^[0-9a-f]{128}$")
+SIM_PREFIX = "sim:"  # a device id like this is a simulation with no entry in the hardware manifest
 RECORDING_FILE = re.compile(r"^recordings/[A-Za-z0-9._-]+\.sigmf-(meta|data)$")
 
 

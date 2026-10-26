@@ -25,6 +25,7 @@ Follow the [OASA software standard](https://joinoasa.org/docs/software-standard/
 | `oasa-lab devices [--sim]` | Open every device in `lab.toml` and print what it reports |
 | `oasa-lab run SUITE --confirm-wiring NAME` | Needed to transmit on real hardware (see [hardware suites](docs/hardware-suites.md)) |
 | `OASA_LAB_SIM=1 oasa-lab run l2-pluto-acceptance` | Run a hardware suite on the simulated bench |
+| `OASA_LAB_SUITES=DIR oasa-lab run NAME` | Read suites from DIR instead of `suites/` (tests use it for throwaway suites) |
 | `oasa-lab channel --help` | Run the simulated channel standalone |
 | `pip install -e '.[service]'` | Add the job service and Claude connector |
 | `oasa-lab serve --config service.toml` | Run the remote job service (localhost only); `--check` only checks the config |

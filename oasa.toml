@@ -1,3 +1,4 @@
+# OASA-FILES manifest: https://joinoasa.org/docs/oasa-files/
 oasa = "files/0"
 
 [project]
@@ -27,7 +28,7 @@ tools = ["python >= 3.11"]
 # pyserial: l0-lab tests the real serial driver against a pseudo-terminal.
 steps = [
   "python3 -m venv .venv",
-  ".venv/bin/pip install -e . pyserial",
+  ".venv/bin/pip install -e '.[service]' pyserial",
 ]
 
 # The setup steps put the lab in .venv; the checks call it from there.
@@ -63,28 +64,30 @@ env = { OASA_LAB_SIM = "1" }
 name = "service"
 run = ".venv/bin/python -m pytest -o addopts='' tests/service -q"
 required = false
-needs = ["the service extra: pip install -e '.[service]'"]
 
 # Suites that run other repos' binaries. CI runs them against oasa-sec and oasa-radio main.
-# Build those repos first and set OASA_SEC_BIN_DIR and OASA_RADIO_BIN_DIR to their target/debug.
+# Clone and build those repos next to this one; OASA_SEC_BIN_DIR and OASA_RADIO_BIN_DIR override the paths.
 [[check]]
 name = "l1-oasa-link"
-run = 'OASA_SEC_BIN_DIR="${OASA_SEC_BIN_DIR:-../oasa-sec/target/debug}" .venv/bin/oasa-lab run l1-oasa-link'
+run = 'OASA_SEC_BIN_DIR="${OASA_SEC_BIN_DIR:-$OASA_ROOT_OASA_SEC/target/debug}" .venv/bin/oasa-lab run l1-oasa-link'
 required = false
-needs = ["oasa-sec binaries: clone and build joinoasa/oasa-sec, set OASA_SEC_BIN_DIR (default ../oasa-sec/target/debug)"]
+repos = ["oasa-sec"]
+needs = ["oasa-sec built with cargo build --locked --bins"]
 
 [[check]]
 name = "l1-waveform-w0"
-run = 'OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-../oasa-radio/target/debug}" .venv/bin/oasa-lab run l1-waveform-w0'
+run = 'OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-$OASA_ROOT_OASA_RADIO/target/debug}" .venv/bin/oasa-lab run l1-waveform-w0'
 required = false
-needs = ["oasa-radio binaries: clone and build joinoasa/oasa-radio, set OASA_RADIO_BIN_DIR (default ../oasa-radio/target/debug)"]
+repos = ["oasa-radio"]
+needs = ["oasa-radio built with cargo build --locked --bins"]
 
 [[check]]
 name = "l2-lora-link"
-run = 'OASA_SEC_BIN_DIR="${OASA_SEC_BIN_DIR:-../oasa-sec/target/debug}" OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-../oasa-radio/target/debug}" .venv/bin/oasa-lab run l2-lora-link'
+run = 'OASA_SEC_BIN_DIR="${OASA_SEC_BIN_DIR:-$OASA_ROOT_OASA_SEC/target/debug}" OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-$OASA_ROOT_OASA_RADIO/target/debug}" .venv/bin/oasa-lab run l2-lora-link'
 env = { OASA_LAB_SIM = "1" }
 required = false
-needs = ["oasa-sec and oasa-radio binaries (see l1-oasa-link and l1-waveform-w0)"]
+repos = ["oasa-sec", "oasa-radio"]
+needs = ["both built with cargo build --locked --bins"]
 
 # The suites, by what they need. hardware = true means the real run needs gear on the bench;
 # with OASA_LAB_SIM=1 they run on the simulated bench without it.

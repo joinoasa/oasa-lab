@@ -3,11 +3,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-python3 -m venv .venv
-.venv/bin/pip install --quiet --upgrade pip
-# pyserial: l0-lab tests the real serial driver against a pseudo-terminal.
-# [service]: the job service tests. The hardware extra (hw) is for the lab PC only.
-.venv/bin/pip install --quiet -e '.[service]' pyserial
 
 # The oasa.toml tool: python3 .oasa/oasa_toml.py run --markdown
 mkdir -p .oasa
@@ -15,4 +10,6 @@ if ! curl -fsSL https://raw.githubusercontent.com/joinoasa/website/main/tools/oa
   echo "warning: could not download oasa_toml.py; get it later (see https://joinoasa.org/docs/oasa-files/#the-tool)" >&2
 fi
 
+# Everything else is [setup].steps in oasa.toml (venv, build, packages): the single source of truth.
+if [ -f .oasa/oasa_toml.py ]; then python3 .oasa/oasa_toml.py setup; else echo "warning: run setup later: python3 .oasa/oasa_toml.py setup" >&2; fi
 echo "Ready. Run the checks: python3 .oasa/oasa_toml.py run --markdown"

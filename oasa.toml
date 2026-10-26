@@ -1,0 +1,123 @@
+oasa = "files/0"
+
+[project]
+name = "oasa-lab"
+summary = "OASA test lab: simulated channel, instrument drivers, evidence bundles and the independent checker"
+repo = "https://github.com/joinoasa/oasa-lab"
+license = "Apache-2.0"
+nodes = ["T-BENCH1", "T-BENCH2"]
+docs = [
+  "README.md",
+  "AGENTS.md",
+  "SECURITY.md",
+  "docs/checker.md",
+  "docs/hardware-suites.md",
+  "docs/software-used.md",
+  "docs/profiles.md",
+]
+
+[review]
+# The lab decides what counts as evidence for other repos, so a person reviews every change.
+# It sends no OASA traffic of its own (hardware suites only transmit through the 60 dB gate).
+security = "standard"
+
+[setup]
+container = ".devcontainer/devcontainer.json"
+tools = ["python >= 3.11"]
+# pyserial: l0-lab tests the real serial driver against a pseudo-terminal.
+steps = [
+  "python3 -m venv .venv",
+  ".venv/bin/pip install -e . pyserial",
+]
+
+# The setup steps put the lab in .venv; the checks call it from there.
+# The l2 suites run on the simulated bench (OASA_LAB_SIM=1); real hardware runs happen on the lab PC.
+[[check]]
+name = "l0-lab"
+run = ".venv/bin/oasa-lab run l0-lab"
+
+[[check]]
+name = "l1-channel"
+run = ".venv/bin/oasa-lab run l1-channel"
+
+[[check]]
+name = "l1-plaintext-control"
+run = ".venv/bin/oasa-lab run l1-plaintext-control"
+
+[[check]]
+name = "l1-profiles"
+run = ".venv/bin/oasa-lab run l1-profiles"
+
+[[check]]
+name = "l2-pluto-acceptance"
+run = ".venv/bin/oasa-lab run l2-pluto-acceptance"
+env = { OASA_LAB_SIM = "1" }
+
+[[check]]
+name = "l2-rf-control"
+run = ".venv/bin/oasa-lab run l2-rf-control"
+env = { OASA_LAB_SIM = "1" }
+
+# CI also runs the job service tests (not in AGENTS.md's list, but cheap).
+[[check]]
+name = "service"
+run = ".venv/bin/python -m pytest -o addopts='' tests/service -q"
+required = false
+needs = ["the service extra: pip install -e '.[service]'"]
+
+# Suites that run other repos' binaries. CI runs them against oasa-sec and oasa-radio main.
+# Build those repos first and set OASA_SEC_BIN_DIR and OASA_RADIO_BIN_DIR to their target/debug.
+[[check]]
+name = "l1-oasa-link"
+run = 'OASA_SEC_BIN_DIR="${OASA_SEC_BIN_DIR:-../oasa-sec/target/debug}" .venv/bin/oasa-lab run l1-oasa-link'
+required = false
+needs = ["oasa-sec binaries: clone and build joinoasa/oasa-sec, set OASA_SEC_BIN_DIR (default ../oasa-sec/target/debug)"]
+
+[[check]]
+name = "l1-waveform-w0"
+run = 'OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-../oasa-radio/target/debug}" .venv/bin/oasa-lab run l1-waveform-w0'
+required = false
+needs = ["oasa-radio binaries: clone and build joinoasa/oasa-radio, set OASA_RADIO_BIN_DIR (default ../oasa-radio/target/debug)"]
+
+[[check]]
+name = "l2-lora-link"
+run = 'OASA_SEC_BIN_DIR="${OASA_SEC_BIN_DIR:-../oasa-sec/target/debug}" OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-../oasa-radio/target/debug}" .venv/bin/oasa-lab run l2-lora-link'
+env = { OASA_LAB_SIM = "1" }
+required = false
+needs = ["oasa-sec and oasa-radio binaries (see l1-oasa-link and l1-waveform-w0)"]
+
+# The suites, by what they need. hardware = true means the real run needs gear on the bench;
+# with OASA_LAB_SIM=1 they run on the simulated bench without it.
+[[lab]]
+suite = "l0-lab"
+
+[[lab]]
+suite = "l1-channel"
+
+[[lab]]
+suite = "l1-plaintext-control"
+
+[[lab]]
+suite = "l1-profiles"
+
+[[lab]]
+suite = "l1-oasa-link"
+
+[[lab]]
+suite = "l1-waveform-w0"
+
+[[lab]]
+suite = "l2-pluto-acceptance"
+hardware = true
+
+[[lab]]
+suite = "l2-rf-control"
+hardware = true
+
+[[lab]]
+suite = "l2-lora-link"
+hardware = true
+
+[hardware]
+needed = false
+optional = ["ADALM-Pluto+", "RTL-SDR V4L", "2x Heltec LoRa V3"]

@@ -2,6 +2,8 @@
 
 Read by AI coding agents (Claude Code, Codex, Cursor and others) and useful for people too. This repo is the **OASA test lab**: test suites, instrument and radio drivers, and the evidence checker (tech tree node T-BENCH1).
 
+**Start here:** [Building with AI agents](https://joinoasa.org/docs/agents/) holds the rules every OASA repo shares; this file adds to them and never loosens them. `oasa.toml` lists setup and the checks; `python3 .oasa/oasa_toml.py run --markdown` runs them (in the dev container): paste the table into the pull request. Find work: issues labeled `agent-ready`.
+
 ## Rules
 
 Follow the [OASA software standard](https://joinoasa.org/docs/software-standard/). In this repo especially:

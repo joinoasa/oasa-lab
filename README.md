@@ -25,6 +25,7 @@ oasa-lab run l1-channel
 | `l1-plaintext-control` | Negative control: the checker finds a marker and MAVLink in plaintext |
 | `l1-profiles` | Radio profiles (LoRa, SiK, mLRS, WFB-ng): measured airtime and throughput match the model, half-duplex shares one medium, queue drops are counted |
 | `l1-oasa-link` | The encrypted oasa-sec link under loss, reordering, replay and attack (needs `OASA_SEC_BIN_DIR`) |
+| `l1-waveform-w0` | OASA's own modem (oasa-radio, milestone W0 of the R-COM2 plan) in simulation: BPSK, QPSK and 2-FSK bit error rates match theory, the IQ follows the energy convention, a wrong claim, a missing preamble, noise and a damaged frame are rejected (needs `OASA_RADIO_BIN_DIR`) |
 | `l2-pluto-acceptance` | A Pluto+ clone is genuine: tuning range, crystal error, all four ports on cable (Pluto+ and RTL-SDR) |
 | `l2-lora-link` | The encrypted link over two LoRa modems on coax; the air shows only ciphertext; an SDR recording matches the airtime (needs `OASA_SEC_BIN_DIR`, `OASA_RADIO_BIN_DIR`) |
 | `l2-rf-control` | Negative control: the air check finds a plaintext LoRa packet |

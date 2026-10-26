@@ -31,7 +31,7 @@ Follow the [OASA software standard](https://joinoasa.org/docs/software-standard/
 | `tail -f runs/*/log.jsonl` | Watch a run live |
 | `pytest -p oasa_lab.pytest_plugin suites/l0-lab` | A suite without a bundle (quick local loop) |
 
-Run `l0-lab`, `l1-channel`, `l1-plaintext-control`, `l1-profiles`, and with `OASA_LAB_SIM=1` `l2-pluto-acceptance` and `l2-rf-control` before every pull request; CI does the same (it also runs `l1-oasa-link` and `l2-lora-link` with the oasa-sec and oasa-radio binaries). Details: [README](README.md), [checker](docs/checker.md), [software used](docs/software-used.md).
+Run `l0-lab`, `l1-channel`, `l1-plaintext-control`, `l1-profiles`, and with `OASA_LAB_SIM=1` `l2-pluto-acceptance` and `l2-rf-control` before every pull request; CI does the same (it also runs `l1-oasa-link`, `l2-lora-link` and `l1-waveform-w0` with the oasa-sec and oasa-radio binaries). Details: [README](README.md), [checker](docs/checker.md), [software used](docs/software-used.md).
 
 ## Adding a suite or test
 

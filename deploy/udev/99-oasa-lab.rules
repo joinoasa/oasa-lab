@@ -1,0 +1,14 @@
+# OASA lab: let the lab service's group (plugdev, dialout) use the bench hardware. Nothing else is opened up.
+
+# ADALM-Pluto over USB (the Pluto+ is used over Ethernet, so this is only for setup and updates)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0456", ATTR{idProduct}=="b673", MODE="0664", GROUP="plugdev"
+
+# RTL-SDR (RTL2832U): Blog V4 and the common generic ids
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2838", MODE="0664", GROUP="plugdev", SYMLINK+="rtl_sdr"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", ATTR{idProduct}=="2832", MODE="0664", GROUP="plugdev", SYMLINK+="rtl_sdr"
+
+# Heltec WiFi LoRa 32 V3 (CP2102 serial bridge): /dev/ttyUSB* is already group dialout; keep it that way
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE="0660", GROUP="dialout"
+
+# USB hubs, so uhubctl can switch port power without root (hub class 09)
+SUBSYSTEM=="usb", ATTR{bDeviceClass}=="09", MODE="0664", GROUP="plugdev"

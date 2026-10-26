@@ -22,6 +22,11 @@ expectations = [
   "test_rtlsdr_real_backend_with_fake_tools",
   "test_hub_real_backend_with_fake_ykushcmd",
   "test_pluto_real_backend_with_a_fake_adi",
+  "test_a_suite_that_does_not_declare_transmits_cannot_transmit",
+  "test_a_suite_with_no_wiring_on_record_cannot_transmit",
+  "test_real_hardware_without_a_gate_never_transmits",
+  "test_real_hardware_needs_the_confirmed_wiring_even_with_a_gate",
+  "test_real_hardware_for_a_suite_that_does_not_say_whether_it_transmits_is_refused",
 ]
 
 [captures]

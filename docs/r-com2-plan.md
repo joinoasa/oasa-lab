@@ -87,7 +87,7 @@ Every feature passes L0 and L1 in CI before it touches hardware.
 - **labgrid** runs the hardware: a coordinator knows every radio, board, power switch and serial console; exporters on the lab hosts share them. We write drivers for the SDRs, attenuators and power control.
 - **pytest** runs the tests. One command for people and agents, for example `oasa-lab run l1-link-basic`.
 - **Live view:** JSON-lines logs stream during the run, so an agent can watch, spot a stall and stop it.
-- **Remote access only over WireGuard.** SDR network tools (SoapyRemote, rtl_tcp, iiod) have no authentication of their own.
+- **Remote access:** WireGuard for maintainers; everything else only through the authenticated job service ([remote-lab.md](remote-lab.md)). SDR network tools (SoapyRemote, rtl_tcp, iiod) have no authentication of their own and are never exposed.
 - **Hardware jobs run on a private runner.** GitHub warns that self-hosted runners on public repos can be taken over by outside pull requests, so lab hardware jobs use a separate private repo with one-job runners.
 
 ### Evidence every run leaves

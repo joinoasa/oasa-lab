@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import sys
 from importlib import metadata
@@ -15,6 +16,9 @@ from .jsonl import now_rfc3339
 from .suites import repo_root
 
 MANIFEST_SCHEMA = 1  # new fields since 0.1 (hardware, recordings, transmits, requires) are optional for the checker
+# Optional job details the service passes in; recorded in the manifest as manifest["job"].
+_JOB_ENV = {"id": "OASA_LAB_JOB_ID", "profile": "OASA_LAB_PROFILE", "rf_setup": "OASA_LAB_RF_SETUP",
+            "requested_by": "OASA_LAB_REQUESTED_BY", "wiring_confirmed": "OASA_LAB_WIRING_CONFIRMED"}
 
 
 def write_manifest(ctx: RunContext) -> dict:
@@ -47,6 +51,9 @@ def write_manifest(ctx: RunContext) -> dict:
         "expectations": list(ctx.suite.expectations),
         "markers": list(ctx.markers),
     }
+    job = {k: os.environ[v] for k, v in _JOB_ENV.items() if os.environ.get(v)}
+    if job:  # set by the job service (oasa_lab/service); absent in a plain run
+        manifest["job"] = job
     (ctx.run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 

@@ -1,0 +1,22 @@
+# /etc/cloudflared/config.yml  (06-cloudflared.sh fills in the tunnel id)
+# Two hostnames, both pointing only at the job service on 127.0.0.1:8742. Nothing else on this PC is reachable.
+# The SDR control ports (iiod 30431, rtl_tcp 1234, SoapyRemote 55132) are NOT listed and never will be.
+tunnel: TUNNEL_ID
+credentials-file: /etc/cloudflared/TUNNEL_ID.json
+
+ingress:
+  # 1) The Claude connector. Protected by the service's own OAuth (GitHub sign-in, owner only).
+  #    Only the paths the connector and its sign-in need.
+  - hostname: lab-mcp.example.com
+    path: ^/(mcp|authorize|token|register|revoke|healthz|oauth/.*|\.well-known/.*)$
+    service: http://127.0.0.1:8742
+    originRequest:
+      httpHostHeader: lab-mcp.example.com
+  # 2) The REST API and downloads. Put a Cloudflare Access policy (owner only) on this hostname.
+  - hostname: lab-api.example.com
+    path: ^/(api/.*|healthz)$
+    service: http://127.0.0.1:8742
+    originRequest:
+      httpHostHeader: lab-api.example.com
+  # Anything else: nothing.
+  - service: http_status:404

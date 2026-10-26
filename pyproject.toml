@@ -21,12 +21,16 @@ hw = [
   "pyserial>=3.5,<4",
   "pyadi-iio>=0.0.20,<0.1",
 ]
+# The remote job service and Claude connector (oasa-lab serve). The lab and the checker do not need it.
+service = [
+  "mcp>=2.3,<3",
+]
 
 [project.scripts]
 oasa-lab = "oasa_lab.cli:main"
 
 [tool.setuptools]
-packages = ["oasa_lab", "oasa_lab.checker", "oasa_lab.devices"]
+packages = ["oasa_lab", "oasa_lab.checker", "oasa_lab.devices", "oasa_lab.service"]
 
 [tool.pytest.ini_options]
 # Direct `pytest suites/<name>` also works: load the lab plugin.

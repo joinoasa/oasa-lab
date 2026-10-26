@@ -1,0 +1,31 @@
+// OASA lab: what the job service (user "oasalab") may ask systemd to do. Nothing else.
+//
+//   start or stop a unit named oasa-lab-job@<32 lowercase hex>.service   (one job)
+//   start oasa-lab-mirror.service                                        (refresh the git mirror)
+//
+// Any other unit, any other verb (restart, kill, reset-failed, set-property...) and transient units made on
+// the fly are refused: the service gets "no", not a password prompt. Other users and other actions are not
+// touched (NOT_HANDLED).
+//
+// systemd asks polkit for the action org.freedesktop.systemd1.manage-units and puts the unit name and the
+// verb in the details "unit" and "verb" (systemd src/core/dbus-util.c, bus_verify_manage_units_async_full).
+// A call that has no "unit" detail (for example StartTransientUnit) does not match and is refused below.
+//
+// polkit reads rules as ECMAScript 5 (polkit(8)): var, function, no arrow functions or template strings.
+// The id pattern must stay the same as JOB_ID_PATTERN in oasa_lab/policy.py (a test compares them).
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units" || subject.user !== "oasalab") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    if (typeof unit === "string" && typeof verb === "string") {
+        if (/^oasa-lab-job@[0-9a-f]{32}\.service$/.test(unit) && (verb === "start" || verb === "stop")) {
+            return polkit.Result.YES;
+        }
+        if (unit === "oasa-lab-mirror.service" && verb === "start") {
+            return polkit.Result.YES;
+        }
+    }
+    return polkit.Result.NO;
+});

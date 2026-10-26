@@ -132,9 +132,16 @@ class Lab:
 
         `data` is bytes or the path of a file to move in. `burst_check` asks the checker to line the
         recording's bursts up with the airtime of the frames in the named air captures.
+
+        `device` is a device id from the hardware manifest, or `sim:NAME` (for example `sim:waveform`) for
+        IQ that a simulation made with no device behind it. The recording is then marked simulated, and
+        `oasa-lab check --require-hardware` rejects the bundle.
         """
-        info = self.ctx.hardware["devices"].get(device, {})
-        hw = f"{info.get('model', device)} SN {info.get('serial', 'n/a')} ({info.get('backend', '?')})"
+        if sigmf.is_simulated(device):
+            hw = f"simulated ({device})"
+        else:
+            info = self.ctx.hardware["devices"].get(device, {})
+            hw = f"{info.get('model', device)} SN {info.get('serial', 'n/a')} ({info.get('backend', '?')})"
         entry = sigmf.write_recording(
             self.ctx.run_dir, self.ctx.next_index(), name, data, datatype=datatype, sample_rate=sample_rate,
             center_hz=center_hz, start_time=start_time, device=device, hw=hw, run_id=self.ctx.run_id,

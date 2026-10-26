@@ -13,3 +13,5 @@ dist/
 /deploy/setup.env
 /state/
 *.whl
+.oasa/
+oasa-checks.json

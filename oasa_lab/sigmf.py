@@ -35,6 +35,13 @@ def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", text).strip("-")[:48] or "rec"
 
 
+SIM_PREFIX = "sim:"   # a device id that starts like this is a simulation, not an entry in the hardware manifest
+
+
+def is_simulated(device: str) -> bool:
+    return device.startswith(SIM_PREFIX)
+
+
 SAMPLE_BYTES = {"cu8": 2, "ci8": 2, "ci16_le": 4, "cf32_le": 8}
 
 
@@ -42,7 +49,11 @@ def write_recording(run_dir: Path, index: int, name: str, data: bytes | Path, *,
                     center_hz: float, start_time: float, device: str, hw: str, run_id: str, purpose: str,
                     description: str = "", annotations: list[dict[str, Any]] | None = None,
                     burst_check: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Write the two files and return the manifest entry."""
+    """Write the two files and return the manifest entry.
+
+    A `device` that starts with `sim:` is a simulated source: the metadata gets `oasa:simulated: true`.
+    """
+    simulated = is_simulated(device)
     base = f"recordings/{index:02d}-{slug(name)}"
     (run_dir / "recordings").mkdir(exist_ok=True)
     data_path = run_dir / f"{base}.sigmf-data"
@@ -64,6 +75,7 @@ def write_recording(run_dir: Path, index: int, name: str, data: bytes | Path, *,
             "core:hw": hw,
             "oasa:run_id": run_id,
             "oasa:device": device,
+            "oasa:simulated": simulated,
             "oasa:purpose": purpose,
         },
         "captures": [{"core:sample_start": 0, "core:frequency": float(center_hz), "core:datetime": rfc3339(start_time)}],
@@ -75,6 +87,7 @@ def write_recording(run_dir: Path, index: int, name: str, data: bytes | Path, *,
         "base": base, "meta": f"{base}.sigmf-meta", "data": f"{base}.sigmf-data", "device": device,
         "datatype": datatype, "sample_rate": float(sample_rate), "center_hz": float(center_hz),
         "start": rfc3339(start_time), "samples": n, "purpose": purpose,
+        "simulated": simulated,
     }
     if burst_check:
         entry["burst_check"] = burst_check

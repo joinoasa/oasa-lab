@@ -2,7 +2,8 @@
 
 The modem is in oasa-radio (`oasa-radio waveform ...`, crate oasa-waveform). This suite drives it only
 through its command line and the files it writes, so the same checks can later run on IQ from an SDR.
-Everything here is simulation; there is no radio and no RF.
+Everything here is simulation; there is no radio and no RF. The IQ files it keeps are saved with
+`lab.sigmf(..., device="sim:waveform")`: SigMF recordings marked simulated, checked like any other.
 
 What it shows:
   - the bit error rate of BPSK, QPSK and 2-FSK (noncoherent) matches the textbook curves across Eb/N0,
@@ -23,6 +24,7 @@ import math
 import os
 import shutil
 import subprocess
+import time
 from array import array
 from pathlib import Path
 
@@ -82,6 +84,14 @@ def read_cf32(path: Path) -> array:
     a = array("f")
     a.frombytes(path.read_bytes())
     return a
+
+
+def save_iq(lab, info: dict, name: str, purpose: str) -> None:
+    """Keep the IQ file the modem wrote as a SigMF recording of the bundle (simulated source, no device)."""
+    meta = json.loads(Path(info["meta"]).read_text())
+    lab.sigmf(name, Path(info["data"]), datatype=meta["global"]["core:datatype"],
+              sample_rate=meta["global"]["core:sample_rate"], center_hz=meta["captures"][0]["core:frequency"],
+              start_time=time.time(), device="sim:waveform", purpose=purpose)
 
 
 def power(a: array, start: int, count: int) -> float:
@@ -155,8 +165,7 @@ def test_iq_follows_the_energy_convention(lab, radio, tmp_path, mod):
     want = 10 * math.log10(BITS_PER_SYMBOL[mod] * 10 ** (ebn0_db / 10) / SPS)
     assert abs(info["snr_per_sample_db"] - want) < 1e-6
     assert not failures, "; ".join(failures)
-    shutil.copy(Path(info["data"]), lab.file(f"{mod}-noisy.sigmf-data"))   # keep the noisy file in the evidence
-    shutil.copy(Path(info["meta"]), lab.file(f"{mod}-noisy.sigmf-meta"))
+    save_iq(lab, info, f"{mod}-noisy", f"{mod} noise-only lead-in plus one frame at {ebn0_db:g} dB Eb/N0")
 
 
 @pytest.mark.parametrize("mod", ["bpsk", "qpsk", "fsk2"])
@@ -184,8 +193,7 @@ def test_frame_survives_phase_delay_and_frequency_offset(lab, radio, tmp_path, m
     assert abs(f["start"] - 251) <= 1, f"frame found at sample {f['start']}, sent at 251.37"
     if mod != "fsk2":
         assert abs(f["cfo_cycles_per_symbol"] - 0.003) < 5e-4
-    shutil.copy(Path(info["data"]), lab.file(f"{mod}-frame.sigmf-data"))
-    shutil.copy(Path(info["meta"]), lab.file(f"{mod}-frame.sigmf-meta"))
+    save_iq(lab, info, f"{mod}-frame", f"{mod} frame at 20 dB Eb/N0 with phase, delay and frequency offset")
 
 
 def test_wrong_ebn0_claim_is_rejected(lab, radio):

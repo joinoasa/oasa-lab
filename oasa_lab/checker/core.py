@@ -852,8 +852,14 @@ def _recording_errors(b: Bundle, m: dict, recs: Any, by_id: dict[str, dict]) -> 
             continue
         seen.add(base)
         declared_files.update((meta_rel, data_rel))
-        if rec.get("device") not in by_id:
-            errs.append(f"{base}: device {rec.get('device')!r} is not a device in the manifest")
+        device = rec.get("device")
+        simulated = isinstance(device, str) and device.startswith(sigmf_mod.SIM_PREFIX)
+        if not simulated and device not in by_id:
+            errs.append(f"{base}: device {device!r} is not a device in the manifest "
+                        f"(a simulated source is named {sigmf_mod.SIM_PREFIX}NAME)")
+        if rec.get("simulated", False) is not simulated:
+            errs.append(f"{base}: manifest simulated={rec.get('simulated')!r} but device {device!r} "
+                        f"means simulated={simulated}")
         for rel in (meta_rel, data_rel):
             if rel not in sums:
                 errs.append(f"{rel} is not hashed in SHA256SUMS")
@@ -875,6 +881,9 @@ def _recording_errors(b: Bundle, m: dict, recs: Any, by_id: dict[str, dict]) -> 
             errs.append(f"{base}: oasa:run_id is not this run's id (a recording from another run?)")
         if g.get("oasa:device") != rec.get("device"):
             errs.append(f"{base}: oasa:device differs from the manifest")
+        if g.get("oasa:simulated", False) is not simulated:
+            errs.append(f"{base}: oasa:simulated is {g.get('oasa:simulated')!r} in the SigMF file "
+                        f"but the recording is {'simulated' if simulated else 'not simulated'}")
         for key, got in (("datatype", facts["datatype"]), ("sample_rate", facts["sample_rate"]),
                          ("center_hz", facts["frequency"]), ("samples", facts["samples"])):
             if rec.get(key) != got:
@@ -960,8 +969,12 @@ def check_radio(b: Bundle) -> dict:
     meas_errs, n_meas = _measurement_errors(b, decl)
     errs.extend(meas_errs)
     sim_ids = sorted(i for i, d in by_id.items() if d.get("backend") == "sim")
+    sim_recs = [r["base"] for r in recs if isinstance(r, dict) and isinstance(r.get("device"), str)
+                and r["device"].startswith(sigmf_mod.SIM_PREFIX) and isinstance(r.get("base"), str)]
     if b.require_hardware and (sim_ids or not by_id):
         errs.append("real hardware was required but " + (f"these devices were simulated: {sim_ids}" if sim_ids else "no device is on record"))
+    if b.require_hardware and sim_recs:
+        errs.append(f"real hardware was required but these recordings were simulated: {sim_recs}")
     if errs:
         raise Fail("; ".join(errs[:6]) + (f" (and {len(errs) - 6} more)" if len(errs) > 6 else ""), errors=errs, bursts=burst_rows)
     if not (by_id or recs or requires or transmits or n_meas):
@@ -970,12 +983,13 @@ def check_radio(b: Bundle) -> dict:
     if transmits:
         bits.append(f"RF {hw['rf']['setup']}, {len(hw['rf']['paths'])} path(s) at or above the minimum loss")
     if recs:
-        bits.append(f"{len(recs)} SigMF recording(s) listed, hashed and valid")
+        bits.append(f"{len(recs)} SigMF recording(s) listed, hashed and valid"
+                    + (f" ({len(sim_recs)} SIMULATED)" if sim_recs else ""))
     if burst_rows:
         bits.append(f"bursts line up with airtime in {len(burst_rows)} ({sum(r['matched'] for r in burst_rows)} frames)")
     if n_meas:
         bits.append(f"{n_meas} measurement(s) inside the suite's limits")
-    return {"reason": "; ".join(bits), "details": {"simulated": sim_ids, "bursts": burst_rows}}
+    return {"reason": "; ".join(bits), "details": {"simulated": sim_ids, "simulated_recordings": sim_recs, "bursts": burst_rows}}
 
 
 CHECKS: list[tuple[int, str, Callable[[Bundle], dict]]] = [

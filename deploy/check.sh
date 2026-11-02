@@ -9,7 +9,12 @@ pass() { printf '  ok    %s\n' "$*"; ok=$((ok+1)); }
 fail() { printf '  FAIL  %s\n' "$*"; bad=$((bad+1)); }
 
 echo "Listening sockets that are not loopback:"
-exposed="$(ss -H -ltnu 2>/dev/null | awk '{print $5}' | grep -Ev '^(127\.|\[::1\]|::1|\[::ffff:127\.)' | grep -Ev '^(\*|0\.0\.0\.0|\[::\]):(68|51820)$' || true)"
+# Read once: with pipefail, `nft ... | grep -q` can fail on a match, because grep closes the pipe early.
+rules="$(nft list ruleset 2>/dev/null || true)"
+input_drop=0; grep -Eq 'hook input .*policy drop' <<<"$rules" && input_drop=1
+exposed="$(ss -H -ltnu 2>/dev/null | awk '{print $5}' | grep -Ev '^(127\.|\[::1\]|::1|\[::ffff:127\.)' | grep -Ev '^(\*|0\.0\.0\.0|\[::\]):(68|51820)$' | grep -Ev '^[0-9.]+%[[:alnum:]_.-]+:68$' || true)"
+# SSH has to listen to be useful. It is fine only while the firewall drops inbound by default and decides who may reach it.
+if [ "$input_drop" = 1 ]; then exposed="$(grep -Ev '^(\*|0\.0\.0\.0|\[::\]):22$' <<<"$exposed" || true)"; fi
 if [ -z "$exposed" ]; then pass "nothing listens on a network address (except DHCP client and WireGuard)"; else fail "listening beyond loopback: $(echo "$exposed" | tr '\n' ' ')"; fi
 
 echo "SDR control ports (must be absent or loopback-only):"
@@ -47,7 +52,7 @@ grep -q '^mode *= *"systemd"' /etc/oasa-lab/service.toml && pass "sandbox mode i
 echo "    pause file: /etc/oasa-lab/PAUSE${note_paused}"
 
 echo "Firewall:"
-nft list ruleset 2>/dev/null | grep -q 'policy drop' && pass "nftables input policy is drop" || fail "no default-deny firewall loaded"
+[ "$input_drop" = 1 ] && pass "nftables input policy is drop" || fail "no default-deny firewall loaded"
 [ "$(sysctl -n net.ipv4.ip_forward)" = 0 ] && pass "IP forwarding is off" || fail "IP forwarding is on"
 
 echo "Tunnel:"

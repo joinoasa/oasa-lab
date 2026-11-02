@@ -3,6 +3,8 @@
 # The SDR control ports (iiod 30431, rtl_tcp 1234, SoapyRemote 55132) are NOT listed and never will be.
 tunnel: TUNNEL_ID
 credentials-file: /etc/cloudflared/TUNNEL_ID.json
+# TCP. QUIC, the default, keeps wildcard UDP sockets open, which check.sh rightly reports.
+protocol: http2
 
 ingress:
   # 1) The Claude connector. Protected by the service's own OAuth (GitHub sign-in, owner only).

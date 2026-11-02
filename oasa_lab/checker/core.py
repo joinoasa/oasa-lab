@@ -697,7 +697,7 @@ def check_expectations(b: Bundle) -> dict:
 
 
 # --- check 7: radio evidence ----------------------------------------------------------------
-DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio")
+DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio", "korad")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded")
 MIN_LOSS_TX_DB = 60.0       # cable loss between a transmitter and any receiver that a transmitter could damage

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-KINDS = ("pluto", "rtlsdr", "serial-radio", "hub")
+KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "hub")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded")
 
@@ -31,6 +31,7 @@ DEFAULT_SIM: dict[str, Any] = {
         "heltec_b": {"kind": "serial-radio", "model": "Heltec WiFi LoRa 32 V3", "port": "sim:b",
                      "serial": "SIM-HELTEC-B", "hub_port": 4, "firmware": "sim-modem 0.1",
                      "radio": {"profile": "lora-sf7-bw125", "freq_mhz": 915.0, "tx_power_dbm": 10}},
+        "korad0": {"kind": "korad", "port": "sim:korad", "serial": "SIM-KORAD-0001"},
     },
     "wiring": {
         "pluto": {
@@ -96,7 +97,7 @@ class Inventory:
         devices = {}
         for dev_id, cfg in (data.get("devices") or {}).items():
             if not isinstance(cfg, dict) or cfg.get("kind") not in KINDS or cfg.get("kind") == "hub":
-                raise InventoryError(f"{source}: devices.{dev_id}.kind must be one of {KINDS[:3]}")
+                raise InventoryError(f"{source}: devices.{dev_id}.kind must be one of {KINDS[:-1]}")
             cfg = dict(cfg)
             if force_sim:
                 cfg["backend"] = "sim"

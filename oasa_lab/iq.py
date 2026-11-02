@@ -1,7 +1,7 @@
 """IQ samples and a small tone measurement, in pure Python (no numpy, so CI needs nothing extra).
 
-`IQ.data` is raw bytes in one of two SigMF datatypes: `cf32_le` (float32 pairs, what the Pluto gives)
-or `cu8` (unsigned 8-bit pairs, what rtl_sdr writes). Full scale is magnitude 1.0, so a tone of
+`IQ.data` is raw bytes in a SigMF datatype: `cf32_le` (float32 pairs, what the Pluto gives), `cu8`
+(unsigned 8-bit pairs, what rtl_sdr writes) or `ci16_le` (signed 16-bit pairs, what UHD writes). Full scale is magnitude 1.0, so a tone of
 amplitude 1 reads 0 dBFS.
 """
 
@@ -13,7 +13,7 @@ import sys
 from array import array
 from dataclasses import dataclass
 
-DATATYPES = {"cf32_le": 8, "cu8": 2}  # bytes per complex sample
+DATATYPES = {"cf32_le": 8, "cu8": 2, "ci16_le": 4}  # bytes per complex sample
 
 
 @dataclass
@@ -33,11 +33,12 @@ class IQ:
         raw = self.data[start * size:(start + count) * size]
         if self.datatype == "cu8":
             return [complex((raw[i] - 127.5) / 127.5, (raw[i + 1] - 127.5) / 127.5) for i in range(0, len(raw), 2)]
-        a = array("f")
+        a = array("h" if self.datatype == "ci16_le" else "f")
         a.frombytes(raw)
         if sys.byteorder == "big":
             a.byteswap()
-        return [complex(a[i], a[i + 1]) for i in range(0, len(a), 2)]
+        scale = 32768.0 if self.datatype == "ci16_le" else 1.0
+        return [complex(a[i] / scale, a[i + 1] / scale) for i in range(0, len(a), 2)]
 
 
 def cf32_bytes(samples: list[complex]) -> bytes:

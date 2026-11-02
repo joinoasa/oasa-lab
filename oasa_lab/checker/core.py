@@ -697,7 +697,7 @@ def check_expectations(b: Bundle) -> dict:
 
 
 # --- check 7: radio evidence ----------------------------------------------------------------
-DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio", "korad")
+DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded")
 MIN_LOSS_TX_DB = 60.0       # cable loss between a transmitter and any receiver that a transmitter could damage
@@ -736,7 +736,7 @@ def _device_errors(devices: Any, hub: Any) -> tuple[list[str], dict[str, dict]]:
         if d.get("backend") == "hardware":
             if d.get("serial") in ("n/a", None, ""):
                 errs.append(f"{tag}: a real device must have a serial number on record")
-            if d.get("kind") in ("pluto", "serial-radio") and d.get("firmware") in ("n/a", None, ""):
+            if d.get("kind") in ("pluto", "serial-radio", "b200", "e310") and d.get("firmware") in ("n/a", None, ""):
                 errs.append(f"{tag}: a real {d.get('kind')} must have its firmware version on record")
     if hub is not None and not (isinstance(hub, dict) and hub.get("backend") in BACKENDS):
         errs.append("hardware.hub needs a backend (sim or hardware)")

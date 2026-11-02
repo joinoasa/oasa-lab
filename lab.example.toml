@@ -77,6 +77,22 @@ serial = "00000000"           # `*IDN?` shows it. The driver refuses a different
 # max_a = 2.0
 # hold_output = true
 
+# --- Ettus B200mini on USB and USRP E310 on the network, receive only ------------------------------
+# UHD tools run as separate processes. `uhd_find_devices` shows the serials. The suite refuses a different unit.
+# max_rx_rate is the highest rate the driver will ask for. Raise it once your host shows the rate stays clean.
+[devices.b2000]
+kind = "b200"
+serial = "0000000"
+# max_rx_rate = 10e6
+
+[devices.e3100]
+kind = "e310"
+addr = "192.168.2.2"          # the E310's address. Keep it on a private network.
+serial = "0000000"
+subdev = "A:0 A:1"
+channel = 1                   # 0 is RX2-A, 1 is RX2-B
+# max_rx_rate = 1e6
+
 # --- Cabling ------------------------------------------------------------------------------------------
 # A suite that transmits names one of these in suite.toml. `loss_db` is the nominal loss of everything
 # between the two ends (fixed attenuators, splitter legs, cables): add it up from the parts. The

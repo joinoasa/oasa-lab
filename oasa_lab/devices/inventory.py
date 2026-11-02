@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "hub")
+KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310", "hub")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded")
 
@@ -32,6 +32,8 @@ DEFAULT_SIM: dict[str, Any] = {
                      "serial": "SIM-HELTEC-B", "hub_port": 4, "firmware": "sim-modem 0.1",
                      "radio": {"profile": "lora-sf7-bw125", "freq_mhz": 915.0, "tx_power_dbm": 10}},
         "korad0": {"kind": "korad", "port": "sim:korad", "serial": "SIM-KORAD-0001"},
+        "b2000": {"kind": "b200", "serial": "SIM-B200-0001"},
+        "e3100": {"kind": "e310", "addr": "sim", "serial": "SIM-E310-0001", "channel": 1, "subdev": "A:0 A:1"},
     },
     "wiring": {
         "pluto": {

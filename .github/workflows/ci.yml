@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [l0-lab, l1-channel, l1-plaintext-control, l1-profiles, l2-pluto-acceptance, l2-rf-control]
+        suite: [l0-lab, l1-channel, l1-plaintext-control, l1-profiles, l2-pluto-acceptance, l2-rf-control, l2-rx-noise]
     permissions:
       contents: read
       id-token: write

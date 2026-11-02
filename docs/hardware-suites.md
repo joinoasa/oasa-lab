@@ -7,6 +7,7 @@ The first suites that use real radios on cables. They are written and tested on 
 | `l2-pluto-acceptance` | A Pluto+ clone is what it claims: identity, tuning range, crystal error, all four RF ports | Pluto+, RTL-SDR |
 | `l2-lora-link` | The encrypted link works over two LoRa modems on coax, matches the airtime model, and the air shows only ciphertext | 2 Heltec modems, RTL-SDR, `oasa-sec`, `oasa-radio` |
 | `l2-rf-control` | Negative control: a plaintext LoRa packet **is** found by the same air check | 2 Heltec modems, RTL-SDR |
+| `l2-rx-noise` | Receive only: each radio is alive and its input is quiet, and the E310 draws normal power. Transmits nothing and only reads the supply | B200mini, E310, KORAD |
 
 > **Safety. Never connect two transmitters, or a transmitter and a receiver, by coax without at least 60 dB of attenuation between them.** Receive-only gear (the RTL-SDR) needs 40 dB. Fixed attenuators first, then cables. Check the wiring against the diagrams below before every transmitting run. The lab refuses to transmit on real hardware until you type the wiring name: `--confirm-wiring NAME`. The checker fails any bundle whose declared paths are below the limits. Radiating over the air is not part of L2.
 

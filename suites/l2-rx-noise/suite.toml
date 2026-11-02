@@ -1,0 +1,30 @@
+description = "Receive only: noise floor of a B200mini and an E310 at 915 MHz, and the E310's power draw read from its KORAD supply (needs a B200mini, an E310 and a KORAD)"
+expectations = [
+  "test_b200_noise_floor",
+  "test_e310_noise_floor",
+  "test_e310_power_draw",
+]
+transmits = false
+requires = ["b200", "e310", "korad"]
+
+# "est." = a first guess from one bench, to tune as more runs come in.
+
+[limits.rx_noise_dbfs]
+min = -90.0
+max = -50.0
+reason = """Mean power at 915 MHz, gain 40 dB, with nothing transmitting. First bench: B200mini -72 dBFS, E310 -67 dBFS.
+est. The window is about 20 dB around those. Below it the receiver is probably dead or the gain was not set. Above
+it something is coupling in, or a transmitter is on."""
+
+[limits.e310_power_w]
+min = 1.5
+max = 6.0
+reason = """Volts times amps from the supply with the E310 idle. First bench: 6.0 V, 0.387 A, 2.3 W. est. Below 1.75 W
+(0.29 A) the E310 is stuck before Linux with its SD card unread, so 1.5 W is a floor for a unit that is not running
+at all. Above 6 W (1 A) something draws far more than an idle E310 should."""
+
+[limits.e310_supply_v]
+min = 5.9
+max = 6.05
+reason = """The E310 runs from 6 V here. The driver will not set more than 6 V; 6.05 V leaves room for the supply's
+own reading. Below 5.9 V the supply is current limiting or the output is sagging."""

@@ -44,7 +44,7 @@ systemctl show -p ExecStart --value "$UNIT" 2>/dev/null | grep -q 'path=/opt/oas
 for p in /opt/oasa-lab/venv/bin/oasa-lab /opt/oasa-lab/venv/lib; do
   [ "$(stat -c '%U' "$p")" = root ] && pass "$p is root-owned" || fail "$p is not root-owned"
 done
-for key in MemoryMax TasksMax RuntimeMaxSec; do
+for key in MemoryMax TasksMax RuntimeMaxUSec; do  # RuntimeMaxSec= in the unit is RuntimeMaxUSec in systemctl show
   got="$(systemctl show -p "$key" --value "$UNIT" 2>/dev/null)"
   case "$got" in ""|infinity|0|"[not set]") fail "$key is not limited ('$got')";; *) pass "$key=$got";; esac
 done

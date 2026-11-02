@@ -7,12 +7,13 @@ from typing import Any
 from .base import Device, DeviceError, TxRefused, Unavailable
 from .hub import SimHub, UsbHub, make_hub
 from .inventory import Inventory, InventoryError
+from .korad import Korad
 from .modem import ModemLink, SerialRadio
 from .pluto import Pluto
 from .rtlsdr import RtlSdr
 from .sim import SimWorld
 
-DRIVERS: dict[str, type[Device]] = {"pluto": Pluto, "rtlsdr": RtlSdr, "serial-radio": SerialRadio}
+DRIVERS: dict[str, type[Device]] = {"pluto": Pluto, "rtlsdr": RtlSdr, "serial-radio": SerialRadio, "korad": Korad}
 
 
 def make_device(dev_id: str, inv: Inventory, hub: UsbHub | None, world: SimWorld | None) -> Device:
@@ -22,4 +23,4 @@ def make_device(dev_id: str, inv: Inventory, hub: UsbHub | None, world: SimWorld
 
 
 __all__ = ["Device", "DeviceError", "TxRefused", "Unavailable", "Inventory", "InventoryError", "UsbHub", "SimHub", "SimWorld",
-           "Pluto", "RtlSdr", "SerialRadio", "ModemLink", "make_device", "make_hub"]
+           "Pluto", "RtlSdr", "SerialRadio", "Korad", "ModemLink", "make_device", "make_hub"]

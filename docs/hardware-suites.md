@@ -32,6 +32,7 @@ What the simulation **cannot** show: the real tools and libraries, USB and seria
 | `pluto` | Pluto+ (AD9363, 2 TX, 2 RX, TCXO) | `devices/pluto.py` | pyadi-iio (optional extra), over Ethernet or USB |
 | `rtlsdr` | RTL-SDR Blog V4 (receive only) | `devices/rtlsdr.py` | `rtl_sdr` and `rtl_test` as separate processes; records raw IQ (`cu8`) |
 | `serial-radio` | Heltec WiFi LoRa 32 V3 with the OASA LoRa modem firmware | `devices/modem.py` | pyserial; oasa-radio serial framing |
+| `korad` | KORAD KA3005P bench supply | `devices/korad.py` | pyserial. Never above 6 V, 3 A; `lab.toml` can only lower that. `hold_output = true` for a supply that feeds a radio |
 | hub | YKUSH3 (or any uhubctl hub) | `devices/hub.py` | `ykushcmd` or `uhubctl` as separate processes |
 
 Every driver has `open`, `info`, `close` and `power_cycle` (through the hub), and a simulated twin. `info` always carries `model`, `serial`, `firmware` and `backend`; the manifest records it.

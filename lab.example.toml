@@ -65,6 +65,18 @@ profile = "lora-sf7-bw125"
 freq_mhz = 915.0
 tx_power_dbm = 10
 
+# --- KORAD KA3005P bench supply ---------------------------------------------------------------------
+# Never more than 6 V, 3 A: that limit is in the driver. max_v and max_a here can only lower it.
+# The output is off at open and close. If this supply feeds a radio, set hold_output = true: the driver then
+# leaves the output alone. Without it, `oasa-lab devices` turns the output off.
+[devices.korad0]
+kind = "korad"
+port = "/dev/serial/by-id/usb-Nuvoton_USB_Virtual_COM_000000000000-if00"
+serial = "00000000"           # `*IDN?` shows it. The driver refuses a different unit, before it changes anything.
+# max_v = 5.5
+# max_a = 2.0
+# hold_output = true
+
 # --- Cabling ------------------------------------------------------------------------------------------
 # A suite that transmits names one of these in suite.toml. `loss_db` is the nominal loss of everything
 # between the two ends (fixed attenuators, splitter legs, cables): add it up from the parts. The

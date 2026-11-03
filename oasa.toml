@@ -59,6 +59,16 @@ name = "l2-rf-control"
 run = ".venv/bin/oasa-lab run l2-rf-control"
 env = { OASA_LAB_SIM = "1" }
 
+[[check]]
+name = "l2-rx-noise"
+run = ".venv/bin/oasa-lab run l2-rx-noise"
+env = { OASA_LAB_SIM = "1" }
+
+[[check]]
+name = "l2-usrp-loopback"
+run = ".venv/bin/oasa-lab run l2-usrp-loopback"
+env = { OASA_LAB_SIM = "1" }
+
 # CI also runs the job service tests (not in AGENTS.md's list, but cheap).
 [[check]]
 name = "service"

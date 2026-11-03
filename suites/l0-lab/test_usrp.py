@@ -1,15 +1,18 @@
-"""The B200mini and E310 drivers: receive only, UHD only as a separate process, and no quiet sample loss.
-The real backend runs against fake UHD tools on PATH. That checks our logic, not UHD."""
+"""The B200mini and E310 drivers: UHD only as a separate process, no quiet sample loss, and a transmit path
+that is gated, capped and always stopped. The real backend runs against fake UHD tools on PATH. That checks
+our logic, not UHD."""
 
 import ast
 import os
 import stat
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
 
-from oasa_lab.devices import DeviceError, Inventory, Unavailable, make_device
+from oasa_lab.devices import DeviceError, Inventory, SimWorld, Unavailable, make_device
+from oasa_lab.devices.base import TxRefused
 from oasa_lab.devices import usrp as usrp_module
 from oasa_lab.devices.inventory import DEFAULT_SIM
 from oasa_lab.iq import IQ
@@ -70,6 +73,30 @@ def uhd(tmp_path, monkeypatch):
         open(a[a.index("-o") + 1], "wb").write(bytes(8 * n))
         print({"overflow": "Got an overflow indication.", "letters": "OOO"}.get(mode, "Success"))
     '''))
+    monkeypatch.setenv("FAKE_TX", "good")
+    tool(tmp_path, "tx_waveforms", logline + textwrap.dedent('''
+        import signal, time
+        mode = os.environ["FAKE_TX"]
+        state = os.environ["FAKE_LOG"] + ".tx"
+        if mode == "claim" and not os.path.exists(state):
+            open(state, "w").write("1")
+            print("Error: RuntimeError: Error during RPC call to `claim'. Error message: Someone tried to claim this device again", flush=True)
+            sys.exit(1)
+        if mode == "fail":
+            print("Error: no device", flush=True); sys.exit(1)
+        stop = []
+        signal.signal(signal.SIGINT, lambda *a: stop.append(1))
+        print("Press Ctrl + C to stop streaming...", flush=True)
+        if mode == "underflow":
+            print("UUU", flush=True)
+        t0 = time.time()
+        while not stop and time.time() - t0 < 30:
+            time.sleep(0.02)
+        open(os.environ["FAKE_LOG"], "a").write("tx stopped\\n")
+        print("Done!", flush=True)
+    '''))
+    monkeypatch.setattr(usrp_module, "CLAIM_WAIT_S", 0.1)
+    monkeypatch.setattr(usrp_module, "TX_START_TIMEOUT_S", 10.0)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
     return log
 
@@ -94,7 +121,7 @@ def test_they_open_on_the_built_in_sim_bench(dev_id, kind):
     with make_device(dev_id, inv, None, None) as dev:
         info = dev.info()
         iq = dev.capture(915e6, 1e6, 4096, gain_db=40)
-    assert info["kind"] == kind and info["backend"] == "sim" and info["receive_only"] is True
+    assert info["kind"] == kind and info["backend"] == "sim" and info["max_tx_gain"] == 40.0
     assert isinstance(iq, IQ) and iq.n == 4096 and iq.datatype == {"b200": "cf32_le", "e310": "ci16_le"}[kind]
 
 
@@ -111,21 +138,105 @@ def test_ci16_scale_is_full_scale_at_one():
     assert IQ(b"\x00\x80\x00\x40", "ci16_le", 1, 1).samples() == [complex(-1.0, 0.5)]
 
 
-@pytest.mark.parametrize("kind", ["b200", "e310"])
-def test_there_is_no_transmit_path(kind):
-    names = {n for n in dir(radio(kind)) if any(w in n.lower() for w in ("tx", "transmit", "send"))}
-    assert names <= {"require_tx", "tx_gate"}
-
-
-def test_uhd_is_never_imported_and_only_rx_tools_run():
+def test_uhd_is_never_imported_and_the_only_tx_tool_is_a_tone():
     source = Path(usrp_module.__file__).read_text()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
             assert not any(a.name.startswith("uhd") for a in node.names)
         if isinstance(node, ast.ImportFrom):
             assert not (node.module or "").startswith("uhd")
-    for word in ("tx_waveforms", "tx_samples_from_file", "benchmark_rate"):
+    for word in ("tx_samples_from_file", "tx_bursts", "tx_timed_samples", "benchmark_rate"):
         assert word not in source
+
+
+# --- transmit --------------------------------------------------------------------------------------
+def gated(dev, why=None):
+    dev.tx_gate = lambda: why
+    return dev
+
+
+@pytest.mark.parametrize("kind", ["b200", "e310"])
+def test_real_tx_needs_the_gate(uhd, kind):
+    with radio(kind) as dev:
+        with pytest.raises(TxRefused, match="hw fixture"):
+            dev.tx_tone(915e6, 1e5, 10, 0.3, 1e6)
+        gated(dev, "wiring 'usrp' was not confirmed")
+        with pytest.raises(TxRefused, match="not confirmed"):
+            dev.tx_tone(915e6, 1e5, 10, 0.3, 1e6)
+    assert "tx_waveforms" not in uhd.read_text()
+
+
+def test_tx_limits_never_reach_the_tool(uhd):
+    with gated(radio("b200")) as dev:
+        for gain, scale, fs, off in ((40.5, 0.3, 1e6, 1e5), (-1, 0.3, 1e6, 1e5), (10, 0.71, 1e6, 1e5),
+                                     (10, 0, 1e6, 1e5), (10, 0.3, 1.1e6, 1e5), (10, 0.3, 1e6, 6e5)):
+            with pytest.raises(DeviceError, match="refused|outside"):
+                dev.tx_tone(915e6, off, gain, scale, fs)
+    assert "tx_waveforms" not in uhd.read_text()
+
+
+def test_max_tx_gain_can_be_raised_but_not_past_the_radio(uhd):
+    with gated(radio("b200", max_tx_gain=60)) as dev:
+        dev.tx_tone(915e6, 1e5, 55, 0.3, 1e6)
+        dev.tx_off()
+    with pytest.raises(DeviceError, match="max_tx_gain"):
+        radio("b200", max_tx_gain=90).open()
+
+
+def test_e310_tone_uses_side_a_and_stops_on_close(uhd):
+    with gated(radio("e310", subdev="A:0 A:1", channel=1)) as dev:
+        dev.tx_tone(915e6, 1e5, 30, 0.3, 1e6)
+        assert dev.transmitting
+    calls = uhd.read_text()
+    line = next(l for l in calls.splitlines() if "tx_waveforms" in l)
+    for part in ("--args type=e3xx,addr=10.0.0.2", "--freq 915000000", "--gain 30", "--ampl 0.3", "--wave-type SINE",
+                 "--wave-freq 100000", "--rate 1000000", "--ant TX/RX", "--channels 0", "--subdev A:0",
+                 f"--nsamps {int(1e6 * 60)}"):
+        assert part in line
+    assert "tx stopped" in calls, "close() must stop the transmitter"
+    assert dev.info  # still callable
+
+
+def test_tx_off_stops_the_tool_and_counts_underflows(uhd, monkeypatch):
+    monkeypatch.setenv("FAKE_TX", "underflow")
+    with gated(radio("b200")) as dev:
+        dev.tx_tone(915e6, 1e5, 30, 0.3, 1e6)
+        time.sleep(0.2)
+        got = dev.tx_off()
+        assert not dev.transmitting and got["underflows"] == 3
+        assert dev.tx_off()["underflows"] == 3   # a second stop is harmless
+    assert "tx stopped" in uhd.read_text()
+
+
+def test_a_claim_clash_is_retried(uhd, monkeypatch):
+    monkeypatch.setenv("FAKE_TX", "claim")
+    with gated(radio("e310")) as dev:
+        dev.tx_tone(915e6, 1e5, 30, 0.3, 1e6)
+        assert dev.transmitting
+    assert uhd.read_text().count("tx_waveforms") == 2
+
+
+def test_a_tx_tool_that_fails_is_an_error(uhd, monkeypatch):
+    monkeypatch.setenv("FAKE_TX", "fail")
+    with gated(radio("b200")) as dev:
+        with pytest.raises(DeviceError, match="did not start: Error: no device"):
+            dev.tx_tone(915e6, 1e5, 30, 0.3, 1e6)
+        assert not dev.transmitting
+
+
+def test_simulated_tone_crosses_the_wired_path_only():
+    from oasa_lab.iq import tone_report
+    inv = Inventory.from_dict(DEFAULT_SIM, "test", force_sim=True)
+    world = SimWorld(1, inv.wiring)
+    b200, e310 = (make_device(i, inv, None, world).open() for i in ("b2000", "e3100"))
+    b200.tx_tone(915e6, 1e5, 40, 0.3, 1e6)
+    on = tone_report(e310.capture(915e6, 1e6, 16384, gain_db=40))
+    loop = tone_report(b200.capture(915e6, 1e6, 16384, gain_db=40))   # no path from a radio to itself
+    b200.tx_off()
+    off = tone_report(e310.capture(915e6, 1e6, 16384, gain_db=40))
+    assert abs(on["tone_dbfs"] - (-75 + 40 - 10.46 - 60 + 40)) < 1.5
+    assert abs((on["freq_hz"] - 1e5) / 915e6 * 1e6 + 2.4) < 0.1      # the E310's simulated crystal is 2.4 ppm high
+    assert loop["snr_db"] < -20 and off["snr_db"] < -20
 
 
 def test_identity_and_versions_are_read(uhd):

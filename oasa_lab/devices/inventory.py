@@ -34,7 +34,8 @@ DEFAULT_SIM: dict[str, Any] = {
         "korad0": {"kind": "korad", "port": "sim:korad", "serial": "SIM-KORAD-0001", "hold_output": True,
                    "sim": {"on": True, "vset": 6.0, "iset": 3.0}},
         "b2000": {"kind": "b200", "serial": "SIM-B200-0001"},
-        "e3100": {"kind": "e310", "addr": "sim", "serial": "SIM-E310-0001", "channel": 1, "subdev": "A:0 A:1"},
+        "e3100": {"kind": "e310", "addr": "sim", "serial": "SIM-E310-0001", "channel": 1, "subdev": "A:0 A:1",
+                  "sim": {"xo_ppm": 2.4}},
     },
     "wiring": {
         "pluto": {
@@ -44,6 +45,14 @@ DEFAULT_SIM: dict[str, Any] = {
                 {"name": "tx1-rx1", "from": "pluto0:tx1", "to": "pluto0:rx1", "loss_db": 63.5},
                 {"name": "tx2-rx2", "from": "pluto0:tx2", "to": "pluto0:rx2", "loss_db": 60.0},
                 {"name": "tx1-rtl", "from": "pluto0:tx1", "to": "rtl0", "loss_db": 63.5, "receiver_transmits": False},
+            ],
+        },
+        "usrp": {
+            "rf_setup": "cabled",
+            "description": "B200mini TX/RX to E310 RX2-B and E310 TRX-A to B200mini RX2, each through 30 + 20 + 10 dB",
+            "paths": [
+                {"name": "b200-e310", "from": "b2000:tx/rx", "to": "e3100:rx2-b", "loss_db": 60.0},
+                {"name": "e310-b200", "from": "e3100:trx-a", "to": "b2000:rx2", "loss_db": 60.0},
             ],
         },
         "lora": {

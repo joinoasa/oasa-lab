@@ -8,6 +8,7 @@ The first suites that use real radios on cables. They are written and tested on 
 | `l2-lora-link` | The encrypted link works over two LoRa modems on coax, matches the airtime model, and the air shows only ciphertext | 2 Heltec modems, RTL-SDR, `oasa-sec`, `oasa-radio` |
 | `l2-rf-control` | Negative control: a plaintext LoRa packet **is** found by the same air check | 2 Heltec modems, RTL-SDR |
 | `l2-rx-noise` | Receive only: each radio is alive and its input is quiet, and the E310 draws normal power. Transmits nothing and only reads the supply | B200mini, E310, KORAD |
+| `l2-usrp-loopback` | A tone each way between a B200mini and an E310 over cable: the level follows the TX gain, the crystal offset is in spec and mirrors between directions, and the tone stops when the transmitter does | B200mini, E310 |
 
 > **Safety. Never connect two transmitters, or a transmitter and a receiver, by coax without at least 60 dB of attenuation between them.** Receive-only gear (the RTL-SDR) needs 40 dB. Fixed attenuators first, then cables. Check the wiring against the diagrams below before every transmitting run. The lab refuses to transmit on real hardware until you type the wiring name: `--confirm-wiring NAME`. The checker fails any bundle whose declared paths are below the limits. Radiating over the air is not part of L2.
 
@@ -34,8 +35,8 @@ What the simulation **cannot** show: the real tools and libraries, USB and seria
 | `rtlsdr` | RTL-SDR Blog V4 (receive only) | `devices/rtlsdr.py` | `rtl_sdr` and `rtl_test` as separate processes; records raw IQ (`cu8`) |
 | `serial-radio` | Heltec WiFi LoRa 32 V3 with the OASA LoRa modem firmware | `devices/modem.py` | pyserial; oasa-radio serial framing |
 | `korad` | KORAD KA3005P bench supply | `devices/korad.py` | pyserial. Never above 6 V, 3 A; `lab.toml` can only lower that. `hold_output = true` for a supply that feeds a radio |
-| `b200` | Ettus B200mini, receive only | `devices/usrp.py` | UHD tools as separate processes; records raw IQ (`cf32_le`) |
-| `e310` | Ettus USRP E310, receive only | `devices/usrp.py` | UHD tools as separate processes, `type=e3xx,addr=...` over the network; records raw IQ (`ci16_le`) |
+| `b200` | Ettus B200mini | `devices/usrp.py` | UHD tools as separate processes; records raw IQ (`cf32_le`); transmits only a test tone (`tx_waveforms`), TX gain capped by `max_tx_gain` (default 40 dB) |
+| `e310` | Ettus USRP E310 | `devices/usrp.py` | UHD tools as separate processes, `type=e3xx,addr=...` over the network; records raw IQ (`ci16_le`); test tone from TRX-A, same cap |
 | hub | YKUSH3 (or any uhubctl hub) | `devices/hub.py` | `ykushcmd` or `uhubctl` as separate processes |
 
 Every driver has `open`, `info`, `close` and `power_cycle` (through the hub), and a simulated twin. `info` always carries `model`, `serial`, `firmware` and `backend`; the manifest records it.
@@ -97,9 +98,27 @@ The Pluto+ puts out about +7 dBm at most. Sixty dB leaves -53 dBm at a receiver 
 
 Set the modems to 10 dBm. At 72 dB B hears A at about -62 dBm (LoRa SF7 needs -123). The RTL-SDR sees about -56 dBm, 20 dB or more over its noise at a low gain.
 
+### USRP loopback (`wiring.usrp`)
+
+```
+              30 dB   20 dB   10 dB
+ B200mini TX/RX --[ATT]--[ATT]--[ATT]-- E310 RX2-B        B200 to E310: 60 dB
+
+              30 dB   20 dB   10 dB
+ E310 TRX-A   --[ATT]--[ATT]--[ATT]-- B200mini RX2        E310 to B200: 60 dB
+```
+
+Both radios can transmit, so each path needs 60 dB. Ettus limits: TX +20 dBm, RX input -15 dBm. At full TX gain the
+receiver would see about -40 dBm; the suite stops at TX gain 40 dB (about -110 dBm at the receiver, est.). Tighten
+every SMA join by hand and check it: on the first bench a loose join on the B200 side added about 21 dB.
+
+The two radios read about 17 dB apart for the same gains (the E310 sends more, or the B200 hears better, at the
+same gain index; measured by swapping the two attenuator stacks). So compare a path with itself over time, not
+the two paths with each other.
+
 Change the cabling between suites; `--confirm-wiring` is how you say the right one is in place.
 
-**The transmit calls check too.** `Pluto.tx_tone` and `ModemLink.send_packet` (and the pty a bridge writes through) ask the run first: the suite must say `transmits = true` in `suite.toml`, and a wiring must be on record (`hw.use_wiring()`, which on real hardware needs `--confirm-wiring`). Otherwise they raise `TxRefused` before anything goes out. A device built by hand on real hardware, with no `hw` fixture behind it, never transmits. A suite with `requires` must say `transmits = true` or `transmits = false`; on real hardware it is refused if it says neither. Muting (`tx_off`) and receiving are always allowed.
+**The transmit calls check too.** `Pluto.tx_tone`, `Usrp.tx_tone` and `ModemLink.send_packet` (and the pty a bridge writes through) ask the run first: the suite must say `transmits = true` in `suite.toml`, and a wiring must be on record (`hw.use_wiring()`, which on real hardware needs `--confirm-wiring`). Otherwise they raise `TxRefused` before anything goes out. A device built by hand on real hardware, with no `hw` fixture behind it, never transmits. A suite with `requires` must say `transmits = true` or `transmits = false`; on real hardware it is refused if it says neither. Muting (`tx_off`) and receiving are always allowed.
 
 ## Running the suites
 
@@ -170,6 +189,15 @@ app -> oasa-link -> bridge -> pty -> TAP -> modem A ~~ coax ~~ modem B -> TAP ->
 - **The air check.** The tap keeps every frame each modem delivered to its host: what anyone with a receiver would get. They are saved as `captures/NN-air-DEVICE.pcap` (frames in synthetic IP and UDP headers) and the checker scans them as it scans simulated captures: no marker, no MAVLink, random-looking bytes.
 - **The SDR recording.** The RTL-SDR records the whole exchange as SigMF (`cu8`, 250 kS/s, centered on the channel). The checker finds bursts of energy and lines them up with the frames: each frame needs a burst of the right length (airtime) at the right time. No demodulation.
 - `test_modems_pass_packets_both_ways` runs first and tells a radio fault from a link fault.
+
+### `l2-usrp-loopback`
+
+For each direction the suite sends a 100 kHz-offset tone at 915 MHz, amplitude 0.3, at TX gain 20, 30 and 40 dB,
+and records it at RX gain 40 dB. It stops if a probe tone reads above -20 dBFS (a wrong cable), before raising the
+gain. At the last gain it measures the level, the SNR and where the tone landed; then it stops the transmitter and
+records again: the tone must be gone (the known-bad case). The two directions' crystal offsets must add up to
+about zero. The transmitter is a `tx_waveforms` process; it also stops by itself after `max_tx_seconds` (60 s), and
+`close()` stops it in any case. Limits and their reasons: the suite's `suite.toml`.
 
 ### `l2-rf-control`
 

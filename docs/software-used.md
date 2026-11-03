@@ -35,7 +35,7 @@ Tools run as **separate processes** (never imported, never shipped):
 | Tool | License | Use | Flag |
 |---|---|---|---|
 | [rtl-sdr-blog](https://github.com/rtlsdrblog/rtl-sdr-blog) `rtl_sdr`, `rtl_test` | GPL-2.0 | Records raw IQ from the RTL-SDR Blog V4 (the V4 needs this fork) | **GPL.** Subprocess only |
-| [UHD](https://github.com/EttusResearch/uhd) `uhd_usrp_probe`, `uhd_config_info`, `rx_samples_to_file`, `rx_samples_c` | GPL-3.0 | Identifies the B200mini and E310 and records raw IQ | **GPL.** Separate processes only. Never imported, linked or shipped |
+| [UHD](https://github.com/EttusResearch/uhd) `uhd_usrp_probe`, `uhd_config_info`, `rx_samples_to_file`, `rx_samples_c`, `tx_waveforms` | GPL-3.0 | Identifies the B200mini and E310, records raw IQ and sends a test tone | **GPL.** Separate processes only. Never imported, linked or shipped |
 | [uhubctl](https://github.com/mvp/uhubctl) | GPL-2.0 | Per-port USB power (one of two hub options) | **GPL.** Optional subprocess |
 | [ykushcmd](https://github.com/Yepkit/ykush) | Apache-2.0 | Per-port USB power for the YKUSH3 | |
 

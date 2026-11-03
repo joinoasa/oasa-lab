@@ -77,9 +77,12 @@ serial = "00000000"           # `*IDN?` shows it. The driver refuses a different
 # max_a = 2.0
 # hold_output = true
 
-# --- Ettus B200mini on USB and USRP E310 on the network, receive only ------------------------------
+# --- Ettus B200mini on USB and USRP E310 on the network ---------------------------------------------
 # UHD tools run as separate processes. `uhd_find_devices` shows the serials. The suite refuses a different unit.
 # max_rx_rate is the highest rate the driver will ask for. Raise it once your host shows the rate stays clean.
+# Transmit is a test tone only. max_tx_gain (default 40 dB) caps it; raise it only after measuring your paths.
+# tx_port / rx_port are the names the [wiring] paths use (defaults: B200 "tx/rx" and "rx2", E310 "trx-a" and
+# "rx2-a" or "rx2-b" by channel).
 [devices.b2000]
 kind = "b200"
 serial = "0000000"
@@ -92,6 +95,8 @@ serial = "0000000"
 subdev = "A:0 A:1"
 channel = 1                   # 0 is RX2-A, 1 is RX2-B
 # max_rx_rate = 1e6
+# tx_subdev = "A:0"           # TX from side A, TRX-A (the default)
+# max_tx_gain = 40
 
 # --- Cabling ------------------------------------------------------------------------------------------
 # A suite that transmits names one of these in suite.toml. `loss_db` is the nominal loss of everything
@@ -118,6 +123,20 @@ from = "pluto0:tx1"
 to = "rtl0"
 loss_db = 63.5                  # 30 + 3.5 + 30
 receiver_transmits = false
+
+[wiring.usrp]
+rf_setup = "cabled"
+description = "B200mini TX/RX -60 dB- E310 RX2-B; E310 TRX-A -60 dB- B200mini RX2"
+[[wiring.usrp.paths]]
+name = "b200-e310"
+from = "b2000:tx/rx"
+to = "e3100:rx2-b"
+loss_db = 60.0                  # 30 + 20 + 10
+[[wiring.usrp.paths]]
+name = "e310-b200"
+from = "e3100:trx-a"
+to = "b2000:rx2"
+loss_db = 60.0                  # 30 + 20 + 10
 
 [wiring.lora]
 rf_setup = "cabled"

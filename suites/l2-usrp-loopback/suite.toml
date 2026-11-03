@@ -1,0 +1,58 @@
+description = "Transmit over cable: a tone from a B200mini to an E310 and back, through 60 dB or more each way. The level follows the TX gain, the tone lands where the two crystals put it, the same offset shows mirrored in the other direction, and the tone is gone once the transmitter is off (needs a B200mini and an E310)"
+expectations = [
+  "test_b200_to_e310",
+  "test_e310_to_b200",
+  "test_offsets_mirror",
+]
+transmits = true
+requires = ["b200", "e310"]
+wiring = "usrp"
+
+# "est." = a first guess from one bench (2026-11-03, 60 dB each way, 915 MHz), to tune as more runs come in.
+
+[limits.rx_level_dbfs]
+min = -100.0
+max = -20.0
+reason = """Tone level at the final TX gain (40 dB), RX gain 40 dB, amplitude 0.3. First bench: B200 to E310 -66 dBFS,
+E310 to B200 -57 dBFS. est. Below -100 the tone is lost (wrong cable, dead port). Above -20 the path has far less
+loss than 60 dB, or the receiver is near clipping; the ramp stops before that."""
+
+[limits.tone_snr_db]
+min = -10.0
+max = 200.0
+reason = """Tone power against the total noise in the 1 MHz band. First bench at TX 40: B200 to E310 about +3 dB,
+E310 to B200 about +17 dB. -10 dB here is still about 38 dB above the noise in the tone's own FFT bins, so the
+frequency and level are measured well. est."""
+
+[limits.tx_gain_slope_db_per_db]
+min = 0.8
+max = 1.2
+reason = """Tone level change per dB of TX gain over the last step (30 to 40 dB). A good chain is linear here: first
+bench 0.96 to 1.05. Less means compression or that the receiver is not seeing this tone; more means the reading
+is noise. est."""
+
+[limits.radio_offset_ppm]
+min = -5.0
+max = 5.0
+reason = """Where the tone lands against where it was sent, in ppm of the carrier: the two crystals' difference. Both
+radios have TCXOs (B200mini 2 ppm, E310 2 ppm, est. from Ettus product pages), so 4 ppm worst case plus 1 for
+warm-up. First bench: 2.5 ppm."""
+
+[limits.offset_mirror_ppm]
+min = -0.5
+max = 0.5
+reason = """The forward and reverse offsets added together. The same two crystals give the same difference with the
+sign flipped, so the sum is about 0. First bench: -2.47 and +2.47 ppm. 0.5 ppm (est.) allows drift between the two
+measurements. A large sum means one of the tones is not what it seems."""
+
+[limits.tx_off_snr_db]
+min = -200.0
+max = -20.0
+reason = """The strongest line left once the transmitter is off, against the noise in the band. With the tone gone the
+strongest bin is noise, about -38 dB on the first bench. Above -20 dB something is still sending: the stop did not
+work. This is the known-bad case of the suite."""
+
+[limits.tx_underflows]
+min = 0
+max = 0
+reason = "The transmit tool reported no underflows (U). An underflow is a gap in the tone, so the levels mean less."

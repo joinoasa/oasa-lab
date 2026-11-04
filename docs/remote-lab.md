@@ -200,7 +200,7 @@ Roles live in `oasa_lab/service/config.py` (`PERMISSIONS`). Restart the service 
 
 **Suites that transmit** declare `transmits = true` (and usually `wiring = "NAME"`) in `suite.toml`; the service reads them with the same parser as `oasa-lab run`. Two locks, both yours:
 
-1. `rf_setup` in `[lab]` of `/etc/oasa-lab/lab-policy.toml` must be `cabled` or `shielded`.
+1. `rf_setup` in `[lab]` of `/etc/oasa-lab/lab-policy.toml` must be `cabled` or `shielded`. A suite with `radiates = true` (over the air) needs instead a TX cap for each radio in `[antenna] max_tx_gain_db` of the same file; with none, it is refused.
 2. On real hardware (policy `simulated = false`) you must also confirm the wiring, one suite at a time: `[confirm_wiring]` `l2-rf-control = "lora"` in the same file, where the value is the suite's wiring name. Only then does `job-run` start it with `--confirm-wiring lora`. A different name, or none, is refused with a message saying what to set. The simulated service never passes the flag; it runs the suites on the simulated bench (`OASA_LAB_SIM=1`).
 
 `lab-policy.toml` is root-owned. The service reads it (to refuse early with a clear message) and `job-run` reads it again (to decide). In `sandbox.mode = "systemd"` the same settings in `service.toml` are an error, so there is one copy. The jobs read the device file named by `devices_file` (`/etc/oasa-lab.d/lab.toml`; start from `lab.example.toml`). The confirmed wiring is recorded in the run's manifest (`job.wiring_confirmed`), next to `job.rf_setup`. Even then the hardware layer and the checker still enforce the 60 dB rule and the RF evidence; the service adds a lock, it does not replace theirs.

@@ -216,7 +216,7 @@ def test_suites_are_parsed_by_the_installed_parser_and_no_checkout_code_runs(tmp
     co = run(cks.at(sha))
     found = run(read_suites(cks, co))
     assert found["l2-x"] == {"name": "l2-x", "description": "x", "transmits": True, "transmits_declared": True,
-                             "wiring": "w", "requires": ["pluto", "serial-radio:2"]}
+                             "radiates": False, "wiring": "w", "requires": ["pluto", "serial-radio:2"]}
     assert not marker.exists(), "nothing from the commit may run in the service"
     assert not (tmp_path / "git" / "checkouts").exists(), "the service makes no checkout at all"
 

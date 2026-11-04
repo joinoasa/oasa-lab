@@ -121,6 +121,8 @@ Change the cabling between suites; `--confirm-wiring` is how you say the right o
 
 **The transmit calls check too.** `Pluto.tx_tone`, `Usrp.tx_tone` and `ModemLink.send_packet` (and the pty a bridge writes through) ask the run first: the suite must say `transmits = true` in `suite.toml`, and a wiring must be on record (`hw.use_wiring()`, which on real hardware needs `--confirm-wiring`). Otherwise they raise `TxRefused` before anything goes out. A device built by hand on real hardware, with no `hw` fixture behind it, never transmits. A suite with `requires` must say `transmits = true` or `transmits = false`; on real hardware it is refused if it says neither. Muting (`tx_off`) and receiving are always allowed.
 
+**Over the air.** A suite that transmits into antennas says `radiates = true` (with `transmits = true`) and names a wiring with `rf_setup = "antenna"` and an `antennas` list (see `lab.example.toml`). It needs a test plan. It runs on real hardware only when the owner has capped each transmitting radio in `[antenna] max_tx_gain_db` of the root-owned lab policy (job-run passes the caps to the suite as `OASA_LAB_ANTENNA_CAPS`), and confirmed its wiring as for any other suite. The hardware layer lowers each radio's `max_tx_gain` to its cap (never raises it) and refuses TX on any radio without one. Only USRPs (`b200`, `e310`) can radiate. A radiating suite cannot use cabled wiring, and a cabled suite cannot use antenna wiring. The checker requires the antennas, the caps and every recorded `max_tx_gain` at or below its cap.
+
 ## Running the suites
 
 ```
@@ -272,7 +274,7 @@ The limits are in each `suite.toml` under `[limits.*]`, with the reason next to 
 |---|---|
 | Cable loss toward anything that can transmit | at least 60 dB |
 | Cable loss toward a receive-only device | at least 40 dB |
-| RF setup | `cabled` or `shielded` |
+| RF setup | `cabled` or `shielded`; `antenna` only for a suite with `radiates = true`, with every transmitting radio capped |
 | Burst length against airtime | within 2 ms + 3 % |
 | A frame reaches the host after its burst ends | within 50 ms, after fitting one fixed clock offset of at most 1.5 s |
 | Frames with a matching burst | at least 95 % |
@@ -287,8 +289,8 @@ On top of the [usual bundle](../README.md#where-the-evidence-lands):
 |---|---|
 | `recordings/NN-name.sigmf-meta`, `.sigmf-data` | Radio recordings ([SigMF](https://sigmf.org)); both files hashed in `SHA256SUMS`; `core:sha512` of the data inside the metadata; `oasa:run_id` binds it to the run |
 | `captures/NN-air-DEVICE.pcap` | The frames a modem delivered to its host |
-| `manifest.json` `hardware` | Every device: kind, backend, model, serial, firmware (and hash), radio settings. `hub`. `rf`: setup (`cabled` or `shielded`), wiring name, every path with its loss |
-| `manifest.json` `recordings`, `transmits`, `requires` | The list of recordings (with the burst check each wants), and what the suite needs |
+| `manifest.json` `hardware` | Every device: kind, backend, model, serial, firmware (and hash), radio settings. `hub`. `rf`: setup (`cabled`, `shielded` or `antenna`), wiring name, every path with its loss; for `antenna` the antenna ports and TX caps |
+| `manifest.json` `recordings`, `transmits`, `radiates`, `requires` | The list of recordings (with the burst check each wants), and what the suite needs |
 | `log.jsonl` `measurement` events | Every number judged against a limit: metric, value, min, max, ok |
 
 The checker's [check 7](checker.md) validates all of it.

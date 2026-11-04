@@ -30,7 +30,8 @@ MAX_SEED = 2**31 - 1
 JOB_UNIT = "oasa-lab-job@{}.service"
 MIRROR_UNIT = "oasa-lab-mirror.service"
 
-RF_SAFE = ("cabled", "shielded")  # the only setups where a transmitting suite may run
+RF_SAFE = ("cabled", "shielded")  # the only setups where a transmitting suite on cable may run
+MAX_ANTENNA_TX_GAIN_DB = 90.0     # the most an [antenna] cap may say (the USRPs' own range)
 RF_SETUPS = ("unset", "cabled", "shielded", "open")
 
 DEFAULT_POLICY = "/etc/oasa-lab/lab-policy.toml"
@@ -57,6 +58,8 @@ class Policy:
     sec_bin_dir: str = ""                   # fixed folders of the oasa-sec / oasa-radio programs; never from a caller
     radio_bin_dir: str = ""
     confirm_wiring: dict[str, str] = field(default_factory=dict)   # suite -> the wiring the owner says is connected
+    # device id -> the highest TX gain (dB) it may use into an antenna. Empty: no suite may radiate.
+    antenna_caps: dict[str, float] = field(default_factory=dict)
     spool_dir: str = DEFAULT_SPOOL
     results_dir: str = DEFAULT_RESULTS
     mirror: str = DEFAULT_MIRROR
@@ -68,6 +71,7 @@ _SECTIONS = {
     "lab": {"rf_setup", "simulated", "devices_file", "branch", "min_commit", "job_timeout_seconds", "stop_grace_seconds"},
     "bins": {"sec", "radio"},
     "confirm_wiring": None,   # free keys: suite names
+    "antenna": {"max_tx_gain_db"},
     "paths": {"spool", "results", "mirror", "git_config", "pause"},
 }
 
@@ -117,11 +121,19 @@ def parse_policy(data: dict) -> Policy:
         _need(bool(SUITE_RE.match(suite)) and isinstance(w, str) and bool(NAME_RE.match(w)),
               f"confirm_wiring: bad entry {suite!r} = {w!r}")
         wiring[suite] = w
+    caps: dict[str, float] = {}
+    raw_caps = data.get("antenna", {}).get("max_tx_gain_db", {})
+    _need(isinstance(raw_caps, dict), "antenna.max_tx_gain_db must be a table: device id = dB")
+    for dev, g in raw_caps.items():
+        _need(bool(NAME_RE.match(dev)) and isinstance(g, (int, float)) and not isinstance(g, bool)
+              and 0 <= g <= MAX_ANTENNA_TX_GAIN_DB,
+              f"antenna.max_tx_gain_db: bad entry {dev!r} = {g!r} (0 to {MAX_ANTENNA_TX_GAIN_DB:g} dB)")
+        caps[dev] = float(g)
     return Policy(
         rf_setup=rf, simulated=sim, devices_file=_abs(lab.get("devices_file", ""), "lab.devices_file"),
         branch=branch, min_commit=floor, job_timeout_seconds=float(timeout), stop_grace_seconds=float(grace),
         sec_bin_dir=_abs(bins.get("sec", ""), "bins.sec"), radio_bin_dir=_abs(bins.get("radio", ""), "bins.radio"),
-        confirm_wiring=wiring,
+        confirm_wiring=wiring, antenna_caps=caps,
         spool_dir=_abs(paths.get("spool", DEFAULT_SPOOL), "paths.spool", False),
         results_dir=_abs(paths.get("results", DEFAULT_RESULTS), "paths.results", False),
         mirror=_abs(paths.get("mirror", DEFAULT_MIRROR), "paths.mirror", False),
@@ -157,16 +169,26 @@ def wiring_to_confirm(confirm_wiring: dict[str, str], suite: dict) -> str | None
     return w if w and confirm_wiring.get(suite["name"]) == w else None
 
 
-def interlock(suite: dict, rf_setup: str, simulated: bool, confirm_wiring: dict[str, str]) -> str | None:
+def interlock(suite: dict, rf_setup: str, simulated: bool, confirm_wiring: dict[str, str],
+              antenna_caps: dict[str, float] | None = None) -> str | None:
     """Why this suite may not run now, or None. 1) A suite that needs hardware must say whether it transmits.
-    2) A suite that transmits needs rf_setup cabled or shielded. 3) On a real bench the owner must also have
-    confirmed the suite's wiring in the policy. `suite`: {name, requires, transmits, transmits_declared, wiring}."""
+    2) A suite that transmits into cables needs rf_setup cabled or shielded. A suite that radiates (transmits
+    into antennas) instead needs the owner's TX caps in [antenna] of the policy; rf_setup describes the cabled
+    bench and does not apply to it. 3) On a real bench the owner must also have confirmed the suite's wiring in
+    the policy. `suite`: {name, requires, transmits, transmits_declared, radiates, wiring}."""
     if not simulated and suite["requires"] and not suite["transmits_declared"]:
         return (f"refused: suite {suite['name']!r} needs hardware but its suite.toml does not say transmits = true "
                 "or transmits = false")
+    if suite.get("radiates") and not suite["transmits"]:
+        return f"refused: suite {suite['name']!r} says radiates = true but not transmits = true"
     if not suite["transmits"]:
         return None
-    if rf_setup not in RF_SAFE:
+    if suite.get("radiates"):
+        if not simulated and not antenna_caps:
+            return (f"refused: suite {suite['name']!r} radiates (transmits into antennas), and the lab policy sets no "
+                    "TX caps for that: the owner adds [antenna] max_tx_gain_db = {{ DEVICE = dB, ... }} and restarts "
+                    "the service")
+    elif rf_setup not in RF_SAFE:
         return (f"refused: suite {suite['name']!r} transmits, and this lab's rf_setup is "
                 f"{rf_setup!r} (must be one of: {', '.join(RF_SAFE)})")
     if not simulated and not wiring_to_confirm(confirm_wiring, suite):

@@ -52,6 +52,7 @@ class Suite:
     hidden: bool = False
     transmits: bool = False
     transmits_declared: bool = False   # suite.toml says transmits = true|false in so many words
+    radiates: bool = False             # transmits into an antenna (over the air), not into a cable
     requires: list[str] = field(default_factory=list)
     wiring: str = ""
     limits: dict = field(default_factory=dict)
@@ -84,6 +85,7 @@ def parse_suite(name: str, text: str, path: Path | None = None) -> Suite:
         hidden=name.startswith("_"),
         transmits=bool(data.get("transmits", False)),
         transmits_declared=isinstance(data.get("transmits"), bool),
+        radiates=data.get("radiates") is True,
         requires=[str(x) for x in data.get("requires", [])],
         wiring=str(data.get("wiring", "")),
         limits={str(k): dict(v) for k, v in (data.get("limits") or {}).items()},
@@ -97,7 +99,8 @@ def load_suite(path: Path) -> Suite:
 def suite_facts(s: Suite) -> dict:
     """What the job service and `job-run` need to decide whether a suite may run."""
     return {"name": s.name, "description": s.description, "transmits": s.transmits,
-            "transmits_declared": s.transmits_declared, "wiring": s.wiring, "requires": list(s.requires)}
+            "transmits_declared": s.transmits_declared, "radiates": s.radiates, "wiring": s.wiring,
+            "requires": list(s.requires)}
 
 
 def list_suites(include_hidden: bool = False) -> list[Suite]:

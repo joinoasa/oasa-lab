@@ -10,7 +10,7 @@ Follow the [OASA software standard](https://joinoasa.org/docs/software-standard/
 
 - **Every run leaves evidence:** a result file (CTRF JSON), live logs (JSON lines), a manifest (git SHAs, firmware hashes, hardware serials, settings) and any radio captures (SigMF). Never report a result you can't point to in a run's evidence.
 - **The checker decides, not the test.** A run counts only after the independent checker re-verifies its evidence.
-- **Radios over cable or in the shielded box** unless a test plan says otherwise.
+- **Radios over cable or in the shielded box** unless a test plan says otherwise. Over the air only with `radiates = true` and the owner's TX caps (`[antenna]` in the lab policy).
 - **Lab hardware is reached over WireGuard by maintainers; everything else only through the authenticated job service (`oasa-lab serve`).** SDR control ports (iiod, rtl_tcp, SoapyRemote) have no authentication and are never exposed.
 - **No secrets in results or logs.** Keys, codes and passwords never appear in evidence.
 
@@ -52,7 +52,7 @@ Run `l0-lab`, `l1-channel`, `l1-plaintext-control`, `l1-profiles`, and with `OAS
 
 - `oasa_lab/service/` runs suites for remote callers. Docs: [docs/remote-lab.md](docs/remote-lab.md). Setup scripts: `deploy/`.
 - **Never run anything a caller sends.** Only a suite name from the checked-out repo, a seed and a hardware profile from the config. Keep it that way; a test covers the bad inputs.
-- A suite that puts RF on a cable or the air sets `transmits = true` in `suite.toml`. The service reads it with the same parser as the runner and refuses it unless the lab is `cabled` or `shielded`, and, on real hardware, the owner has set that suite's wiring in `[confirm_wiring]` of the root-owned `lab-policy.toml`. `oasa-lab job-run` (installed code, run as the job user) applies the same rule again (`oasa_lab/policy.py`) before any suite code runs. Never add a second parser for `transmits` or `requires`, and never run code from a commit in the service: read `suite.toml` as data.
+- A suite that puts RF on a cable or the air sets `transmits = true` in `suite.toml`. The service reads it with the same parser as the runner and refuses it unless the lab is `cabled` or `shielded` (a `radiates = true` suite: unless the owner capped the radios in `[antenna]`), and, on real hardware, the owner has set that suite's wiring in `[confirm_wiring]` of the root-owned `lab-policy.toml`. `oasa-lab job-run` (installed code, run as the job user) applies the same rule again (`oasa_lab/policy.py`) before any suite code runs. Never add a second parser for `transmits` or `requires`, and never run code from a commit in the service: read `suite.toml` as data.
 - No OASA program runs as root. The service may only write a job request and `systemctl start`/`stop` `oasa-lab-job@<id>.service` (polkit rule in `deploy/polkit/`). Keep the id pattern (32 lowercase hex) the same in `policy.py` and the rule; a test compares them.
 - No secrets in the repo, the audit log or job environments. Tokens are stored as hashes. `deploy/*.example` hold placeholders only.
 - A change to auth, the interlock or the audit log needs a test in `tests/service/`.

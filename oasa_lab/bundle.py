@@ -44,6 +44,7 @@ def write_manifest(ctx: RunContext) -> dict:
         "captures": ctx.captures,
         "binaries": sorted(ctx.binaries.values(), key=lambda b: b["path"]),
         "transmits": ctx.suite.transmits,
+        "radiates": ctx.suite.radiates,
         "requires": list(ctx.suite.requires),
         "hardware": {"devices": [ctx.hardware["devices"][k] for k in sorted(ctx.hardware["devices"])],
                      "hub": ctx.hardware["hub"], "rf": ctx.hardware["rf"]},

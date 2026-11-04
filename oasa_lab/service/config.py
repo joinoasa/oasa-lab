@@ -98,6 +98,7 @@ class Config:
     rf_setup: str = "unset"
     devices_file: str = ""  # the hardware suites' device file (lab.toml: serials, ports, cabling), passed to jobs
     confirm_wiring: dict[str, str] = field(default_factory=dict)  # suite -> wiring the owner says is connected
+    antenna_caps: dict[str, float] = field(default_factory=dict)  # device -> TX cap into antennas (policy only)
     min_commit: str = ""                  # REST callers may not pick a commit older than this
     keep_jobs: int = 100                  # finished jobs whose evidence is kept; older ones are deleted
     min_free_mb: int = 2000               # a job does not start with less free disk than this
@@ -226,6 +227,7 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
             raise ConfigError(str(exc)) from None
         cfg.policy = pol
         cfg.rf_setup, cfg.confirm_wiring, cfg.devices_file = pol.rf_setup, dict(pol.confirm_wiring), pol.devices_file
+        cfg.antenna_caps = dict(pol.antenna_caps)
         cfg.min_commit, cfg.branch, cfg.job_timeout_seconds = pol.min_commit, pol.branch, pol.job_timeout_seconds
         cfg.stop_grace_seconds, cfg.local_pause_file = pol.stop_grace_seconds, pol.pause_file
         backend_in = str(data.get("inventory", {}).get("backend", "simulated"))

@@ -154,7 +154,7 @@ def load_suite_facts(src: str, suite: str) -> dict:
 def decide(policy: Policy, facts: dict) -> str | None:
     """The transmit lock, applied from the root-owned policy. Returns the wiring to confirm (or None). Raises
     Refused if the suite may not run now."""
-    why = interlock(facts, policy.rf_setup, policy.simulated, policy.confirm_wiring)
+    why = interlock(facts, policy.rf_setup, policy.simulated, policy.confirm_wiring, policy.antenna_caps)
     if why:
         raise Refused(why)
     return confirm_for_run(facts, policy.simulated, policy.confirm_wiring)
@@ -173,6 +173,9 @@ def run_env(policy: Policy, job_id: str, commit: str, confirm: str | None, home:
         env["OASA_SEC_BIN_DIR"] = policy.sec_bin_dir
     if policy.radio_bin_dir:
         env["OASA_RADIO_BIN_DIR"] = policy.radio_bin_dir
+    if policy.antenna_caps:
+        # the owner's TX caps into antennas, from the root-owned policy; the hw fixture applies them per device
+        env["OASA_LAB_ANTENNA_CAPS"] = json.dumps(policy.antenna_caps, sort_keys=True)
     if confirm:
         env["OASA_LAB_WIRING_CONFIRMED"] = confirm
     return env

@@ -138,6 +138,14 @@ from = "e3100:trx-a"
 to = "b2000:rx2"
 loss_db = 60.0                  # 30 + 20 + 10
 
+# Over the air: no paths and no loss rule; each radio's antenna port instead. Only suites with radiates = true
+# may use it, only on radios the owner capped in [antenna] of the lab policy (OASA_LAB_ANTENNA_CAPS for a
+# local run).
+[wiring.air]
+rf_setup = "antenna"
+description = "B200mini TX/RX and E310 RX2-A on antennas, about 3 m apart"
+antennas = ["b2000:tx/rx", "e3100:rx2-a"]
+
 [wiring.lora]
 rf_setup = "cabled"
 description = "Heltec A -30 dB- 4-way splitter -30 dB- Heltec B; RTL-SDR on a third splitter leg through 30 dB; 4th leg terminated 50 ohm"

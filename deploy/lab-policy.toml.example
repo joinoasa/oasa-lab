@@ -32,6 +32,13 @@ stop_grace_seconds = 10                # SIGTERM, then SIGKILL after this long
 # l2-pluto-acceptance = "pluto"
 # l2-rf-control = "lora"
 
+# Over-the-air runs: a suite that says `radiates = true` transmits into antennas (wiring with rf_setup = "antenna"
+# in lab.toml). It runs only on the radios listed here, each with a TX gain cap in dB (0 to 90) that the radio
+# never goes above, and only once its wiring is in [confirm_wiring] too. rf_setup above does not apply to it.
+# Leave empty and no suite radiates. Only USRPs (b200, e310) can be listed.
+[antenna]
+# max_tx_gain_db = { b2000 = 10, e3100 = 10 }
+
 # Folders. These are what 05-service.sh makes; change them only together with the unit files.
 # The owner's pause switch: `sudo touch /etc/oasa-lab/PAUSE`. While anything exists there no job starts, whatever the
 # service says (the service and `job-run` both check), and no API or Claude call can remove it.

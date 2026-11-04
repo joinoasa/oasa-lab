@@ -217,7 +217,7 @@ class JobManager:
 
     def _interlock(self, suite: dict) -> str | None:
         """The transmit rules (oasa_lab/policy.py, the same function `job-run` applies on its own side)."""
-        return interlock(suite, self.cfg.rf_setup, self.simulated, self.cfg.confirm_wiring)
+        return interlock(suite, self.cfg.rf_setup, self.simulated, self.cfg.confirm_wiring, self.cfg.antenna_caps)
 
     def wiring_to_confirm(self, suite: dict) -> str | None:
         return wiring_to_confirm(self.cfg.confirm_wiring, suite)

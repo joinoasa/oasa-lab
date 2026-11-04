@@ -15,7 +15,7 @@ from typing import Any
 
 KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310", "hub")
 BACKENDS = ("sim", "hardware")
-RF_SETUPS = ("cabled", "shielded")
+RF_SETUPS = ("cabled", "shielded", "antenna")   # "antenna": radios on antennas, for suites that radiate
 
 # What `OASA_LAB_SIM=1` uses when there is no lab.toml. Same shape as lab.example.toml.
 DEFAULT_SIM: dict[str, Any] = {
@@ -121,6 +121,11 @@ class Inventory:
             for p in w.get("paths", []):
                 if not all(k in p for k in ("name", "from", "to", "loss_db")):
                     raise InventoryError(f"{source}: wiring.{wname} paths need name, from, to, loss_db")
+            ants = w.get("antennas", [])
+            if not (isinstance(ants, list) and all(isinstance(a, str) and a for a in ants)):
+                raise InventoryError(f"{source}: wiring.{wname}.antennas must be a list of DEVICE:PORT names")
+            if w["rf_setup"] == "antenna" and not ants:
+                raise InventoryError(f"{source}: wiring.{wname} is rf_setup = \"antenna\" but lists no antennas")
         hub = data.get("hub")
         if hub and force_sim:
             hub = {**hub, "backend": "sim"}

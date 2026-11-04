@@ -700,6 +700,9 @@ def check_expectations(b: Bundle) -> dict:
 DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded")
+RF_ANTENNA = "antenna"      # radios on antennas: only for a suite that declares radiates = true
+MAX_ANTENNA_TX_GAIN_DB = 90.0
+RADIATING_KINDS = ("b200", "e310")
 MIN_LOSS_TX_DB = 60.0       # cable loss between a transmitter and any receiver that a transmitter could damage
 MIN_LOSS_RX_ONLY_DB = 40.0  # ... and a receive-only device (an RTL-SDR)
 RUN_SLACK_S = 2.0           # a recording may start this long before the run or end after it
@@ -743,12 +746,46 @@ def _device_errors(devices: Any, hub: Any) -> tuple[list[str], dict[str, dict]]:
     return errs, by_id
 
 
-def _rf_errors(rf: Any, by_id: dict[str, dict], transmits: bool) -> list[str]:
+def _antenna_errors(rf: dict, by_id: dict[str, dict]) -> list[str]:
+    """A run on antennas: the owner's TX caps must be on record, one per transmitting device, each a sane number, and
+    every device it lists must be a kind whose TX gain the lab can cap, with its recorded max_tx_gain within the cap."""
+    errs: list[str] = []
+    ants = rf.get("antennas")
+    if not (isinstance(ants, list) and ants and all(isinstance(a, str) and a for a in ants)):
+        errs.append("hardware.rf.antennas must list the antenna ports (DEVICE:PORT)")
+    caps = rf.get("antenna_caps")
+    if not (isinstance(caps, dict) and caps):
+        return errs + ["hardware.rf.antenna_caps must record the owner's TX caps into antennas"]
+    for dev, cap in caps.items():
+        if not (_num(cap) and 0 <= cap <= MAX_ANTENNA_TX_GAIN_DB):
+            errs.append(f"antenna cap for {dev!r} must be 0 to {MAX_ANTENNA_TX_GAIN_DB:g} dB")
+            continue
+        d = by_id.get(dev)
+        if d is None:
+            continue   # a capped device this run did not open
+        if d.get("kind") not in RADIATING_KINDS:
+            errs.append(f"device {dev} ({d.get('kind')}) cannot radiate: only {RADIATING_KINDS} have a TX gain cap")
+        got = d.get("max_tx_gain")
+        if _num(got) and got > cap + 1e-9:
+            errs.append(f"device {dev} ran with max_tx_gain {got:g} dB, above its antenna cap {cap:g} dB")
+    for dev_id, d in by_id.items():
+        if d.get("kind") in RADIATING_KINDS and d.get("backend") == "hardware" and dev_id not in caps:
+            errs.append(f"device {dev_id} took part in a run on antennas without an antenna TX cap")
+    return errs
+
+
+def _rf_errors(rf: Any, by_id: dict[str, dict], transmits: bool, radiates: bool = False) -> list[str]:
     if rf is None:
         return ["the suite transmits but the manifest has no hardware.rf (RF setup and cable losses)"] if transmits else []
+    if isinstance(rf, dict) and rf.get("setup") == RF_ANTENNA:
+        if not radiates:
+            return ["hardware.rf.setup is antenna but the suite does not declare radiates = true"]
+        return _antenna_errors(rf, by_id)
+    if radiates:
+        return [f"the suite radiates but hardware.rf.setup is {rf.get('setup') if isinstance(rf, dict) else rf!r}, not antenna"]
     errs: list[str] = []
     if not isinstance(rf, dict) or rf.get("setup") not in RF_SETUPS:
-        return [f"hardware.rf.setup must be one of {RF_SETUPS} (radiating over the air is not allowed at this level)"]
+        return [f"hardware.rf.setup must be one of {RF_SETUPS}, or antenna for a suite that radiates"]
     paths = rf.get("paths")
     if not (isinstance(paths, list) and paths):
         return ["hardware.rf.paths must list the cable paths with their loss"]
@@ -942,17 +979,25 @@ def check_radio(b: Bundle) -> dict:
     hw = m.get("hardware") if isinstance(m.get("hardware"), dict) else {}
     recs = m.get("recordings", [])
     transmits = m.get("transmits", False)
+    radiates = m.get("radiates", False)
     requires = m.get("requires", [])
     errs: list[str] = []
     if not isinstance(transmits, bool):
         errs.append("transmits must be true or false")
         transmits = False
+    if not isinstance(radiates, bool):
+        errs.append("radiates must be true or false")
+        radiates = False
+    if radiates and not transmits:
+        errs.append("radiates = true needs transmits = true")
     if not (isinstance(requires, list) and all(isinstance(x, str) for x in requires)):
         errs.append("requires must be a list of device names")
         requires = []
     if decl is not None:
         if bool(decl.get("transmits", False)) != transmits:
             errs.append(f"manifest says transmits={transmits} but the suite file says {bool(decl.get('transmits', False))}")
+        if (decl.get("radiates") is True) != radiates:
+            errs.append(f"manifest says radiates={radiates} but the suite file says {decl.get('radiates') is True}")
         dropped = [r for r in decl.get("requires", []) if r not in requires]
         if dropped:
             errs.append(f"the manifest dropped hardware the suite file requires: {dropped}")
@@ -963,7 +1008,7 @@ def check_radio(b: Bundle) -> dict:
         have = (1 if hw.get("hub") else 0) if kind == "hub" else sum(1 for d in by_id.values() if d.get("kind") == kind)
         if have < (int(n) if n.isdigit() else 1):
             errs.append(f"the suite requires {req} but the manifest lists {have}")
-    errs.extend(_rf_errors(hw.get("rf"), by_id, transmits))
+    errs.extend(_rf_errors(hw.get("rf"), by_id, transmits, radiates))
     rec_errs, burst_rows = _recording_errors(b, m, recs, by_id)
     errs.extend(rec_errs)
     meas_errs, n_meas = _measurement_errors(b, decl)
@@ -980,7 +1025,10 @@ def check_radio(b: Bundle) -> dict:
     if not (by_id or recs or requires or transmits or n_meas):
         return {"reason": "no hardware, recordings or measurements in this run", "details": {}}
     bits = [f"{len(by_id)} device(s)" + (f" ({len(sim_ids)} SIMULATED)" if sim_ids else "")]
-    if transmits:
+    if transmits and hw["rf"]["setup"] == RF_ANTENNA:
+        caps = hw["rf"]["antenna_caps"]
+        bits.append("RF on antennas, TX capped by the owner (" + ", ".join(f"{k} {v:g} dB" for k, v in sorted(caps.items())) + ")")
+    elif transmits:
         bits.append(f"RF {hw['rf']['setup']}, {len(hw['rf']['paths'])} path(s) at or above the minimum loss")
     if recs:
         bits.append(f"{len(recs)} SigMF recording(s) listed, hashed and valid"

@@ -208,14 +208,22 @@ with gaps, shifts them up by a **digital IF of 250 kHz** and sends the block on 
 samples per symbol. The other radio records four repeats; the suite shifts the recording back down and `oasa-radio
 waveform decode` finds the frames. **Eb/N0 is measured from the recording** in the modem's own convention: Es from
 the power on the frames minus the power in the gaps, N0 from the noise spectrum of the gaps inside the signal band.
-For each direction and modulation the TX gain is raised until the frames are clear, then set for about 3, 5 and 7
-dB. A point counts with 20 or more bit errors; its loss is the measured Eb/N0 minus the Eb/N0 at which theory gives
+The receiver runs at RX gain 60 dB and the decoder is given the payload length (`--payload-len 64`), so a bit
+error in the unprotected W0 header does not lose a frame. For each direction and modulation the TX gain is raised
+until the frames are clear, then set for about 1, 3, 5 and 7 dB. A point counts with 20 or more bit errors; its loss is the measured Eb/N0 minus the Eb/N0 at which theory gives
 the measured BER, and it must be within 1 dB. Code: `oasa_lab/w1test.py`.
 
 What the first bench showed (2026-11-04): at 200 kS/s nothing decoded although the frames were there (the E310
 has no DSP for low rates); at zero IF the BER was about 5 dB off theory (the receiver's DC offset sits on the
 signal); with the IF at 1 MS/s every point was within 0.9 dB, both ways, BPSK and QPSK. Frames missed below about
 4 dB are not counted, so the BER there is for the frames found. 2-FSK is not in the suite yet.
+
+Follow-up (2026-11-04, outside the service): those missed frames were header bit errors, a share of (1-BER)^16.
+With the length known (oasa-radio #13) 189 to 191 of 192 frames are found from 0 to 8 dB. At RX gain 40 the E310's
+noise was about one ADC step, so it was quantized and BPSK read 0.65x theory at 7 dB; at RX gain 60 it read 1.03x.
+QPSK lost up to 1.4 dB at 0 to 2 dB from the coarse frequency search; oasa-radio #15 fits the frame's phase slope
+and brings 1 and 2 dB within 0.1 dB (0 dB still about +1.2 dB, oasa-radio #14, so the lowest target is 1 dB).
+The suite needs oasa-radio 34be038 or later (`--payload-len` on decode).
 
 ### `l2-rf-control`
 

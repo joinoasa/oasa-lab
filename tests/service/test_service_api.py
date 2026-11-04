@@ -266,6 +266,8 @@ def test_stop_escalates_to_sigkill(svc):
 def test_stop_a_queued_job_and_the_rules_for_stopping(svc):
     a = svc.submit("t-slow")
     b = svc.submit("t-quick", user="bob")
+    while svc.lab.jobs.get(a["id"]).status != "running":  # stopping a job still queued cancels it instead
+        time.sleep(0.05)
     with svc.client("eve") as c:
         assert c.post(f"/api/jobs/{b['id']}/stop").status_code == 403
     with svc.client("bob") as c:

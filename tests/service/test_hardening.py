@@ -76,6 +76,19 @@ def _nest(root: Path, depth: int) -> None:
     os.close(fd)
 
 
+def _unnest(root: Path) -> None:
+    """Remove a chain made by `_nest`, one level at a time. pytest's own clean-up of old temp folders recurses,
+    so a 3000-deep folder left behind crashes a later pytest run (any run that clears that temp root)."""
+    d, up = root / "d", root / "d.up"
+    while d.exists():
+        if (d / "d").exists():
+            (d / "d").rename(up)
+            d.rmdir()
+            up.rename(d)
+        else:
+            d.rmdir()
+
+
 def test_copy_tree_rejects_deep_folders_whole(tmp_path):
     root = tmp_path / "runs"
     (root / "b").mkdir(parents=True)
@@ -93,9 +106,12 @@ def test_copy_tree_turns_a_recursion_error_into_a_clean_rejection(tmp_path):
     root = tmp_path / "runs"
     (root / "b").mkdir(parents=True)
     _nest(root / "b", 3000)                                  # far past Python's recursion limit
-    with pytest.raises(files.TooBig):                        # not an uncaught RecursionError
-        files.copy_tree(root, "b", tmp_path / "deeper", 10**6, max_depth=10**6)
-    assert not (tmp_path / "deeper").exists()
+    try:
+        with pytest.raises(files.TooBig):                    # not an uncaught RecursionError
+            files.copy_tree(root, "b", tmp_path / "deeper", 10**6, max_depth=10**6)
+        assert not (tmp_path / "deeper").exists()
+    finally:
+        _unnest(root / "b")
 
 
 def _finished_job(svc):

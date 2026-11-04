@@ -4,6 +4,7 @@ our logic, not UHD."""
 
 import ast
 import os
+import re
 import stat
 import textwrap
 import time
@@ -95,6 +96,19 @@ def uhd(tmp_path, monkeypatch):
         open(os.environ["FAKE_LOG"], "a").write("tx stopped\\n")
         print("Done!", flush=True)
     '''))
+    tool(tmp_path, "tx_samples_from_file", logline + textwrap.dedent('''
+        import signal, time
+        stop = []
+        signal.signal(signal.SIGINT, lambda *a: stop.append(1))
+        a = sys.argv
+        f = a[a.index("--file") + 1]
+        open(os.environ["FAKE_LOG"], "a").write(f"file bytes {os.path.getsize(f)}\\n")
+        print("Actual TX Gain: " + a[a.index("--gain") + 1] + " dB...", flush=True)
+        t0 = time.time()
+        while not stop and time.time() - t0 < 30:
+            time.sleep(0.02)
+        open(os.environ["FAKE_LOG"], "a").write("file tx stopped\\n")
+    '''))
     monkeypatch.setattr(usrp_module, "CLAIM_WAIT_S", 0.1)
     monkeypatch.setattr(usrp_module, "TX_START_TIMEOUT_S", 10.0)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
@@ -138,15 +152,17 @@ def test_ci16_scale_is_full_scale_at_one():
     assert IQ(b"\x00\x80\x00\x40", "ci16_le", 1, 1).samples() == [complex(-1.0, 0.5)]
 
 
-def test_uhd_is_never_imported_and_the_only_tx_tool_is_a_tone():
+def test_uhd_is_never_imported_and_only_two_tx_tools_run():
     source = Path(usrp_module.__file__).read_text()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
             assert not any(a.name.startswith("uhd") for a in node.names)
         if isinstance(node, ast.ImportFrom):
             assert not (node.module or "").startswith("uhd")
-    for word in ("tx_samples_from_file", "tx_bursts", "tx_timed_samples", "benchmark_rate"):
-        assert word not in source
+    uhd_tx_examples = {"tx_waveforms", "tx_samples_from_file", "tx_bursts", "tx_timed_samples", "tx_samples_c",
+                       "txrx_loopback_to_file", "benchmark_rate", "test_pps_input", "latency_test"}
+    used = {name for name in uhd_tx_examples if re.search(rf"\b{name}\b", source)}
+    assert used == {"tx_waveforms", "tx_samples_from_file"}, used
 
 
 # --- transmit --------------------------------------------------------------------------------------
@@ -222,6 +238,46 @@ def test_a_tx_tool_that_fails_is_an_error(uhd, monkeypatch):
         with pytest.raises(DeviceError, match="did not start: Error: no device"):
             dev.tx_tone(915e6, 1e5, 30, 0.3, 1e6)
         assert not dev.transmitting
+
+
+def test_file_tx_needs_the_gate_and_limits(uhd):
+    with radio("b200") as dev:
+        with pytest.raises(TxRefused):
+            dev.tx_file([0.1j] * 100, 915e6, 10, 1e6)
+        gated(dev)
+        for samples, gain, fs in (([0.71] * 10, 10, 1e6), ([0j] * 10, 10, 1e6), ([], 10, 1e6),
+                                  ([0.3] * 10, 41, 1e6), ([0.3] * 10, 10, 1.1e6)):
+            with pytest.raises(DeviceError, match="refused|nothing"):
+                dev.tx_file(samples, 915e6, gain, fs)
+    assert "tx_samples_from_file" not in uhd.read_text()
+
+
+def test_e310_file_tx_runs_the_tool_and_the_watchdog_stops_it(uhd):
+    with gated(radio("e310", max_tx_seconds=1.0)) as dev:
+        dev.tx_file([complex(0.3, -0.2)] * 1000, 915e6, 30, 1e6)
+        assert dev.transmitting
+        line = next(l for l in uhd.read_text().splitlines() if "tx_samples_from_file" in l)
+        for part in ("--type float", "--rate 1000000", "--freq 915000000", "--gain 30", "--ant TX/RX", "--channel 0",
+                     "--subdev A:0", "--repeat", "--args type=e3xx,addr=10.0.0.2"):
+            assert part in line
+        assert "file bytes 8000" in uhd.read_text()      # 1000 complex float32 samples
+        time.sleep(3.0)
+        assert not dev.transmitting, "the watchdog must stop it after max_tx_seconds"
+    assert "file tx stopped" in uhd.read_text()
+
+
+def test_simulated_waveform_crosses_the_wired_path():
+    import cmath
+    from oasa_lab.iq import tone_report
+    inv = Inventory.from_dict(DEFAULT_SIM, "test", force_sim=True)
+    world = SimWorld(2, inv.wiring)
+    e310, b200 = (make_device(i, inv, None, world).open() for i in ("e3100", "b2000"))
+    block = [0.5 * cmath.exp(2j * cmath.pi * 0.1 * k) for k in range(4090)]      # 100 kHz at 1 MS/s: 409 whole cycles
+    e310.tx_file(block, 915e6, 30, 1e6)
+    rep = tone_report(b200.capture(915e6, 1e6, 16384, gain_db=40))
+    e310.tx_off()
+    assert abs(rep["tone_dbfs"] - (-75 + 30 - 6.02 - 60 + 40)) < 1.5
+    assert abs((rep["freq_hz"] - 1e5) / 915e6 * 1e6 - 2.4) < 0.1      # E310 crystal +2.4 ppm, seen from the B200
 
 
 def test_simulated_tone_crosses_the_wired_path_only():

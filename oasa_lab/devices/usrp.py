@@ -3,16 +3,18 @@
 UHD is GPL-3.0, so it is never imported or shipped: `uhd_usrp_probe`, `uhd_config_info` and the UHD
 examples run as separate processes. To receive: `rx_samples_to_file` for the E310, which needs a
 subdevice and channel, and `rx_samples_c` for the B200mini, because in UHD 4.6 `rx_samples_to_file
---gain` fails on that radio with an "RX channel out of range" error. To transmit: `tx_waveforms`, a
-single sine tone, and nothing else.
+--gain` fails on that radio with an "RX channel out of range" error. To transmit: `tx_waveforms` for a
+single sine tone, and `tx_samples_from_file` to send a block of IQ samples on repeat (a test waveform
+the suite made, never anything from a caller).
 
 A capture with an overflow, a dropped packet or the wrong sample count is an error, not a short recording.
 
 Transmitting goes through `require_tx` first (the suite must declare `transmits = true` and the
 operator must have confirmed the wiring). The gain is capped by `max_tx_gain` (default 40 dB, the level
 first tested on a cabled bench; raise it in `lab.toml` for a bench that has measured its path losses,
-never above the radio's own maximum). The tone process also stops by itself after `max_tx_seconds`, so a
-crashed suite cannot leave a transmitter running for long. `close()` always stops it.
+never above the radio's own maximum). The transmitter also stops by itself after `max_tx_seconds` (the tone
+tool by its sample count, the file tool by a watchdog), so a crashed suite cannot leave a transmitter
+running for long. `close()` always stops it.
 
 UHD 4.6 on the E310 sometimes fails to claim the radio right after another UHD process used it ("Someone
 tried to claim this device again"); the old claim expires on the E310 a few seconds later. Both the
@@ -66,6 +68,7 @@ class Usrp(Device):
     default_antenna = "RX2"
     rx_tool_name = "rx_samples_to_file"
     tx_tool_name = "tx_waveforms"
+    tx_file_tool_name = "tx_samples_from_file"
     datatype = "ci16_le"
     default_tx_port = "tx/rx"     # names used in [wiring] paths: "<device id>:<port>"
     default_tx_subdev: str | None = None
@@ -75,6 +78,8 @@ class Usrp(Device):
         self._facts: dict[str, Any] = {}
         self._rx_tool: str | None = None
         self._tx_tool: str | None = None
+        self._tx_file_tool: str | None = None
+        self._tx_watchdog: threading.Timer | None = None
         self._tmp: Path | None = None
         self._tx_proc: subprocess.Popen | None = None
         self._tx_log: deque[str] = deque(maxlen=200)
@@ -157,6 +162,7 @@ class Usrp(Device):
             probe, version = shutil.which("uhd_usrp_probe"), shutil.which("uhd_config_info")
             self._rx_tool = self._find_tool(self.rx_tool_name)
             self._tx_tool = self._find_tool(self.tx_tool_name)   # optional: only a transmitting suite needs it
+            self._tx_file_tool = self._find_tool(self.tx_file_tool_name)
             if not probe or not version or not self._rx_tool:
                 raise Unavailable(f"UHD tools not found (uhd_usrp_probe, uhd_config_info, {self.rx_tool_name})")
             facts = self._parse_probe(self._run([probe, "--args", self.device_args()], PROBE_TIMEOUT_S))
@@ -223,27 +229,72 @@ class Usrp(Device):
         subdev = self.cfg.get("tx_subdev", self.default_tx_subdev)
         return cmd + (["--subdev", str(subdev)] if subdev else [])
 
-    def _start_tx(self, cmd: list[str]) -> None:
+    def tx_file(self, samples: list[complex], rf_hz: float, gain_db: float, sample_rate: float) -> None:
+        """Send `samples` (complex, magnitude 1.0 = full scale) on repeat until tx_off() or max_tx_seconds."""
+        self.require_tx("tx_file")
+        rf_hz, gain_db, fs = float(rf_hz), float(gain_db), float(sample_rate)
+        if not 0 <= gain_db <= self.max_tx_gain:
+            raise DeviceError(f"{self.id}: refused TX gain {gain_db:g} dB, max_tx_gain is {self.max_tx_gain:g}")
+        if not 0 < fs <= self.max_tx_rate:
+            raise DeviceError(f"{self.id}: refused {fs:g} S/s, max_tx_rate is {self.max_tx_rate:g}")
+        if not samples:
+            raise DeviceError(f"{self.id}: nothing to send")
+        peak = max(abs(v) for v in samples)
+        if not 0 < peak <= MAX_TX_AMPL:
+            raise DeviceError(f"{self.id}: refused samples with peak {peak:.3g}, the range is 0 to {MAX_TX_AMPL:g}")
+        self.tx_off()
+        if self.backend == "sim":
+            self.world.tones[f"{self.id}:{self.tx_port}"] = {
+                "rf_hz": rf_hz, "dbm": TX_DBM_AT_0DB + gain_db, "iq": list(samples), "fs": fs,
+                "ppm": float((self.cfg.get("sim") or {}).get("xo_ppm", 0.0))}
+            return
+        if not self._tx_file_tool:
+            raise Unavailable(f"{self.id}: UHD tool {self.tx_file_tool_name} not found")
+        assert self._tmp is not None
+        path = self._tmp / "tx.cf32"
+        path.write_bytes(array("f", (c for v in samples for c in (v.real, v.imag))).tobytes())
+        cmd = [str(self._tx_file_tool), "--args", self.device_args(), "--file", str(path), "--type", "float",
+               "--rate", f"{fs:.0f}", "--freq", f"{rf_hz:.0f}", "--gain", f"{gain_db:g}",
+               "--ant", str(self.cfg.get("tx_antenna", "TX/RX")), "--channel", str(self.cfg.get("tx_channel", 0)),
+               "--repeat"]
+        subdev = self.cfg.get("tx_subdev", self.default_tx_subdev)
+        cmd += ["--subdev", str(subdev)] if subdev else []
+        for attempt in range(CLAIM_RETRIES + 1):
+            try:
+                self._start_tx(cmd, ready="Actual TX Gain", settle_s=2.0)
+                break
+            except DeviceError as exc:
+                if CLAIM_CLASH not in str(exc) or attempt == CLAIM_RETRIES:
+                    raise
+                time.sleep(CLAIM_WAIT_S)
+        self._tx_watchdog = threading.Timer(self.max_tx_seconds, self.tx_off)
+        self._tx_watchdog.daemon = True
+        self._tx_watchdog.start()
+
+    def _start_tx(self, cmd: list[str], ready: str = "Ctrl + C", settle_s: float = 0.5) -> None:
         self._tx_log.clear()
         proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, errors="replace")
         self._tx_proc = proc
-        ready = threading.Event()
-
         def read() -> None:
             assert proc.stdout is not None
             for line in proc.stdout:
                 self._tx_log.append(line.rstrip("\n"))
-                if "Ctrl + C" in line:
-                    ready.set()
-            ready.set()   # the tool ended: wake the waiter, which then sees it is no longer running
+                if marker in line:
+                    started.set()
+            started.set()   # the tool ended: wake the waiter, which then sees it is no longer running
+        marker, started = ready, threading.Event()
         threading.Thread(target=read, daemon=True, name=f"{self.id}-tx-log").start()
-        ready.wait(TX_START_TIMEOUT_S)
-        if proc.poll() is not None or not any("Ctrl + C" in l for l in self._tx_log):
+        started.wait(TX_START_TIMEOUT_S)
+        if proc.poll() is not None or not any(marker in l for l in self._tx_log):
             text = " | ".join(self._tx_log)[-400:]
             self.tx_off()
             raise DeviceError(f"{self.id}: the transmitter did not start: {text}")
-        time.sleep(0.5)   # let the stream settle before anyone measures it
+        time.sleep(settle_s)   # let the stream settle before anyone measures it
+        if proc.poll() is not None:
+            text = " | ".join(self._tx_log)[-400:]
+            self.tx_off()
+            raise DeviceError(f"{self.id}: the transmitter stopped at once: {text}")
 
     def tx_off(self) -> dict[str, Any]:
         """Stop the tone. Safe to call at any time. Returns what the tool reported (underflows)."""
@@ -251,6 +302,9 @@ class Usrp(Device):
             if self.world is not None:
                 self.world.tones.pop(f"{self.id}:{self.tx_port}", None)
             return {"underflows": 0}
+        dog, self._tx_watchdog = self._tx_watchdog, None
+        if dog is not None and dog is not threading.current_thread():
+            dog.cancel()
         proc, self._tx_proc = self._tx_proc, None
         if proc is not None and proc.poll() is None:
             proc.send_signal(signal.SIGINT)   # the tool's own clean stop: it sends end-of-burst
@@ -326,12 +380,17 @@ class Usrp(Device):
                 amp = 10 ** ((t["dbm"] - loss + gain_db + SIM_RX_K_DB) / 20)
                 f = t["rf_hz"] * (1 + t["ppm"] * 1e-6) - center_hz * (1 + my_ppm * 1e-6)
                 if abs(f) < fs / 2:
-                    tones.append((amp, 2 * math.pi * f / fs, rng.uniform(0, 2 * math.pi)))
+                    iq = t.get("iq")
+                    if iq is not None and float(t["fs"]) != fs:
+                        continue   # a different sample rate: not modelled, the receiver sees noise only
+                    tones.append((amp, 2 * math.pi * f / fs, rng.uniform(0, 2 * math.pi), iq,
+                                  rng.randrange(len(iq)) if iq else 0))
         out = []
         for k in range(n):
             v = complex(rng.gauss(0, sigma), rng.gauss(0, sigma))
-            for amp, w, ph in tones:
-                v += amp * cmath.exp(1j * (w * k + ph))
+            for amp, w, ph, iq, start in tones:
+                rot = cmath.exp(1j * (w * k + ph))
+                v += amp * rot * (iq[(start + k) % len(iq)] if iq is not None else 1.0)
             out.append(v)
         if self.datatype == "cf32_le":
             return array("f", (c for v in out for c in (v.real, v.imag))).tobytes()

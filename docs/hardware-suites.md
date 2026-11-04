@@ -8,6 +8,7 @@ The first suites that use real radios on cables. They are written and tested on 
 | `l2-lora-link` | The encrypted link works over two LoRa modems on coax, matches the airtime model, and the air shows only ciphertext | 2 Heltec modems, RTL-SDR, `oasa-sec`, `oasa-radio` |
 | `l2-rf-control` | Negative control: a plaintext LoRa packet **is** found by the same air check | 2 Heltec modems, RTL-SDR |
 | `l2-rx-noise` | Receive only: each radio is alive and its input is quiet, and the E310 draws normal power. Transmits nothing and only reads the supply | B200mini, E310, KORAD |
+| `l2-waveform-w1` | OASA's W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK: BER at a measured Eb/N0 within 1 dB of theory; noise gives no frames, the wrong demodulator passes no CRC | B200mini, E310, `oasa-radio` |
 | `l2-usrp-loopback` | A tone each way between a B200mini and an E310 over cable: the level follows the TX gain, the crystal offset is in spec and mirrors between directions, and the tone stops when the transmitter does | B200mini, E310 |
 
 > **Safety. Never connect two transmitters, or a transmitter and a receiver, by coax without at least 60 dB of attenuation between them.** Receive-only gear (the RTL-SDR) needs 40 dB. Fixed attenuators first, then cables. Check the wiring against the diagrams below before every transmitting run. The lab refuses to transmit on real hardware until you type the wiring name: `--confirm-wiring NAME`. The checker fails any bundle whose declared paths are below the limits. Radiating over the air is not part of L2.
@@ -35,7 +36,7 @@ What the simulation **cannot** show: the real tools and libraries, USB and seria
 | `rtlsdr` | RTL-SDR Blog V4 (receive only) | `devices/rtlsdr.py` | `rtl_sdr` and `rtl_test` as separate processes; records raw IQ (`cu8`) |
 | `serial-radio` | Heltec WiFi LoRa 32 V3 with the OASA LoRa modem firmware | `devices/modem.py` | pyserial; oasa-radio serial framing |
 | `korad` | KORAD KA3005P bench supply | `devices/korad.py` | pyserial. Never above 6 V, 3 A; `lab.toml` can only lower that. `hold_output = true` for a supply that feeds a radio |
-| `b200` | Ettus B200mini | `devices/usrp.py` | UHD tools as separate processes; records raw IQ (`cf32_le`); transmits only a test tone (`tx_waveforms`), TX gain capped by `max_tx_gain` (default 40 dB) |
+| `b200` | Ettus B200mini | `devices/usrp.py` | UHD tools as separate processes; records raw IQ (`cf32_le`); transmits only a test tone (`tx_waveforms`) or a test waveform the suite made (`tx_samples_from_file`), TX gain capped by `max_tx_gain` (default 40 dB) |
 | `e310` | Ettus USRP E310 | `devices/usrp.py` | UHD tools as separate processes, `type=e3xx,addr=...` over the network; records raw IQ (`ci16_le`); test tone from TRX-A, same cap |
 | hub | YKUSH3 (or any uhubctl hub) | `devices/hub.py` | `ykushcmd` or `uhubctl` as separate processes |
 
@@ -198,6 +199,23 @@ gain. At the last gain it measures the level, the SNR and where the tone landed;
 records again: the tone must be gone (the known-bad case). The two directions' crystal offsets must add up to
 about zero. The transmitter is a `tx_waveforms` process; it also stops by itself after `max_tx_seconds` (60 s), and
 `close()` stops it in any case. Limits and their reasons: the suite's `suite.toml`.
+
+### `l2-waveform-w1`
+
+OASA's waveform milestone W1 (oasa-radio issue 6): the W0 modem from simulation, on two real radios over the
+`usrp` cables. `oasa-radio waveform iq` makes 24 frames with known random 64-byte payloads; the suite joins them
+with gaps, shifts them up by a **digital IF of 250 kHz** and sends the block on repeat at **1 MS/s**, 125 kbaud, 8
+samples per symbol. The other radio records four repeats; the suite shifts the recording back down and `oasa-radio
+waveform decode` finds the frames. **Eb/N0 is measured from the recording** in the modem's own convention: Es from
+the power on the frames minus the power in the gaps, N0 from the noise spectrum of the gaps inside the signal band.
+For each direction and modulation the TX gain is raised until the frames are clear, then set for about 3, 5 and 7
+dB. A point counts with 20 or more bit errors; its loss is the measured Eb/N0 minus the Eb/N0 at which theory gives
+the measured BER, and it must be within 1 dB. Code: `oasa_lab/w1test.py`.
+
+What the first bench showed (2026-11-04): at 200 kS/s nothing decoded although the frames were there (the E310
+has no DSP for low rates); at zero IF the BER was about 5 dB off theory (the receiver's DC offset sits on the
+signal); with the IF at 1 MS/s every point was within 0.9 dB, both ways, BPSK and QPSK. Frames missed below about
+4 dB are not counted, so the BER there is for the frames found. 2-FSK is not in the suite yet.
 
 ### `l2-rf-control`
 

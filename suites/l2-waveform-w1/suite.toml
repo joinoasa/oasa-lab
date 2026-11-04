@@ -1,0 +1,49 @@
+description = "OASA's own waveform, milestone W1: the oasa-radio W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK. The bit error rate at a measured Eb/N0 is within 1 dB of theory, noise alone gives no frames, and the wrong demodulator passes no CRC (needs a B200mini, an E310 and OASA_RADIO_BIN_DIR)"
+expectations = [
+  "test_noise_only_gives_no_frames",
+  "test_wrong_modulation_fails_the_crc",
+]
+transmits = true
+requires = ["b200", "e310"]
+wiring = "usrp"
+
+[captures]
+encrypted = false
+
+# "est." = a first guess from one bench (2026-11-04, 60 dB each way, 915 MHz), to tune as more runs come in.
+
+[limits.ber_loss_db]
+min = -1.0
+max = 1.0
+reason = """Measured Eb/N0 minus the Eb/N0 at which theory (Q(sqrt(2 Eb/N0)), computed here) gives the measured BER,
+per point with 20 or more bit errors. W1's goal: within 1 dB of the simulation curve, and the simulation sits on
+theory (oasa-radio docs/waveform-w0.md). Negative means better than theory, which a real receiver cannot be, so a
+large negative value means the Eb/N0 measurement is wrong. First bench: within +-0.6 dB, BPSK both ways and QPSK."""
+
+[limits.points_measured]
+min = 2
+max = 100
+reason = "Each modulation and direction needs at least 2 points with 20 or more bit errors, or the curve is not shown."
+
+[limits.noise_only_frames]
+min = 0
+max = 0
+reason = """Frames found in a recording with no transmitter on. The preamble threshold is set for a false alarm of
+about 1e-11 per position; any frame here means the detector or the recording is wrong. Known-bad case."""
+
+[limits.wrong_mod_crc_ok]
+min = 0
+max = 0
+reason = """A BPSK recording decoded as QPSK: frames with a good CRC. With the wrong constellation every bit is a guess,
+so the 16-bit CRC passes with odds of about 1 in 65 536 per frame. Known-bad case."""
+
+[limits.right_mod_crc_ok]
+min = 1
+max = 100000
+reason = "The same recording decoded as BPSK must give good frames, or the known-bad case above proves nothing."
+
+[limits.rx_peak_fs]
+min = 0.0
+max = 0.3
+reason = """Peak of each recording, as a fraction of full scale. First bench below 0.01. Above 0.3 the path has far
+less loss than 60 dB or the receiver is near clipping; the suite stops there."""

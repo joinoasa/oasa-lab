@@ -16,7 +16,10 @@ How a point is measured:
    inside the signal band (what the matched filter sees), away from the DC spike.
 
 Bench findings this follows (owner's bench, 2026-11-04): at 200 kS/s nothing decoded (the E310 has no
-DSP); at zero IF the BER was about 5 dB off theory; at 1 MS/s with the IF it is on theory.
+DSP); at zero IF the BER was about 5 dB off theory; at 1 MS/s with the IF it is on theory. At RX gain 40 the
+E310's noise was quantized (its raw samples took about 7 values) and BER read up to 0.65x theory at 7 dB; at 60
+it is on theory. Frames are decoded with the payload length known (it is fixed here), so a header bit error does
+not lose a frame: below about 4 dB most W0 headers have one.
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ PAYLOAD_LEN = 64
 GAP = 400                   # silent samples after every frame
 LEAD = 2000                 # silent samples at the start of the block
 PEAK = 0.5                  # peak magnitude of the block sent
-RX_GAIN_DB = 40.0
+RX_GAIN_DB = 60.0           # at 40 the noise was about one ADC step (E310) and BER read better than theory
 PERIODS = 4                 # a recording holds this many repeats of the block
 CFO_SEARCH = 0.1            # cycles per symbol: +-12.5 kHz, +-13.7 ppm at 915 MHz
 MAX_PROBE_PEAK = 0.3        # a recording this strong (of full scale) means the cable is wrong: stop
@@ -118,6 +121,7 @@ class Point:
     peak: float = 0.0
     frames_sent: int = 0
     rx_id: str = ""
+    report: dict[str, Any] = field(default_factory=dict)
     recording: IQ | None = None
     decoded: list[dict[str, Any]] = field(default_factory=list)
 
@@ -135,12 +139,24 @@ def write_sigmf(meta: dict[str, Any], samples: list[complex], base: Path, descri
     base.with_suffix(".sigmf-meta").write_text(json.dumps(m))
 
 
-def decode(radio: Path, base: Path, mod: str) -> list[dict[str, Any]]:
+REPORT_KEYS = ("preambles", "sync_rejected", "header_rejected", "too_short", "inside_frame")
+
+
+def decode_report(radio: Path, base: Path, mod: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Frames found, and the decoder's count of what happened to each candidate (decode_done; empty if the
+    binary does not report it). The payload length is given (--payload-len), not read from the header."""
     r = subprocess.run([str(radio), "waveform", "decode", "--in", str(base), "--mod", mod, "--sps", str(SPS),
-                        "--cfo-search", str(CFO_SEARCH), "--hex"], capture_output=True, text=True, timeout=900)
+                        "--cfo-search", str(CFO_SEARCH), "--payload-len", str(PAYLOAD_LEN), "--hex"],
+                       capture_output=True, text=True, timeout=900)
     if r.returncode != 0:
         raise RuntimeError(f"oasa-radio decode failed: {(r.stderr or r.stdout)[-300:]}")
-    return [d for d in (json.loads(l) for l in r.stdout.splitlines() if l.startswith("{")) if d.get("event") == "frame"]
+    lines = [json.loads(l) for l in r.stdout.splitlines() if l.startswith("{")]
+    done = next((d for d in lines if d.get("event") == "decode_done"), {})
+    return [d for d in lines if d.get("event") == "frame"], {k: done[k] for k in REPORT_KEYS if k in done}
+
+
+def decode(radio: Path, base: Path, mod: str) -> list[dict[str, Any]]:
+    return decode_report(radio, base, mod)[0]
 
 
 def baseband(iq: IQ) -> list[complex]:
@@ -203,7 +219,8 @@ def run_point(radio: Path, tx: Usrp, rx: Usrp, block: Block, rf_hz: float, gain_
     x = baseband(iq)
     base = work / f"rx-{direction}-{block.mod}-{gain_db:g}".replace(".", "p")   # no dot: with_suffix would eat it
     write_sigmf(block.meta, x, base, f"W1 {direction} {block.mod} TX gain {gain_db:g} dB, shifted back from IF")
-    measure_point(pt, block, x, decode(radio, base, block.mod))
+    frames, pt.report = decode_report(radio, base, block.mod)
+    measure_point(pt, block, x, frames)
     return pt
 
 

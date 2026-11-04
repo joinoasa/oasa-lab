@@ -4,7 +4,7 @@ Wiring (docs/hardware-suites.md, "USRP loopback"): the same 60 dB paths as l2-us
 after `--confirm-wiring usrp`. How a point is measured: oasa_lab/w1test.py.
 
 For each direction and modulation the TX gain is first raised from a low value until the frames are clear;
-the points are then set from there for Eb/N0 of about 3, 5 and 7 dB (the level follows the gain 1 dB per dB).
+the points are then set from there for Eb/N0 of about 1, 3, 5 and 7 dB (the level follows the gain 1 dB per dB).
 Needs `oasa-radio` in $OASA_RADIO_BIN_DIR; without it the suite is SKIPPED.
 """
 
@@ -22,7 +22,7 @@ from oasa_lab.w1test import (RX_GAIN_DB, SAMPLE_RATE, Block, Point, TooStrong, b
                              make_block, probe_gain, run_point, theory_ber, write_sigmf)
 
 RF_HZ = 915e6
-TARGETS_DB = (3.0, 5.0, 7.0)
+TARGETS_DB = (1.0, 3.0, 5.0, 7.0)
 MIN_ERRORS = 20
 STATE: dict[str, object] = {}
 
@@ -77,7 +77,7 @@ def judge(lab, direction: str, mod: str, points: list[Point]) -> None:
         lab.log("w1_point", direction=direction, mod=mod, tx_gain_db=pt.tx_gain_db, frames=pt.frames,
                 frames_sent_about=pt.frames_sent, crc_ok=pt.crc_ok, bits=pt.bits, errors=pt.errors,
                 ber=pt.ber, ebn0_db=None if e is None else round(e, 2),
-                theory=None if e is None else theory_ber(mod, e), peak=round(pt.peak, 5))
+                theory=None if e is None else theory_ber(mod, e), peak=round(pt.peak, 5), decoder=pt.report)
         if not lab.measure("rx_peak_fs", f"peak {direction} {mod} TX {pt.tx_gain_db:g}", round(pt.peak, 5)):
             failures.append(f"peak {pt.peak:.3f} at TX {pt.tx_gain_db:g}")
         if e is None or pt.errors < MIN_ERRORS:

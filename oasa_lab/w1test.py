@@ -84,18 +84,22 @@ class Block:
     samples: list[complex]
     payloads: list[bytes]
     meta: dict[str, Any]
+    frame: str = "w0"
 
 
-def make_block(radio: Path, mod: str, work: Path, seed: int) -> Block:
+def make_block(radio: Path, mod: str, work: Path, seed: int, frame: str = "w0") -> Block:
+    """24 frames with random payloads from `seed`. `frame` is the oasa-radio frame format: "w0" (the
+    original, unprotected length byte) or "v1" (header with a code and a CRC-8, oasa-radio docs/frame-v1.md)."""
     rng = random.Random(seed)
     samples: list[complex] = [0j] * LEAD
     payloads = []
     meta: dict[str, Any] = {}
     for i in range(N_FRAMES):
         p = bytes(rng.randrange(256) for _ in range(PAYLOAD_LEN))
-        base = work / f"tx-{mod}-{i}"
+        base = work / f"tx-{frame}-{mod}-{i}"
         subprocess.run([str(radio), "waveform", "iq", "--mod", mod, "--out", str(base), "--payload-hex", p.hex(),
-                        "--symbol-rate", str(SYMBOL_RATE), "--sps", str(SPS), "--delay", "0", "--tail", "0"],
+                        "--symbol-rate", str(SYMBOL_RATE), "--sps", str(SPS), "--delay", "0", "--tail", "0",
+                        *(["--frame", frame] if frame != "w0" else [])],
                        check=True, capture_output=True, timeout=60)
         x = IQ((base.with_suffix(".sigmf-data")).read_bytes(), "cf32_le", SAMPLE_RATE, 0).samples()
         if not meta:
@@ -105,7 +109,7 @@ def make_block(radio: Path, mod: str, work: Path, seed: int) -> Block:
     w = 2 * math.pi * IF_HZ / SAMPLE_RATE
     samples = [v * cmath.exp(1j * w * k) for k, v in enumerate(samples)]
     scale = PEAK / max(abs(v) for v in samples)
-    return Block(mod, [v * scale for v in samples], payloads, meta)
+    return Block(mod, [v * scale for v in samples], payloads, meta, frame)
 
 
 @dataclass
@@ -142,11 +146,14 @@ def write_sigmf(meta: dict[str, Any], samples: list[complex], base: Path, descri
 REPORT_KEYS = ("preambles", "sync_rejected", "header_rejected", "too_short", "inside_frame")
 
 
-def decode_report(radio: Path, base: Path, mod: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def decode_report(radio: Path, base: Path, mod: str, frame: str = "w0",
+                  known_len: bool = True) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Frames found, and the decoder's count of what happened to each candidate (decode_done; empty if the
-    binary does not report it). The payload length is given (--payload-len), not read from the header."""
+    binary does not report it). With `known_len` the payload length is given (--payload-len) and the header
+    is not needed; without it the receiver must read the length from the header, as a real link does."""
+    extra = (["--payload-len", str(PAYLOAD_LEN)] if known_len else []) + (["--frame", frame] if frame != "w0" else [])
     r = subprocess.run([str(radio), "waveform", "decode", "--in", str(base), "--mod", mod, "--sps", str(SPS),
-                        "--cfo-search", str(CFO_SEARCH), "--payload-len", str(PAYLOAD_LEN), "--hex"],
+                        "--cfo-search", str(CFO_SEARCH), *extra, "--hex"],
                        capture_output=True, text=True, timeout=900)
     if r.returncode != 0:
         raise RuntimeError(f"oasa-radio decode failed: {(r.stderr or r.stdout)[-300:]}")
@@ -201,7 +208,7 @@ def measure_point(pt: Point, block: Block, x: list[complex], frames: list[dict[s
 
 
 def run_point(radio: Path, tx: Usrp, rx: Usrp, block: Block, rf_hz: float, gain_db: float, work: Path,
-              direction: str) -> Point:
+              direction: str, known_len: bool = True) -> Point:
     pt = Point(direction, block.mod, gain_db, rx_id=rx.id)
     n = PERIODS * len(block.samples)
     try:
@@ -217,9 +224,9 @@ def run_point(radio: Path, tx: Usrp, rx: Usrp, block: Block, rf_hz: float, gain_
     pt.recording = iq
     pt.frames_sent = round(n / len(block.samples) * N_FRAMES)
     x = baseband(iq)
-    base = work / f"rx-{direction}-{block.mod}-{gain_db:g}".replace(".", "p")   # no dot: with_suffix would eat it
+    base = work / f"rx-{block.frame}-{direction}-{block.mod}-{gain_db:g}".replace(".", "p")   # no dot: with_suffix would eat it
     write_sigmf(block.meta, x, base, f"W1 {direction} {block.mod} TX gain {gain_db:g} dB, shifted back from IF")
-    frames, pt.report = decode_report(radio, base, block.mod)
+    frames, pt.report = decode_report(radio, base, block.mod, block.frame, known_len)
     measure_point(pt, block, x, frames)
     return pt
 

@@ -225,6 +225,15 @@ QPSK lost up to 1.4 dB at 0 to 2 dB from the coarse frequency search; oasa-radio
 and brings 1 and 2 dB within 0.1 dB (0 dB still about +1.2 dB, oasa-radio #14, so the lowest target is 1 dB).
 The suite needs oasa-radio 34be038 or later (`--payload-len` on decode).
 
+**Frame format v1** (oasa-radio `docs/frame-v1.md`, its bench check plan): `test_v1_header_finds_frames` sends
+24 v1 frames (header with a rate-1/4 code and a CRC-8) at the TX gains of the W0 points near 1 and 3 dB and
+decodes them *without* the length, as a real link must. At 0.5 dB Eb/N0 and up, at least 90 % of the frames in
+the recording must be found (`v1_found_fraction`, est.). The W0 recordings of the same points are decoded again
+by reading their unprotected header (`w0_header_found_fraction`, logged for comparison, no pass mark), and every
+`w1_point`/`w1_v1_point` line carries the decoder's counts (`preambles`, `sync_rejected`, `header_rejected`,
+`too_short`, `inside_frame`), so a result says which stage lost frames. Simulated bench: v1 93 to 95 of 96
+found at 0.7 to 3.3 dB; W0 by its header 38 to 73 of 96.
+
 ### `l2-rf-control`
 
 The negative control. No encryption: plaintext packets with a marker and MAVLink heartbeats go both ways. The suite declares `expect_plaintext` and `expect_mavlink`, so the checker must **find** them in both air captures and see that the bytes are not random. If the air check went blind, this suite would fail. The SDR recording is checked the same way.

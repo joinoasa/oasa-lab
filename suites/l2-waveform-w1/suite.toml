@@ -1,4 +1,4 @@
-description = "OASA's own waveform, milestone W1: the oasa-radio W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK. The bit error rate at a measured Eb/N0 is within 1 dB of theory, noise alone gives no frames, and the wrong demodulator passes no CRC (needs a B200mini, an E310 and OASA_RADIO_BIN_DIR)"
+description = "OASA's own waveform, milestone W1: the oasa-radio W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK. The bit error rate at a measured Eb/N0 is within 1 dB of theory, noise alone gives no frames, and the wrong demodulator passes no CRC, and frame format v1 is found without the length near 1 and 3 dB (needs a B200mini, an E310 and OASA_RADIO_BIN_DIR)"
 expectations = [
   "test_noise_only_gives_no_frames",
   "test_wrong_modulation_fails_the_crc",
@@ -41,6 +41,21 @@ so the 16-bit CRC passes with odds of about 1 in 65 536 per frame. Known-bad cas
 min = 1
 max = 100000
 reason = "The same recording decoded as BPSK must give good frames, or the known-bad case above proves nothing."
+
+[limits.v1_found_fraction]
+min = 0.9
+max = 1.05
+reason = """Frame format v1 (oasa-radio docs/frame-v1.md): frames found without being told the length, out of the
+frames in the recording (about 96: four repeats of 24, the edges cut), at points of 0.5 dB Eb/N0 or more. The v1
+header has a rate-1/4 code and a CRC-8, so it should not be what loses a frame: in simulation 386 of 400 at 0 dB
+and 398 of 400 at 2 dB (BPSK). est.: first bench run, to tune."""
+
+[limits.w0_header_found_fraction]
+min = 0.0
+max = 1.05
+reason = """For comparison, not a pass mark: the W0 recordings at the same points, decoded reading their
+unprotected 16-bit header, as a link without a known length must. In simulation 27 % at 0 dB and 54 % at 2 dB
+(BPSK); the decoder's counts in the log say which stage lost the rest."""
 
 [limits.rx_peak_fs]
 min = 0.0

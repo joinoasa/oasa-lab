@@ -136,7 +136,7 @@ Tier 0a lets anyone in the world help from day one. Tier 0b is enough for the fi
 |---|---|---|
 | M1 | Lab skeleton (Tier 0a) | `oasa-lab run` works; L1 simulated channel; evidence bundle and checker pass in CI |
 | M2 | Link v0 in simulation | OASA-SEC link v0 spec drafted; link passes L1 under loss, reordering and replay attacks; checker confirms no plaintext |
-| M3 | First real radios (Tier 0b) | Encrypted packets over two LoRa boards on cable; RTL-SDR recording checked as unreadable |
+| M3 | First real radios (Tier 0b) | Encrypted packets over two LoRa boards on cable; RTL-SDR recording checked as unreadable  (the SDR bench version: [sdr-link.md](sdr-link.md)) |
 | M4 | Encrypted MAVLink (Tier 1) | PX4/ArduPilot SITL commanded through the encrypted link over SiK radios and over Pluto; R-COM1 and R-COM2 meet the release standard |
 | M5 | Automated bench (Tier 2) | Attenuator sweeps run unattended; an agent runs, watches and reports a full suite remotely |
 | M6 | OASA waveform W1–W2 | Our own modem on Plutos over cable, measured against theory |

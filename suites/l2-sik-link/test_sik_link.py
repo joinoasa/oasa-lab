@@ -26,7 +26,7 @@ import pytest
 from oasa_lab.devices.sikat import expect_arg
 from oasa_lab.hwlink import find_radio_bin
 from oasa_lab.linkharness import HOST, MissingBinaries
-from oasa_lab.siklink import SikBench, link_differences
+from oasa_lab.siklink import SikBench, lower_setting, settings_problems
 from oasa_lab.testing import Endpoint, free_udp_port, wait_for
 
 N = 30          # packets each way, one at a time
@@ -50,18 +50,8 @@ def test_radios_report_their_settings(lab, hw):
     a, b = bench.radios()
     for r in (a, b):
         lab.log("sik_settings", device=r.id, firmware=r.report.version, settings=r.settings, expect=r.expect)
-        bad = {k: (v, r.settings.get(k)) for k, v in r.expect.items() if r.settings.get(k) != v}
-        assert not bad, f"{r.id} does not have the settings lab.toml declares (want, got): {bad}. Use oasa-radio sik set"
-        assert r.settings.get("MAVLINK") == 0, f"{r.id}: MAVLINK framing must be off (0) for transparent bytes"
-        assert r.settings.get("NETID") != 25, f"{r.id}: NETID is the SiK default 25; pick one per pair (oasa-radio docs/sik.md)"
-        prof = r.radio.get("profile")
-        want = {"sik-64k": (64, 0), "sik-64k-ecc": (64, 1)}.get(prof)
-        if want:
-            assert (r.settings.get("AIR_SPEED"), r.settings.get("ECC")) == want, \
-                f"{r.id}: profile {prof} needs AIR_SPEED, ECC = {want}"
-    diff = link_differences(a.settings, b.settings)
-    assert not diff, f"the radios cannot link: {diff} differ"
-    assert a.report.version == b.report.version, "SiK needs the same firmware version on both radios"
+    problems = settings_problems(a, b)
+    assert not problems, "; ".join(problems)
 
 
 def _app_ports():
@@ -199,28 +189,43 @@ def test_bridge_refuses_mismatched_settings(lab, hw, radio):
 
 
 def test_remote_change_is_caught(lab, hw, radio):
-    """Known-bad (H1): radio B changes radio A's TXPOWER over the air (RT, not saved). A's bridge must refuse.
-    Then B sets it back, and `oasa-radio sik show` confirms."""
+    """Known-bad (H1): radio B changes one of radio A's settings over the air (RT, not saved): TXPOWER one step
+    down (never up). A's bridge must refuse. Then A is put back through its own port (+++, ATZ: the change was not
+    saved, so a reboot drops it) and read again."""
     bench = SikBench(lab, hw)
     a, b = bench.radios()
-    reg = a.report.registers["TXPOWER"]
-    orig = a.settings["TXPOWER"]
-    new = 11 if orig != 11 else 8                  # a lower, valid SiK power step; nothing is saved (no RT&W)
-    want = {**bench.expect(a), "TXPOWER": orig}
-    b.remote([f"RTS{reg}={new}"])
-    lab.log("sik_remote", by=b.id, target=a.id, command=f"RTS{reg}={new}", saved=False)
-    sink = Endpoint()
+    name, new = lower_setting(a.settings)
+    reg, orig = a.report.registers[name], a.settings[name]
+    want = {**bench.expect(a), name: orig}
+    errs: list[str] = []
     try:
-        br = bench.bridge(radio, a, listen=(HOST, free_udp_port()), send=sink.addr, log_name="bridge-after-rt.jsonl",
-                          expect=want)
-        errs = _refused(br, "TXPOWER")
-    finally:
-        sink.close()
-        b.remote([f"RTS{reg}={orig}"])
-    r = subprocess.run([str(radio), "sik", "show", "--device", a.link.attach_pty(), "--baud", str(a.baud)],
-                       capture_output=True, text=True, timeout=30)
-    back = json.loads(r.stdout.strip().splitlines()[-1]).get("settings", {}) if r.returncode == 0 else {}
-    lab.log("sik_restored", target=a.id, txpower=back.get("TXPOWER"), ok=back.get("TXPOWER") == orig)
-    assert back.get("TXPOWER") == orig, (f"{a.id}: TXPOWER is {back.get('TXPOWER')} after setting it back to {orig} "
-                                         "(nothing was saved: power-cycle the radio)")
+        b.remote([f"RTS{reg}={new}"])
+        lab.log("sik_remote", by=b.id, target=a.id, command=f"RTS{reg}={new}", setting=name, was=orig, saved=False)
+        sink = Endpoint()
+        try:
+            br = bench.bridge(radio, a, listen=(HOST, free_udp_port()), send=sink.addr,
+                              log_name="bridge-after-rt.jsonl", expect=want)
+            errs += _refused(br, name)
+        finally:
+            sink.close()
+    except Exception as exc:                       # keep it: the restore below must still run
+        errs.append(f"{type(exc).__name__}: {exc}")
+    restored, how, why = None, "reboot without saving (+++, ATZ) on its own port", ""
+    try:
+        restored = a.reboot_unsaved().settings.get(name)
+    except Exception as exc:
+        why = str(exc)
+        if a.hub is not None and a.hub_port is not None:
+            how = "USB power cycle through the hub"
+            try:
+                a.release_link()
+                a.power_cycle()
+                restored = a.settings.get(name)
+            except Exception as exc2:
+                why += f"; power cycle: {exc2}"
+    ok = restored == orig
+    lab.log("sik_restored", target=a.id, setting=name, want=orig, got=restored, how=how, ok=ok, error=why or None)
+    if not ok:
+        errs.append(f"{a.id}: {name} is {restored} after the restore, want {orig} ({why or 'read back differs'}). "
+                    "Nothing was saved: power-cycle the radio")
     assert not errs, "; ".join(errs)

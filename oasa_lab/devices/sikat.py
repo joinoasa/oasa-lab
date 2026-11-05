@@ -72,6 +72,11 @@ def has_line(reply: bytes, word: str) -> bool:
     return word in _lines(reply)
 
 
+def ok_after_escape(reply: bytes) -> bool:
+    """`OK` after `+++`. Packets from the air may come just before it with no line break: look for the bytes."""
+    return b"OK\n" in reply or b"OK\r\n" in reply
+
+
 def parse_ati5(reply: bytes) -> tuple[dict[str, int], dict[str, int]]:
     """(settings, registers). Anything after the echo but settings, OK and empty lines is an error."""
     settings: dict[str, int] = {}
@@ -99,12 +104,11 @@ def parse_ati5(reply: bytes) -> tuple[dict[str, int], dict[str, int]]:
 
 
 def parse_ati(reply: bytes) -> str:
+    """The banner, `SiK <version> on <board>` (main.c g_banner_string; RFDesign builds put `RFD ` in front)."""
     for l in _after_echo(reply, "ATI"):
-        if l and l != "OK":
-            if len(l) > 64:
-                break
+        if l and len(l) <= 64 and (l.startswith("SiK ") or l.startswith("RFD SiK ")):
             return l
-    raise AtError("ATI gave no version line")
+    raise AtError("ATI gave no SiK version line (not a SiK radio?)")
 
 
 class AtSession:
@@ -127,12 +131,16 @@ class AtSession:
                 del got[:max(0, len(got) - REPLY_CAP)]
                 last = time.monotonic()
 
-    def enter(self) -> None:
+    def enter(self, recover: bool = True) -> None:
+        """`recover`: a radio left in command mode is recovered with CR and `AT` CR (in data mode those bytes go
+        on the air, where the other side drops them as noise)."""
         self._read(GUARD_S)                   # silence from us; whatever arrives is thrown away
         self.port.write(b"+++")
-        r = self._read(GUARD_S + ENTER_WAIT_S, done=lambda b: has_line(b, "OK"))
-        if has_line(r, "OK"):
+        r = self._read(GUARD_S + ENTER_WAIT_S, done=ok_after_escape)
+        if ok_after_escape(r):
             return
+        if not recover:
+            raise AtError("no reply to +++")
         self.port.write(b"\r")                # already in command mode? then "+++" sits in its line
         self._read(0.3)
         self.port.write(b"AT\r")
@@ -157,8 +165,16 @@ class AtSession:
         return Report(version, settings, regs)
 
     def leave(self) -> None:
-        self.port.write(b"ATO\r")
-        self._read(0.2)
+        """ATO prints only its echo; the echo proves the radio got it. Twice, then give up loudly."""
+        for _ in range(2):
+            self.port.write(b"ATO\r")
+            if has_line(self._read(0.5, done=lambda b: has_line(b, "ATO")), "ATO"):
+                return
+        raise AtError("the radio did not confirm ATO; it may still be in command mode")
+
+    def reboot(self) -> None:
+        """ATZ: reboot without saving, so unsaved changes are dropped. The radio prints nothing."""
+        self.port.write(b"ATZ\r")
 
 
 def read_report(port: Port) -> Report:
@@ -166,9 +182,22 @@ def read_report(port: Port) -> Report:
     s = AtSession(port)
     s.enter()
     try:
-        return s.report()
-    finally:
-        s.leave()
+        r = s.report()
+    except AtError:
+        try:
+            s.leave()
+        except AtError:
+            pass
+        raise
+    s.leave()
+    return r
+
+
+def reboot_unsaved(port: Port) -> None:
+    """Enter command mode and reboot (ATZ): settings changed but not saved (AT&W) go back to the saved ones."""
+    s = AtSession(port)
+    s.enter()
+    s.reboot()
 
 
 def remote(port: Port, commands: list[str]) -> None:

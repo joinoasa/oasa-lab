@@ -26,6 +26,7 @@ lab.toml:
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from ..profiles import profile_settings
@@ -34,6 +35,7 @@ from .base import Device, DeviceError, Unavailable
 from .modem import ModemLink, PortLike, SerialPort, check_usb_serial
 from .sim import SimWorld
 
+BOOT_S = 3.0        # how long a SiK radio takes to come back after ATZ (est.; about 1 s)
 DEFAULT_MTU = 242   # framed, 249 bytes: fits one SiK packet (250 bytes with ECC off)
 
 
@@ -67,6 +69,8 @@ class SikRadio(Device):
 
     def _open(self) -> None:
         if self.backend == "sim":
+            # The simulated radio starts with what lab.toml expects, so it passes the settings checks; a [sim] table
+            # overrides that (l0-lab uses it to start a radio mismatched and see the checks fail).
             if not isinstance(self.world, SimWorld):
                 raise Unavailable(f"{self.id}: the simulated backend needs a SimWorld")
             from .simsik import SimSikPort
@@ -100,6 +104,26 @@ class SikRadio(Device):
             raise DeviceError(f"{self.id}: the tap owns the port; read settings through oasa-radio sik show instead")
         self.report = sikat.read_report(self.port)
         return self.report
+
+    def release_link(self) -> None:
+        """Stop the tap (and its pty), so the lab can talk to the radio again."""
+        if self._link is not None:
+            self._link.stop()
+            self._link = None
+
+    def reboot_unsaved(self) -> sikat.Report:
+        """Reboot through the radio's own port (+++, ATZ): unsaved changes, such as one made over the air with RT
+        and no RT&W, go back to what is saved. Reads the settings again and returns them."""
+        self.release_link()
+        try:
+            sikat.reboot_unsaved(self.port)
+        except sikat.AtError as exc:
+            raise DeviceError(f"{self.id}: {exc}") from None
+        time.sleep(BOOT_S)
+        try:
+            return self.reread()
+        except sikat.AtError as exc:
+            raise DeviceError(f"{self.id}: after the reboot: {exc}") from None
 
     def remote(self, commands: list[str]) -> None:
         """Send `RT...` commands to the linked radio over the air (H1 tests). Each must answer OK."""

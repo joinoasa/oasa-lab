@@ -88,3 +88,45 @@ class SikBench:
 
 def link_differences(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
     return [k for k in LINK_KEYS if a.get(k) != b.get(k)]
+
+
+# SiK TX power steps of 100 mW radios (Holybro V3, 3DR): another value is rounded up (ArduPilot SiK page)
+TXPOWER_STEPS = (1, 2, 5, 8, 11, 14, 17, 20)
+
+
+def settings_problems(a: SikRadio, b: SikRadio) -> list[str]:
+    """Why these two radios are not set up for the bridge (empty: they are). What the settings test asserts."""
+    out = []
+    for r in (a, b):
+        if not r.expect:
+            out.append(f"{r.id}: lab.toml has no [devices.{r.id}.sik] table of expected settings")
+        bad = {k: (v, r.settings.get(k)) for k, v in r.expect.items() if r.settings.get(k) != v}
+        if bad:
+            out.append(f"{r.id} does not have the settings lab.toml declares (want, got): {bad}. Use oasa-radio sik set")
+        if r.settings.get("MAVLINK") != 0:
+            out.append(f"{r.id}: MAVLINK framing must be off (0) for transparent bytes")
+        if r.settings.get("NETID") == 25:
+            out.append(f"{r.id}: NETID is the SiK default 25; pick one per pair (oasa-radio docs/sik.md)")
+        prof = r.radio.get("profile")
+        want = {"sik-64k": (64, 0), "sik-64k-ecc": (64, 1)}.get(prof)
+        if want and (r.settings.get("AIR_SPEED"), r.settings.get("ECC")) != want:
+            out.append(f"{r.id}: profile {prof} needs AIR_SPEED, ECC = {want}")
+    diff = link_differences(a.settings, b.settings)
+    if diff:
+        out.append(f"the radios cannot link: {diff} differ")
+    if a.report and b.report and a.report.version != b.report.version:
+        out.append("SiK needs the same firmware version on both radios")
+    return out
+
+
+def lower_setting(settings: dict[str, int]) -> tuple[str, int]:
+    """A harmless change for the RT test that never raises power: TXPOWER one step down, or, at the lowest step,
+    DUTY_CYCLE down (less transmit time). Returns (name, new value)."""
+    tx = settings.get("TXPOWER", 20)
+    lower = [p for p in TXPOWER_STEPS if p < tx]
+    if lower:
+        return "TXPOWER", lower[-1]
+    duty = settings.get("DUTY_CYCLE", 100)
+    if duty <= 1:
+        raise DeviceError("TXPOWER and DUTY_CYCLE are already at their lowest; nothing to lower for the RT test")
+    return "DUTY_CYCLE", max(1, duty - 10)

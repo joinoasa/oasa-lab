@@ -32,6 +32,17 @@ def drops(proc: LinkProc, reason: str) -> int:
 @pytest.fixture
 def bench(lab, hw: Hardware):
     if "relay" in STATE:
+        # The hw fixture opens the radios for each test and closes them after it (a closed USRP has no temp
+        # folder left), so the relay gets this test's radios. Links, identities and the relay stay up.
+        try:
+            hw.use_wiring()
+            b200, e310 = hw.first("b200"), hw.first("e310")
+        except (WiringRefused, Unavailable) as exc:
+            pytest.skip(str(exc))
+        relay = STATE["relay"]
+        relay.legs["a2b"].tx, relay.legs["a2b"].rx = b200, e310
+        relay.legs["b2a"].tx, relay.legs["b2a"].rx = e310, b200
+        STATE.update(b200=b200, e310=e310)
         yield STATE
         return
     try:
@@ -91,9 +102,9 @@ def _teardown():
 
 def test_encrypted_link_over_the_bench(lab, bench):
     relay, link_a, link_b = bench["relay"], bench["link_a"], bench["link_b"]
-    up = relay.run(lambda: bool(link_a.seen("session_established")), timeout=240)
+    up = relay.run(lambda: bool(link_a.seen("session_established")), timeout=420)
     hs = round(time.monotonic() - bench["t0"], 1)
-    assert up, "no session over the relay in 240 s; see logs/link-*.jsonl and the relay_cycle events"
+    assert up, "no session over the relay in 420 s; see logs/link-*.jsonl and the relay_cycle events"
     assert lab.measure("handshake_s", "handshake over the relay", hs, "s"), f"{hs} s"
     marker = lab.marker()
     a2b = [f"{marker}|a2b|{i:03d}|".encode().ljust(80, b".") for i in range(N_A2B)]

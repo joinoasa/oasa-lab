@@ -1,7 +1,8 @@
-description = "OASA's own waveform, milestone W1: the oasa-radio W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK. The bit error rate at a measured Eb/N0 is within 1 dB of theory, noise alone gives no frames, and the wrong demodulator passes no CRC, and frame format v1 is found without the length near 1 and 3 dB (needs a B200mini, an E310 and OASA_RADIO_BIN_DIR)"
+description = "OASA's own waveform, milestone W1: the oasa-radio W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK. The bit error rate at a measured Eb/N0 is within 1 dB of theory, noise alone gives no frames, and the wrong demodulator passes no CRC, frame format v1 is found without the length near 1 and 3 dB, and the light error-correction code's packet loss is within 1 dB of the simulation with a light frame read as uncoded passing no CRC (needs a B200mini, an E310 and OASA_RADIO_BIN_DIR with --code)"
 expectations = [
   "test_noise_only_gives_no_frames",
   "test_wrong_modulation_fails_the_crc",
+  "test_light_as_uncoded_fails_the_crc",
 ]
 transmits = true
 requires = ["b200", "e310"]
@@ -56,6 +57,40 @@ max = 1.05
 reason = """For comparison, not a pass mark: the W0 recordings at the same points, decoded reading their
 unprotected 16-bit header, as a link without a known length must. In simulation 27 % at 0 dB and 54 % at 2 dB
 (BPSK); the decoder's counts in the log say which stage lost the rest."""
+
+[limits.light_loss_db]
+min = -1.0
+max = 1.0
+reason = """Light error correction (oasa-radio docs/fec-light.md, bench check plan): measured Eb/N0 (per information
+bit, rate 1/2) minus the Eb/N0 at which `oasa-radio waveform per` (same binary, 400 frames, --cfo-search 0.1,
+--cfo-random 0.018, --random-frac-delay) gives the measured packet loss. Judged only for losses of 2 % to 50 %: what
+about 400 frames a point resolve (one sigma 0.7 % at 2 %). The plan's goal: within 1 dB of the simulation. Negative
+means better than the simulation, which points at the Eb/N0 measurement (for example the 3 dB rate correction)."""
+
+[limits.light_delivered_fraction]
+min = 0.97
+max = 1.05
+reason = """Light frames delivered (good CRC-16, a payload that was sent) out of the sent frames wholly inside the
+recordings, at a measured Eb/N0 of 5.0 dB or more. est.: from simulation only, no bench run yet. The simulation loses
+0 to 0.25 % at 5 to 6 dB without an offset (fec-light.md, 400 frames), so 3 % leaves room for real phase noise and
+the 2.5 ppm offset over a 10 ms frame, which the simulation does not have. Above 1.0 means a frame counted twice."""
+
+[limits.light_points_measured]
+min = 2
+max = 100
+reason = "Each modulation and direction needs at least 2 light points with a loss of 2 % to 50 %, or the curve is not shown."
+
+[limits.light_as_uncoded_crc_ok]
+min = 0
+max = 0
+reason = """A light-coded recording decoded with the length given and no code (--payload-len 64 --code none): frames
+with a good CRC-16. The coded bits are read as payload bits, so the CRC passes with odds of about 1 in 65 536 per
+frame. Known-bad case."""
+
+[limits.light_as_light_crc_ok]
+min = 1
+max = 100000
+reason = "The same recording decoded with --code light and the length must give good frames, or the known-bad case above proves nothing."
 
 [limits.rx_peak_fs]
 min = 0.0

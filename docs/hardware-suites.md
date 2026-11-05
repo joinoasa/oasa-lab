@@ -8,7 +8,7 @@ The first suites that use real radios on cables. They are written and tested on 
 | `l2-lora-link` | The encrypted link works over two LoRa modems on coax, matches the airtime model, and the air shows only ciphertext | 2 Heltec modems, RTL-SDR, `oasa-sec`, `oasa-radio` |
 | `l2-rf-control` | Negative control: a plaintext LoRa packet **is** found by the same air check | 2 Heltec modems, RTL-SDR |
 | `l2-rx-noise` | Receive only: each radio is alive and its input is quiet, and the E310 draws normal power. Transmits nothing and only reads the supply | B200mini, E310, KORAD |
-| `l2-waveform-w1` | OASA's W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK: BER at a measured Eb/N0 within 1 dB of theory; noise gives no frames, the wrong demodulator passes no CRC | B200mini, E310, `oasa-radio` |
+| `l2-waveform-w1` | OASA's W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK: BER at a measured Eb/N0 within 1 dB of theory; noise gives no frames, the wrong demodulator passes no CRC; frame v1 found without the length; light-code packet loss within 1 dB of the simulation | B200mini, E310, `oasa-radio` |
 | `l2-e310-two-channel` | Both E310 receive channels in one stream (direction finding, step 1): no lost samples, independent noise and matching floors with the transmitter off, channel isolation, and `oasa-radio waveform df` agrees with the lab's own phase sum | B200mini, E310, `oasa-radio` |
 | `l2-sdr-link` | The encrypted oasa-sec link over the bench: every packet a frame v1 on the cables (RF relay); both ways, ciphertext only on the air, replay and changed packet dropped, untrusted identity gets no session ([sdr-link.md](sdr-link.md)) | B200mini, E310, `oasa-sec`, `oasa-radio` |
 | `l2-sdr-control` | Negative control: plaintext frames over the same relay **are** found by the air check | B200mini, E310, `oasa-radio` |
@@ -251,6 +251,28 @@ by reading their unprotected header (`w0_header_found_fraction`, logged for comp
 `w1_point`/`w1_v1_point` line carries the decoder's counts (`preambles`, `sync_rejected`, `header_rejected`,
 `too_short`, `inside_frame`), so a result says which stage lost frames. Simulated bench: v1 93 to 95 of 96
 found at 0.7 to 3.3 dB; W0 by its header 38 to 73 of 96.
+
+**Light error correction** (oasa-radio `docs/fec-light.md`, its bench check plan; needs an oasa-radio with
+`--code`): `test_light_code_packet_loss` sends 24 frame-v1 frames with the light code (K=7, rate 1/2, interleaver;
+`waveform iq --frame v1 --code light`) at TX gains set from the W0 probe: the symbol energy at a gain is the same,
+so a coded frame's Eb/N0 is the W0 probe's plus 3.0 dB, and gain = probe gain + (target - 3.0 - probe Eb/N0) for
+2.5, 3.5, 4.5 and 5.5 dB (BPSK) or 2.0, 2.5, 3.0 and 5.5 dB (QPSK: its simulated loss falls from 50 % to
+2 % between about 1.8 and 3.5 dB, so 3.5 and 4.5 would give one judged point). **Eb counts information bits**: the measured Es/N0 is divided by bits per symbol x code
+rate (rate 1 for W0 and uncoded v1, so their numbers do not change). A point is 4 recordings of 4 1/8 repeats, at
+least 384 frames, decoded *without* the length (default sync check; again with `--sync-max-errors 5`, logged
+only). Delivered = a good CRC-16 and a payload that was sent. Frames are counted per slot: where the block sits in
+each recording follows from the frames found, so frames cut by the recording's edges are neither sent nor lost.
+The reference is `oasa-radio waveform per --frame v1 --code light` at 1.5 to 6.5 dB, 400 frames, `--cfo-search 0.1
+--cfo-random 0.018 --random-frac-delay` (the same binary, once per modulation; both start with the first light test and run while the bench measures).
+For each point with a loss of 2 to 50 %, `light_loss_db` = measured Eb/N0 minus the Eb/N0 at which the
+simulation gives that loss (interpolated in log loss) must be within 1 dB; at 5 dB and up at least 97 % must be
+delivered (`light_delivered_fraction`, est.). Known bad: `test_light_as_uncoded_fails_the_crc` decodes a light
+recording with `--payload-len 64 --code none`, which must give no good CRC; with `--code light` it must give
+some. Each `w1_light_point` line has the slots, delivered, the loss with sync 5, frames with a bad CRC-16 and
+the decoder's counts; `w1_light_reference` has the simulated curve.
+Simulated bench (2026-11-05): 392 to 394 slots a point, `light_loss_db` -0.39 to +0.33 dB over 12 judged
+points, 99.7 to 100 % delivered at 5.3 to 5.8 dB, 0 good CRCs read as uncoded (98 read as light). The suite then
+takes about 14 minutes instead of 5; the W0 and v1 numbers are unchanged.
 
 ### `l2-rf-control`
 

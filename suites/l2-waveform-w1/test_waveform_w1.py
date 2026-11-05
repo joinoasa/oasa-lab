@@ -5,11 +5,14 @@ after `--confirm-wiring usrp`. How a point is measured: oasa_lab/w1test.py.
 
 For each direction and modulation the TX gain is first raised from a low value until the frames are clear;
 the points are then set from there for Eb/N0 of about 1, 3, 5 and 7 dB (the level follows the gain 1 dB per dB).
-Needs `oasa-radio` in $OASA_RADIO_BIN_DIR; without it the suite is SKIPPED.
+Needs `oasa-radio` in $OASA_RADIO_BIN_DIR; without it the suite is SKIPPED. The light-code tests need an
+oasa-radio with `--code` (oasa-radio docs/fec-light.md); without it they are SKIPPED and the checker fails the
+run (a known-bad case and required limits are missing), so the oasa-radio change must be merged first.
 """
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 
@@ -18,14 +21,23 @@ import pytest
 from oasa_lab.devices import Unavailable
 from oasa_lab.hw import Hardware, WiringRefused
 from oasa_lab.iq import IQ
-from oasa_lab.w1test import (RX_GAIN_DB, SAMPLE_RATE, Block, Point, TooStrong, baseband, decode, decode_report,
-                             ebn0_for_ber, make_block, measure_point, probe_gain, run_point, theory_ber, write_sigmf)
+from oasa_lab.w1test import (CODE_RATE, RX_GAIN_DB, SAMPLE_RATE, Block, Point, TooStrong, baseband, decode,
+                             decode_report, ebn0_for_ber, ebn0_for_loss, make_block, measure_point, per_reference_result,
+                             probe_gain, run_light_point, run_point, start_per_reference, supports_code, theory_ber,
+                             write_sigmf)
 
 RF_HZ = 915e6
 TARGETS_DB = (1.0, 3.0, 5.0, 7.0)
 V1_TARGETS_DB = (1.0, 3.0)        # frame v1 is sent at the TX gains of these W0 points
 V1_MIN_EBN0_DB = 0.5              # v1_found_fraction is judged from here up
 MIN_ERRORS = 20
+# Eb/N0 per information bit. QPSK's simulated loss falls from 50 % to 2 % between about 1.8 and 3.5 dB (BPSK's,
+# with its weaker sync, about 2.0 to 4.6 dB), so QPSK is aimed lower to give 2 or more judged points; 5.5 dB is
+# for light_delivered_fraction.
+LIGHT_TARGETS_DB = {"bpsk": (2.5, 3.5, 4.5, 5.5), "qpsk": (2.0, 2.5, 3.0, 5.5)}
+LIGHT_REF_DB = [1.5 + 0.5 * k for k in range(11)]            # simulated reference, 1.5 to 6.5 dB
+LIGHT_LOSS_RANGE = (0.02, 0.5)                                # what about 400 frames resolve
+LIGHT_FULL_DB = 5.0                                           # light_delivered_fraction is judged from here up
 STATE: dict[str, object] = {}
 
 
@@ -38,6 +50,24 @@ def radio():
     if not (p.is_file() and os.access(p, os.X_OK)):
         pytest.skip(f"oasa-radio not found or not executable in OASA_RADIO_BIN_DIR={d}")
     return p
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _stop_references():
+    yield
+    for k in [k for k in STATE if k.startswith("light-ref-proc-")]:
+        proc = STATE.pop(k)
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()
+
+
+@pytest.fixture(scope="module")
+def light(radio):
+    if not supports_code(radio):
+        pytest.skip(f"{radio} has no --code (the light error-correction tier, oasa-radio docs/fec-light.md); "
+                    "build oasa-radio with it to run the light-code tests")
+    return radio
 
 
 @pytest.fixture
@@ -60,6 +90,7 @@ def sweep(lab, bench, direction: str, mod: str) -> list[Point]:
     try:
         g0, probe = probe_gain(bench["radio"], tx, rx, block, RF_HZ, bench["work"], f"{direction}", start_db=start)
         STATE[f"start-{direction}"] = max(0.0, g0 - 6.0)
+        STATE[f"probe-{direction}-{mod}"] = (g0, probe.ebn0_db)
         points = []
         for t in TARGETS_DB:
             g = round(g0 + (t - probe.ebn0_db), 1) if probe.ebn0_db is not None else None
@@ -169,6 +200,108 @@ def test_v1_header_finds_frames(lab, bench, direction, mod):
     if judged == 0:
         failures.append(f"no v1 point at {V1_MIN_EBN0_DB:g} dB or more")
     assert not failures, "; ".join(failures)
+
+
+@pytest.mark.parametrize("direction", ["e310-b200", "b200-e310"])
+@pytest.mark.parametrize("mod", ["bpsk", "qpsk"])
+def test_light_code_packet_loss(lab, bench, light, direction, mod):
+    """Light error correction (oasa-radio docs/fec-light.md, "Bench check plan"): frame v1 with the K=7 rate-1/2
+    code, at gains set from the W0 probe for 2 to 5.5 dB Eb/N0 per information bit (LIGHT_TARGETS_DB). At the same gain the symbol
+    energy is the same, so a coded frame's Eb/N0 is the W0 probe's plus 3.0 dB. Decoded without the length, as on
+    the air; delivered = good CRC-16 and a payload that was sent. Compared with `oasa-radio waveform per` at the
+    bench's offset and timing."""
+    probe = STATE.get(f"probe-{direction}-{mod}")
+    if probe is None or probe[1] is None:
+        pytest.fail(f"needs the W0 probe from test_ber_matches_theory[{mod}-{direction}]")
+    g0, e0 = probe
+    tx, rx = (bench["e310"], bench["b200"]) if direction == "e310-b200" else (bench["b200"], bench["e310"])
+    block = STATE.get(f"block-light-{mod}")
+    if block is None:
+        block = STATE[f"block-light-{mod}"] = make_block(bench["radio"], mod, bench["work"],
+                                                         seed=31 if mod == "bpsk" else 32, frame="v1", code="light")
+    for m in ("bpsk", "qpsk"):      # both references start with the first light test and run while it measures
+        if f"light-ref-{m}" not in STATE and f"light-ref-proc-{m}" not in STATE:
+            STATE[f"light-ref-proc-{m}"] = start_per_reference(bench["radio"], m, LIGHT_REF_DB)
+    coded_offset = 10 * math.log10(1 / CODE_RATE["light"])      # 3.0 dB
+    failures, measured, points, judged = [], 0, [], []
+    for t in LIGHT_TARGETS_DB[mod]:
+        g = round(g0 + (t - coded_offset - e0), 1)
+        if not 0 <= g <= tx.max_tx_gain:
+            lab.log("note", text=f"light {direction} {mod}: no gain for {t:g} dB within 0..{tx.max_tx_gain:g} dB")
+            continue
+        try:
+            pt = run_light_point(bench["radio"], tx, rx, block, RF_HZ, g, bench["work"], direction)
+        except TooStrong as exc:
+            pytest.fail(str(exc))
+        points.append(pt)
+        e = pt.ebn0_db
+        loss = 1 - pt.delivered / pt.frames_sent if pt.frames_sent else None
+        loss5 = 1 - pt.delivered_sync5 / pt.frames_sent if pt.frames_sent else None
+        lab.log("w1_light_point", direction=direction, mod=mod, target_db=t, tx_gain_db=g, captures=pt.captures,
+                ebn0_db=None if e is None else round(e, 2), slots=pt.frames_sent, frames=pt.frames,
+                delivered=pt.delivered, loss=loss, crc_bad=pt.frames - sum(bool(f.get("crc_ok")) for f in pt.decoded),
+                sync5={"delivered": pt.delivered_sync5, "loss": loss5, "decoder": pt.report_sync5},
+                bits=pt.bits, errors=pt.errors, peak=round(pt.peak, 5), decoder=pt.report)
+        if not lab.measure("rx_peak_fs", f"peak light {direction} {mod} TX {g:g}", round(pt.peak, 5)):
+            failures.append(f"peak {pt.peak:.3f} at TX {g:g}")
+        if e is None or loss is None:
+            continue
+        if LIGHT_LOSS_RANGE[0] <= loss <= LIGHT_LOSS_RANGE[1]:
+            judged.append((pt, loss))
+        if e >= LIGHT_FULL_DB:
+            frac = pt.delivered / pt.frames_sent
+            if not lab.measure("light_delivered_fraction", f"light delivered {direction} {mod} at {e:.2f} dB",
+                               round(frac, 4)):
+                failures.append(f"{e:.2f} dB: {pt.delivered} of {pt.frames_sent} delivered")
+    ref = STATE.get(f"light-ref-{mod}")
+    if ref is None:
+        ref = STATE[f"light-ref-{mod}"] = per_reference_result(STATE.pop(f"light-ref-proc-{mod}"))
+        lab.log("w1_light_reference", mod=mod, curve=[{"ebn0_db": e, "loss": l} for e, l in ref])
+    for pt, loss in judged:
+        e = pt.ebn0_db
+        e_sim = ebn0_for_loss(ref, loss)
+        lab.log("w1_light_judged", direction=direction, mod=mod, tx_gain_db=pt.tx_gain_db, ebn0_db=round(e, 2),
+                loss=loss, sim_ebn0_db_at_loss=None if e_sim is None else round(e_sim, 2))
+        if e_sim is None:
+            failures.append(f"{e:.2f} dB: loss {loss:.3f} is outside the simulated curve")
+            continue
+        measured += 1
+        if not lab.measure("light_loss_db", f"light loss {direction} {mod} at {e:.2f} dB", round(e - e_sim, 3), "dB"):
+            failures.append(f"{e:.2f} dB: loss {loss:.3f}, which the simulation gives at {e_sim:.2f} dB")
+    if not lab.measure("light_points_measured", f"light points {direction} {mod}", measured):
+        failures.append(f"only {measured} point(s) with a loss of {LIGHT_LOSS_RANGE[0]:.0%} to {LIGHT_LOSS_RANGE[1]:.0%}")
+    best = max(points, key=lambda p: p.tx_gain_db, default=None)
+    if best is not None and best.recording is not None:
+        STATE[f"light-best-{direction}-{mod}"] = best
+        if direction == "e310-b200":
+            iq: IQ = best.recording
+            lab.sigmf(f"w1-light-{direction}-{mod}", iq.data, datatype=iq.datatype, sample_rate=SAMPLE_RATE,
+                      center_hz=RF_HZ, start_time=getattr(iq, "start_time", 0.0), device=best.rx_id,
+                      purpose=f"W1 light code {mod} {direction}",
+                      description=f"Frame v1 with the light code, {mod}, at IF +250 kHz, TX gain {best.tx_gain_db:g} dB, "
+                                  f"RX gain {RX_GAIN_DB:g} dB; first of {best.captures} captures; Eb/N0 {best.ebn0_db} dB "
+                                  f"(per information bit), {best.delivered} of {best.frames_sent} delivered in all captures")
+    assert not failures, "; ".join(failures)
+
+
+def test_light_as_uncoded_fails_the_crc(lab, bench, light):
+    """Known bad: a light-coded recording decoded with the length given and no code (--payload-len 64 --code
+    none) reads coded bits as payload bits; no CRC-16 may pass. The same recording with --code light must give
+    good frames, or this proves nothing."""
+    best = STATE.get("light-best-e310-b200-bpsk")
+    if best is None:
+        pytest.fail("needs the E310 to B200 BPSK light recording from test_light_code_packet_loss")
+    block: Block = STATE["block-light-bpsk"]
+    x = baseband(best.recording)
+    base = bench["work"] / "light-as-uncoded"
+    write_sigmf(block.meta, x, base, "W1 light-coded BPSK recording, decoded as uncoded on purpose")
+    wrong = decode_report(bench["radio"], base, "bpsk", "v1", known_len=True, code="none")[0]
+    right = decode_report(bench["radio"], base, "bpsk", "v1", known_len=True, code="light")[0]
+    ok_wrong = lab.measure("light_as_uncoded_crc_ok", "light decoded as uncoded, good CRCs",
+                           sum(bool(f.get("crc_ok")) for f in wrong))
+    ok_right = lab.measure("light_as_light_crc_ok", "light decoded as light with the length, good CRCs",
+                           sum(bool(f.get("crc_ok")) for f in right))
+    assert ok_wrong and ok_right
 
 
 def test_wrong_modulation_fails_the_crc(lab, bench):

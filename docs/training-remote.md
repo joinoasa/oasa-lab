@@ -24,7 +24,7 @@ Nobody can send code, a shell command, a path, or a commit not on `main`. A suit
 | A member, in a Claude chat | A `[[users]]` entry with your numeric GitHub id and role; then add the connector | The owner (**on the real lab**) |
 | A member or agent with a script | An API token (shown once; the config keeps only its hash); for the REST hostname also Cloudflare Access (your email in its policy, or an Access service token for a robot) | The owner (**on the real lab**) |
 
-The owner makes a token on the lab PC with `sudo -u oasalab /opt/oasa-lab/venv/bin/oasa-lab token NAME --user USER` and restarts the service. Keep your token in a password manager or an environment variable, never in a file you commit.
+The owner makes a token on the lab PC with `sudo -u oasalab /opt/oasa-lab/venv/bin/oasa-lab token NAME --user USER --days 30` (tokens always expire: 1 to 90 days) and adds `--role runner` for any agent, then runs `sudo systemctl reload oasa-lab` (no restart, a running job is not touched). To revoke a token, the owner deletes its `[[tokens]]` entry and reloads. Keep your token in a password manager or an environment variable, never in a file you commit. *(Token expiry, `--role` and reload come with the remote-access hardening PR; until it merges, tokens don't expire and a change needs a restart.)*
 
 ## 2. Try it on your laptop first
 
@@ -278,6 +278,8 @@ The owner's own switch is a file the API cannot clear. Locally it is `state/LOCA
 ```
 
 Delete the file to resume.
+
+**Whose pause is it.** A resume clears only a pause you set. To lift someone else's pause an admin passes `"force": true`, which is audited, and only from a person's own sign-in (Claude or Cloudflare Access), never with an API token, so an agent can't be talked into undoing a person's pause. For hands-on bench work (changing cables) use the file above: no API call can clear it. *(Comes with the remote-access hardening PR.)*
 
 ## 10. From Claude or another agent
 

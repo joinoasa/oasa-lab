@@ -54,6 +54,14 @@ echo "    pause file: /etc/oasa-lab/PAUSE${note_paused}"
 echo "Firewall:"
 [ "$input_drop" = 1 ] && pass "nftables input policy is drop" || fail "no default-deny firewall loaded"
 [ "$(sysctl -n net.ipv4.ip_forward)" = 0 ] && pass "IP forwarding is off" || fail "IP forwarding is on"
+for a in ${RADIO_ADDRS:-}; do
+  reach() { runuser -u "$1" -- timeout 3 bash -c "exec 3<>/dev/tcp/$a/$2" 2>/dev/null; }
+  grep -q "skuid \"oasalab-job\"" <<<"$rules" && grep -q "$a" <<<"$rules" && pass "radio $a: only the job user may reach it (rule loaded)" || fail "radio $a: no output rule; set RADIO_ADDRS and rerun 03-firewall.sh"
+  for p in 49601 30431; do
+    reach oasalab "$p" && fail "the service user reaches $a:$p (radio control)" || pass "the service user cannot reach $a:$p"
+  done
+  reach oasalab 22 && pass "the service's presence probe reaches $a:22" || fail "the service cannot reach $a:22 (presence probe)"
+done
 
 echo "Tunnel:"
 systemctl is-active --quiet cloudflared && pass "cloudflared is running" || fail "cloudflared is not running"

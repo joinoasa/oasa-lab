@@ -27,6 +27,23 @@ fi
 lan_ssh=""
 if [ -n "$SSH_FROM_LAN_CIDR" ]; then lan_ssh="ip saddr $SSH_FROM_LAN_CIDR tcp dport 22 accept"; fi
 
+# Networked radios take unauthenticated commands (UHD, iiod). Only the job user may reach them, so the transmit lock
+# in job-run cannot be gone around by the service, cloudflared, root or anyone else on this PC (security review M1).
+radio_out=""
+if [ -n "$RADIO_ADDRS" ]; then
+  if id oasalab-job >/dev/null 2>&1; then
+    set_="{ $(echo $RADIO_ADDRS | sed 's/ /, /g') }"
+    ports="{ $(echo $RADIO_OPEN_PORTS | sed 's/ /, /g') }"
+    radio_out="ip daddr $set_ ct state established,related accept
+    ip daddr $set_ tcp dport $ports accept
+    ip daddr $set_ icmp type echo-request accept
+    ip daddr $set_ meta skuid \"oasalab-job\" accept
+    ip daddr $set_ counter reject"
+  else
+    note "RADIO_ADDRS is set but the user oasalab-job does not exist yet: run 05-service.sh, then this script again"
+  fi
+fi
+
 say "Writing /etc/nftables.conf (default deny inbound)"
 write_file /etc/nftables.conf 0644 root:root <<EOF
 #!/usr/sbin/nft -f
@@ -56,6 +73,8 @@ table inet oasa {
   }
   chain output {
     type filter hook output priority 0; policy accept;
+    # Radios: only the job user (see RADIO_ADDRS in setup.env).
+    $radio_out
   }
 }
 EOF

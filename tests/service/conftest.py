@@ -117,6 +117,7 @@ def lab_repo(tmp_path_factory) -> Path:
     shutil.copy(ROOT / "pyproject.toml", repo / "pyproject.toml")
     shutil.copy(ROOT / "README.md", repo / "README.md")
     shutil.copy(ROOT / "lab.example.toml", repo / "lab.example.toml")  # l0-lab reads it
+    shutil.copytree(ROOT / "tools", repo / "tools", ignore=shutil.ignore_patterns("__pycache__"))  # l0-lab tests them
     shutil.copytree(ROOT / "suites", repo / "suites", ignore=shutil.ignore_patterns("__pycache__"))
     for name, (toml, body) in SUITES.items():
         d = repo / "suites" / name

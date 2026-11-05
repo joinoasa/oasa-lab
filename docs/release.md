@@ -1,6 +1,6 @@
 # When a node is done
 
-**Status:** Draft v0.2, 2026-11-05 · **Owner:** citruscybersec
+**Status:** Draft v0.3, 2026-11-05 · **Owner:** citruscybersec
 
 The [release standard](https://joinoasa.org/docs/projects/#release-standard) asks for six things: a working build, docs someone else can follow, a bill of materials (hardware), test results, a security review (anything that communicates) and a training guide. This page says what each one means, node by node, for the nodes this lab tests, and where each stands. A lead marks a node `status:done` on its [techtree](https://github.com/joinoasa/techtree) issue when every row is ticked.
 
@@ -56,9 +56,39 @@ Needs R-COM1 and R-SEC1 done first.
 | Security review | Of the link protocol and implementation, in oasa-sec | ✅ internal: [security-review-r-com2.md](https://github.com/joinoasa/oasa-sec/blob/main/docs/security-review-r-com2.md); no high; M1 (crossed sessions never rekeyed) fixed in [oasa-sec#25](https://github.com/joinoasa/oasa-sec/pull/25), I5 in [#24](https://github.com/joinoasa/oasa-sec/pull/24) |
 | Training guide | Encrypted MAVLink (or any UDP) between two machines over a radio | ✅ [training-r-com2.md](https://github.com/joinoasa/oasa-sec/blob/main/docs/training-r-com2.md) (SiK steps not yet run on hardware) |
 
+## T-BENCH2: Remote autonomous lab (oasa-lab)
+
+Needs T-BENCH1 done first. One site, run by its owner and AI agents from anywhere; every run leaves checked evidence.
+
+| | Done means | Status |
+|---|---|---|
+| Build | T-BENCH1's build, plus the remote path working end to end: `cloudflared` up, `deploy/check.sh` passes, the connector connects from claude.ai and an API token reaches `/mcp` and the REST API | ⬜ service installed and checked under T-BENCH1 (32 ok); the tunnel, the connector and Access to re-check when the lab is back online |
+| Docs | [remote lab](remote-lab.md), [deploy/README.md](../deploy/README.md), [training-remote.md](training-remote.md) | ✅ |
+| BOM | Same as T-BENCH1 plus the lab host and the free accounts the remote path uses (domain, Cloudflare Tunnel and Access, GitHub OAuth app, WireGuard): [bench-bom.md](bench-bom.md) | ✅ |
+| Test results | Started remotely, not on the lab PC: `tools/remote_acceptance.py` with an API token through the connector: `l1-channel` and `l2-rx-noise` (bench-rx, re-checked with `--require-hardware`) counted; refused: a transmitting suite whose wiring is not confirmed (`l2-pluto-acceptance`), a run while paused, a pause by a runner. Plus one counted run asked for by the owner in a Claude chat (`via: oauth`). Published in [results/](results/README.md) | ⬜ script passes on the simulated bench (22 of 22) and in `tests/service`; real-lab run waits for the lab to be back online |
+| Security review | Covers the remote surface (connector and OAuth, API tokens, Cloudflare Access and Tunnel) for more than one user and for agents running without a person watching | ⬜ T-BENCH1's [review](security-review.md) covers the connector, OAuth, tokens, the Access JWT and the tunnel config; addendum for members, agents and the live Cloudflare settings: [security-review-remote.md](security-review-remote.md) |
+| Training guide | From a token (or the owner in Claude) to a counted run started remotely, watched, downloaded and re-checked; what each role may do; stop and pause: [training-remote.md](training-remote.md) | ⬜ every local step run and pasted from real output; the real-lab steps (connector sign-in, Claude Code with a token, Access) to walk once on the lab |
+
+## R-SEC2: Key rotation and device removal (oasa-sec)
+
+Needs R-SEC1 done first.
+
+| | Done means | Status |
+|---|---|---|
+| Build | `cargo build --locked` and CI green; `oasa-pair remove`, `revoke`, roles and `signer` work on Linux | ✅ |
+| Docs | [Rotation spec](https://github.com/joinoasa/oasa-sec/blob/main/docs/oasa-sec-v0-rotation.md) and README | ✅ |
+| BOM | None (software) | n/a |
+| Test results | Unit, simulated-autopilot and end-to-end tests in CI (removal, revoke over the link, admin votes, rotation, stuck and rollback); the lab's `l1-mavlink-sitl` counted on PX4 and ArduPilot simulators, including the autopilot reboot case in `docs/sitl.md`; results published | ⬜ CI green; `l1-mavlink-sitl` with the lab |
+| Security review | Of roles, removal and sync, admin votes and signing-key rotation, in oasa-sec | ⬜ internal review written ([#29](https://github.com/joinoasa/oasa-sec/pull/29)): no high; M1 (signer stops on link loss) fixed in [#33](https://github.com/joinoasa/oasa-sec/pull/33), M2 (rotation request lost on removal) in [#34](https://github.com/joinoasa/oasa-sec/pull/34); follow-ups in [#35](https://github.com/joinoasa/oasa-sec/issues/35). ✅ once those merge |
+| Training guide | Roles, remove, revoke over the link, and a signing-key rotation with the stand-in autopilot | ⬜ [#31](https://github.com/joinoasa/oasa-sec/pull/31), every command run verbatim |
+
 ## Next
 
-1. **T-BENCH1:** apply M1's firewall on the lab host and re-check it in the review. Then every row is ticked: the owner marks it done, which unlocks T-BENCH2 (the remote autonomous lab, largely built already).
-2. **R-SEC1:** a counted `l1-mavlink-sitl` run published from the lab. Every other row is done.
-3. **R-COM1:** the SiK pair (Holybro SiK V3, $58.99): BOM, a counted run on cable, the training guide, and H1 (NETID and settings check).
-4. **R-COM2:** the link over the R-COM1 radio counted, and its BOM. Then it is done once R-COM1 and R-SEC1 are.
+The ordered list of lab runs that closes these nodes is [oasa-lab#49](https://github.com/joinoasa/oasa-lab/issues/49).
+
+1. **T-BENCH1:** apply M1's firewall on the lab host, re-check it, then mark it done (unlocks T-BENCH2).
+2. **R-SEC1:** a counted `l1-mavlink-sitl` run published (unlocks R-SEC2 and T-UPD1).
+3. **R-SEC2:** the same SITL run; merge #29, #31, #33, #34.
+4. **T-BENCH2:** after T-BENCH1, the remote acceptance run, one Claude-chat run, the guide's real-lab steps and the Cloudflare checklist; #47's fixes are required.
+5. **R-COM1:** the SiK pair: settings, `l2-sik-link`, BOM and training guide.
+6. **R-COM2:** `l2-sik-oasa-link` over the R-COM1 radio, its BOM; done once R-COM1 and R-SEC1 are.

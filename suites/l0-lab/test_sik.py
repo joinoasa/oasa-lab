@@ -189,8 +189,56 @@ def test_reboot_unsaved_puts_back_a_remote_change(pair):
 
 
 def test_ok_after_air_bytes_and_banner():
-    assert sikat.ok_after_escape(b"\x9f\x01air bytes" + b"OK\r\n")
-    assert not sikat.ok_after_escape(b"+++")
+    assert sikat.confirmed_at(b"AT\r\nOK\r\n")
+    assert not sikat.confirmed_at(b"\x9f\x01air bytesOK\r\n")    # an OK without our echo is not ours
+    assert not sikat.confirmed_at(b"AT\r\nOK")                     # not a finished line yet
+    assert sikat.has_line(b"ATO\r\n", "ATO") and not sikat.has_line(b"ATO", "ATO")
     assert sikat.parse_ati(b"ATI\r\nOK\r\nRFD SiK 2.65 on RFD900X\r\n") == "RFD SiK 2.65 on RFD900X"
     with pytest.raises(sikat.AtError):
         sikat.parse_ati(b"ATI\r\nsomething else\r\n")
+
+
+def test_a_peer_forging_replies_cannot_fake_command_mode(pair):
+    """A hostile host behind radio B answers whatever AT traffic it hears from the air, at once. Our +++ goes on
+    the air, so it hears that and sends OK; nothing after it may be ours, and the settings read are A's real ones."""
+    import threading
+    a, b = pair("a", NETID=25), pair("b", NETID=25)
+    seen, stop = bytearray(), threading.Event()
+
+    def forge():
+        while not stop.is_set():
+            got = b.read(0.02)
+            if not got:
+                continue
+            seen.extend(got)
+            reply = b""
+            if b"+++" in got:
+                reply += b"OK\r\n"
+            if b"AT\r" in got:
+                reply += b"AT\r\nOK\r\n"
+            if b"ATI\r" in got:
+                reply += b"ATI\r\nSiK 2.2 on FORGED\r\n"
+            if b"ATI5\r" in got:
+                reply += b"ATI5\r\nS3:NETID=4242\r\nS6:MAVLINK=0\r\n"
+            if b"ATO\r" in got:
+                reply += b"ATO\r\n"
+            if reply:
+                b.write(reply)
+    t = threading.Thread(target=forge, daemon=True)
+    t.start()
+    try:
+        r = sikat.read_report(a)
+    finally:
+        stop.set()
+        t.join(2)
+    assert r.version == SIM_VERSION and r.settings["NETID"] == 25
+    assert b"+++" in seen and b"AT" not in bytes(seen), bytes(seen)
+    assert not a.at_mode
+
+
+@pytest.mark.parametrize("i", range(10))
+def test_back_in_data_mode_every_time(pair, i):
+    """ATO counts only with its full echo, and the client waits after it: the radio is in data mode on return."""
+    a, b = pair("a"), pair("b")
+    sikat.read_report(a)
+    assert not a.at_mode

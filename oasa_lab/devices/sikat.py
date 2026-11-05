@@ -26,6 +26,7 @@ REPLY_IDLE_S = 0.3
 REPLY_MAX_S = 3.0
 REMOTE_MAX_S = 5.0      # an RT command crosses the air twice, in the radios' TDM windows (est.)
 REPLY_CAP = 4096
+AFTER_ATO_S = 0.1
 
 NAMES = ("FORMAT", "SERIAL_SPEED", "AIR_SPEED", "NETID", "TXPOWER", "ECC", "MAVLINK", "OPPRESEND", "MIN_FREQ",
          "MAX_FREQ", "NUM_CHANNELS", "DUTY_CYCLE", "LBT_RSSI", "MANCHESTER", "RTSCTS", "MAX_WINDOW")
@@ -55,8 +56,10 @@ class Report:
 
 
 def _lines(reply: bytes) -> list[str | None]:
+    """Only lines ended by LF: a fragment still arriving (an echo before its CR) is not a line yet."""
     out: list[str | None] = []
-    for raw in reply.split(b"\n"):
+    end = reply.rfind(b"\n") + 1
+    for raw in reply[:end].split(b"\n")[:-1]:
         raw = raw.replace(b"\r", b"")
         out.append(raw.decode("ascii").strip() if all(0x20 <= c < 0x7F for c in raw) else None)
     return out
@@ -72,9 +75,10 @@ def has_line(reply: bytes, word: str) -> bool:
     return word in _lines(reply)
 
 
-def ok_after_escape(reply: bytes) -> bool:
-    """`OK` after `+++`. Packets from the air may come just before it with no line break: look for the bytes."""
-    return b"OK\n" in reply or b"OK\r\n" in reply
+def confirmed_at(reply: bytes) -> bool:
+    """`AT` CR answered with its own echo, then `OK`."""
+    ls = _lines(reply)
+    return "AT" in ls and "OK" in ls[ls.index("AT") + 1:]
 
 
 def parse_ati5(reply: bytes) -> tuple[dict[str, int], dict[str, int]]:
@@ -136,17 +140,22 @@ class AtSession:
         on the air, where the other side drops them as noise)."""
         self._read(GUARD_S)                   # silence from us; whatever arrives is thrown away
         self.port.write(b"+++")
-        r = self._read(GUARD_S + ENTER_WAIT_S, done=ok_after_escape)
-        if ok_after_escape(r):
+        # Our +++ also goes on the air, so for the second guard a linked radio could send anything, a fake OK too:
+        # throw it all away (the radio's own OK as well). After it, a SiK radio that got +++ is in command mode and
+        # passes nothing from the air, so AT must come back as its own echo and OK.
+        self._read(GUARD_S)
+        if self._confirm_at():
             return
-        if not recover:
-            raise AtError("no reply to +++")
-        self.port.write(b"\r")                # already in command mode? then "+++" sits in its line
-        self._read(0.3)
+        if recover:
+            self.port.write(b"\r")            # it was in command mode already: "+++AT" was one ignored line
+            self._read(0.3)
+            if self._confirm_at():
+                return
+        raise AtError("not in command mode after +++ (is it a SiK radio at this baud, and is the port free?)")
+
+    def _confirm_at(self) -> bool:
         self.port.write(b"AT\r")
-        if has_line(self._read(1.0, done=lambda b: has_line(b, "OK")), "OK"):
-            return
-        raise AtError("no reply to +++ (is it a SiK radio at this baud, and is the port free?)")
+        return confirmed_at(self._read(ENTER_WAIT_S, done=confirmed_at))
 
     def command(self, cmd: str) -> bytes:
         self.port.write(cmd.encode("ascii") + b"\r")
@@ -169,6 +178,7 @@ class AtSession:
         for _ in range(2):
             self.port.write(b"ATO\r")
             if has_line(self._read(0.5, done=lambda b: has_line(b, "ATO")), "ATO"):
+                time.sleep(AFTER_ATO_S)   # SiK echoes before it runs a line and drops serial input meanwhile
                 return
         raise AtError("the radio did not confirm ATO; it may still be in command mode")
 

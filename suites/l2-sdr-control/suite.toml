@@ -1,0 +1,10 @@
+description = "Negative control for the SDR link's air check: plaintext frames with a marker and MAVLink heartbeats go over the same RF relay and 60 dB cables as l2-sdr-link, and the checker must find them (needs a B200mini, an E310 and OASA_RADIO_BIN_DIR)"
+expectations = ["test_plaintext_frames_are_seen_on_the_air"]
+transmits = true
+requires = ["b200", "e310"]
+wiring = "usrp"
+
+[captures]
+encrypted = false
+expect_plaintext = true
+expect_mavlink = true

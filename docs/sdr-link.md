@@ -49,12 +49,15 @@ Then the other direction. Half duplex, one UHD process per radio at a time: UHD 
 | Test (all in `expectations`) | Passes when |
 |---|---|
 | `test_encrypted_link_over_the_bench` | Handshake over RF; N marked messages A→B and M B→A; at least 90 % delivered, none twice, none that wasn't sent; the air capture holds no marker or plaintext |
-| `test_untrusted_identity_gets_nothing` | A stranger's handshakes cross the hop; Bob sends nothing back to it; `untrusted_peer` counted |
-| `test_replayed_frame_is_dropped` | One carried frame sent again; `replay` counted; delivered once |
-| `test_changed_frame_is_dropped` | One byte changed, frame CRC recomputed; `bad_tag` counted; never delivered |
-| `test_plaintext_control_is_flagged` | Plaintext frames carrying the marker are found by the same scan |
+| `test_untrusted_identity_gets_no_session` | A stranger (who knows Bob's key; Bob does not trust it) takes Alice's place: no session, `untrusted_peer` counted |
+| `test_replayed_packet_is_dropped` | One carried frame sent again; `replay` counted; delivered once |
+| `test_changed_packet_is_dropped` | One byte changed, frame CRC recomputed; `bad_tag` counted; never delivered |
 
-**Limits** (`suite.toml`, est. until the first runs): delivery ≥ 90 % each way, handshake ≤ 120 s, frame CRC pass ≥ 95 % of the frames sent, Eb/N0 of decoded frames ≥ 8 dB.
+The plaintext control is its own suite, **`l2-sdr-control`**: plaintext frames with a marker and MAVLink heartbeats over the same relay, in a capture declared `expect_plaintext`, which the checker must flag. (A capture is either encrypted or a control, never both.)
+
+Alice sends first: per the link spec the responder sends on a new session only after the initiator's first data packet arrives (anything earlier is dropped as `no_session`).
+
+**Limits** (`suite.toml`, est. until the first runs): delivery ≥ 90 % each way, handshake ≤ 180 s, frames decoded ≥ 95 % of frames sent, probe Eb/N0 ≥ 8 dB.
 
 **Evidence:** link logs (`link-*.jsonl`, contents never logged), the air capture, one SigMF recording per direction, the relay's per-cycle log (frames sent, found, CRC passes, Eb/N0), the oasa-sec and oasa-radio binaries' hashes.
 

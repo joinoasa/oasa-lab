@@ -1,0 +1,60 @@
+description = "The encrypted oasa-sec link over the SDR bench (R-COM2 on OASA's own waveform): two real oasa-link processes whose every packet crosses the 60 dB cables as a frame v1 between a B200mini and an E310, through the lab's half-duplex RF relay. The handshake and data go both ways, the air holds only ciphertext, a replayed and a changed packet are dropped by the link, and an untrusted identity gets no session (needs a B200mini, an E310, OASA_SEC_BIN_DIR and OASA_RADIO_BIN_DIR; docs/sdr-link.md)"
+expectations = [
+  "test_encrypted_link_over_the_bench",
+  "test_replayed_packet_is_dropped",
+  "test_changed_packet_is_dropped",
+  "test_untrusted_identity_gets_no_session",
+]
+transmits = true
+requires = ["b200", "e310"]
+wiring = "usrp"
+
+[captures]
+encrypted = true
+# Data packets start with 5 (2-byte counter) or 7 (4-byte counter) header bytes; see oasa-sec docs/oasa-sec-v0-link.md §3.
+skip_header_bytes = 7
+
+# "est." = a first guess before the first bench run (2026-11-05).
+
+[limits.probe_ebn0_db]
+min = 8.0
+max = 60.0
+reason = """Eb/N0 of W1's probe block at the gain the probe settled on (target 10 dB), before the 3 dB margin. Frames
+should be far above the modem's threshold: this suite tests the link, not the modem. est."""
+
+[limits.handshake_s]
+min = 0.0
+max = 180.0
+reason = """Seconds from the initiator's start to its session over the relay. A relay round trip is tens of seconds;
+the link retries at 5 s backing off to 60 s, so the first answer may miss a retry (docs/sdr-link.md §2). est."""
+
+[limits.delivery_a2b]
+min = 0.9
+max = 1.0
+reason = "Messages Alice sent that Bob's app received, over the B200 to E310 path. est."
+
+[limits.delivery_b2a]
+min = 0.9
+max = 1.0
+reason = "Messages Bob sent that Alice's app received, over the E310 to B200 path. est."
+
+[limits.frame_delivery]
+min = 0.95
+max = 1.0
+reason = """Frames the relay sent that the far radio decoded with a good CRC, over every cycle of the run, both ways.
+Frames are well above threshold, so nearly all arrive. est."""
+
+[limits.replay_dropped]
+min = 1
+max = 1000
+reason = "Bob's link dropped the replayed packet as a replay (drop reason `replay`)."
+
+[limits.bad_tag_dropped]
+min = 1
+max = 1000
+reason = "Bob's link dropped the changed packet (drop reason `bad_tag`): the frame CRC was valid, the tag was not."
+
+[limits.untrusted_dropped]
+min = 1
+max = 1000
+reason = "Bob dropped the stranger's handshakes as `untrusted_peer`."

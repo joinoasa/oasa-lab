@@ -34,7 +34,8 @@ backend = "usb"                        # "usb" on the lab PC; "simulated" for tr
 [[inventory.devices]]
 id = "pluto"
 kind = "pluto"
-tcp = "192.168.2.1:30431"              # iiod on the lab network; the service only checks it answers
+tcp = "192.168.2.1:22"                 # the Pluto's SSH port: a TCP connect only. With RADIO_ADDRS set (setup.env)
+                                       # the firewall lets only jobs reach its iiod port (30431), so probe SSH
 
 [[inventory.devices]]
 id = "rtlsdr"

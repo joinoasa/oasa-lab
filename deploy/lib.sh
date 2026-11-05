@@ -18,6 +18,8 @@ fi
 : "${OWNER_WG_PUBKEY:=}"
 : "${OWNER_WG_IP:=10.77.0.2/32}"
 : "${SSH_FROM_LAN_CIDR:=}"    # empty = no SSH from the LAN, only over WireGuard
+: "${RADIO_ADDRS:=}"          # networked radios (E310, Pluto): only the job user may reach them, beyond RADIO_OPEN_PORTS
+: "${RADIO_OPEN_PORTS:=22}"   # TCP ports anyone here may still reach on them (SSH needs the radio's own login)
 : "${LAB_REF:=}"              # REQUIRED: the commit (40 hex characters) or release tag of oasa-lab to install
 : "${LAB_REPO_URL:=https://github.com/joinoasa/oasa-lab}"
 : "${LAB_BRANCH:=main}"         # the branch jobs may run (the mirror follows it; keep lab-policy.toml's branch the same)

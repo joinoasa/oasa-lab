@@ -295,11 +295,13 @@ claude mcp add --transport http oasa-lab https://<MCP hostname>/mcp --header "Au
 
 If the owner added the optional WAF rule that lets only Anthropic's addresses reach `/mcp` ([deploy/README.md](../deploy/README.md) step 9), a client on your own machine is blocked; use the REST API instead.
 
-`tools/remote_acceptance.py` is a worked example of an agent through the connector. It runs the T-BENCH2 acceptance: two counted runs, downloads and a local re-check, then the refusals. Run locally:
+**Give agents a runner token.** An agent that runs without a person watching reads text other people control (job summaries, log lines, stop reasons), so it should never hold an admin token: an injected instruction could make it pause the lab, stop other jobs or resume a pause a person set. A runner can only run suites and stop its own jobs ([security-review-remote.md](security-review-remote.md), RM1).
+
+`tools/remote_acceptance.py` is a worked example of an agent through the connector. It runs the T-BENCH2 acceptance: two counted runs, downloads and a local re-check, then the refusals. It pauses and resumes the lab only with `--attended`, when a person is watching; without it, that check is skipped. Run locally:
 
 ```
 OASA_LAB_TOKEN=<owner token> OASA_LAB_RUNNER_TOKEN=<member token> \
-  python3 tools/remote_acceptance.py --url $L --out runs/remote-acceptance
+  python3 tools/remote_acceptance.py --url $L --out runs/remote-acceptance --attended
 ```
 
 ```

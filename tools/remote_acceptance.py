@@ -11,7 +11,7 @@ Through the Claude connector (MCP over HTTPS, bearer token), it:
      and expects a refusal (on real hardware: the missing [confirm_wiring] entry);
   3. runs a simulated-channel suite (default l1-channel) and a hardware suite (default l2-rx-noise on the
      bench-rx profile), follows each with watch_job, and requires get_results to say "counted": true;
-  4. pauses the lab, expects run_suite to be refused, and resumes it (admin token);
+  4. with --attended only: pauses the lab, expects run_suite to be refused, and resumes it (admin token);
   5. with OASA_LAB_RUNNER_TOKEN set, checks that a runner may not pause the lab.
 
 Through the REST API it downloads each counted run's check.json and bundle, re-runs the checker on the
@@ -148,18 +148,40 @@ def local_recheck(bundle_tar: Path, out: Path, commit: str, require_hardware: bo
     if not suites.is_dir():
         git = ["git", "-C", str(ROOT)]
         if subprocess.run([*git, "cat-file", "-e", f"{commit}^{{commit}}"], capture_output=True, check=False).returncode == 0:
-            arc = subprocess.run([*git, "archive", "--format=tar", commit, "suites"], capture_output=True, check=False)
-            if arc.returncode == 0:
-                import io
-                with tarfile.open(fileobj=io.BytesIO(arc.stdout)) as tf:
-                    tf.extractall(suites.parent / f"tree-{commit[:12]}", filter="data")
-                (suites.parent / f"tree-{commit[:12]}" / "suites").rename(suites)
+            # From git objects, not `git archive`: an archive honours the commit's .gitattributes
+            # (export-ignore, export-subst), so it could differ from what ran (review I4).
+            export_suites_from_objects(git, commit, suites)
     suites = suites if suites.is_dir() else None
     res = check_bundle(dirs[0], suites, require_hardware=require_hardware)
     failed = [c["name"] for c in res["checks"] if c["status"] != "pass"]
     how = (f"with the suite files at {commit[:7]}" if suites else "without the suite file (this clone lacks the commit: git fetch)")
     how += ", hardware required" if require_hardware else ""
     return res["ok"], (f"all {len(res['checks'])} checks pass ({how})" if res["ok"] else f"failed: {', '.join(failed)} ({how})")
+
+
+def export_suites_from_objects(git: list[str], commit: str, dest: Path) -> None:
+    """Copy the plain files under suites/ at `commit` into `dest`, read with ls-tree and cat-file."""
+    ls = subprocess.run([*git, "ls-tree", "-r", "-z", "--full-tree", commit, "--", "suites"],
+                        capture_output=True, check=False)
+    if ls.returncode != 0:
+        return
+    tmp = dest.with_name(dest.name + ".part")
+    for entry in ls.stdout.split(b"\0"):
+        if not entry:
+            continue
+        meta, _, path = entry.partition(b"\t")
+        mode, kind, sha = meta.split(b" ")
+        if kind != b"blob" or mode not in (b"100644", b"100755"):
+            continue  # links and submodules are skipped, as the checker's own copy does
+        rel = Path(path.decode()).relative_to("suites")
+        if ".." in rel.parts:
+            continue
+        blob = subprocess.run([*git, "cat-file", "blob", sha.decode()], capture_output=True, check=True).stdout
+        f = tmp / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(blob)
+    if tmp.is_dir():
+        tmp.rename(dest)
 
 
 async def counted_run(c: Connector, rep: Report, a, suite: str, profile: str | None, real: bool, out: Path) -> None:
@@ -251,7 +273,12 @@ async def main_async(a) -> Report:
                 rep.add("runner may not pause_lab", err and "role" in text, text[:200])
                 rep.refusals.append(("pause_lab as runner", text))
 
-        # Known-bad 2: a paused lab refuses runs. Resume only what we paused.
+        # Known-bad 2: a paused lab refuses runs. Resume only what we paused. Only when a person
+        # is watching (--attended): an unattended agent never pauses or resumes the lab
+        # (security-review-remote.md, RM1).
+        if not a.attended:
+            rep.add("paused-lab refusal (skipped: not --attended)", True, "run again with --attended to check it")
+            return rep
         err, p = await c.call("pause_lab", reason=PAUSE_REASON)
         paused_here = rep.add("pause_lab (admin)", not err, p.get("text", "") if err else f"by {p.get('by')}")
         if paused_here:
@@ -307,6 +334,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tx-suite", default="l2-pluto-acceptance",
                    help="a transmitting suite whose wiring the policy does NOT confirm")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--attended", action="store_true",
+                   help="a person is watching: also check that a paused lab refuses runs (pauses and resumes the lab)")
     p.add_argument("--timeout", type=float, default=1800, help="seconds to wait for each run")
     p.add_argument("--out", default=f"runs/remote-acceptance-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}")
     a = p.parse_args(argv)

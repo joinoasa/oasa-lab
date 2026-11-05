@@ -325,7 +325,8 @@ def test_resume_belongs_to_whoever_paused(make_service):
         assert out == {"resumed": True, "overrode": "owner"}
     forced = svc.audit_where(lambda r: r.get("event") == "resume_forced")
     assert forced[-1]["actor"] == "eve" and forced[-1]["paused_by"] == "owner" and forced[-1]["via"] == "oauth"
-    http = svc.audit_where(lambda r: r.get("kind") == "http" and r.get("action") == "resume" and r.get("force") is True)
+    http = svc.audit_where(lambda r: r.get("kind") == "http" and r.get("action") == "resume" and r.get("force") is True
+                           and "overrode" in r)  # not the refused API-token line written just before
     assert http and http[-1]["overrode"] == "owner"
 
     async def mcp_force():

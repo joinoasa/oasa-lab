@@ -1,5 +1,6 @@
 """Config rules: the service never listens on a network address, and a typo cannot open a door."""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,8 @@ def test_public_url_must_be_https_unless_local():
 
 def test_api_token_lookup_uses_the_hash():
     tok = "oasa_secret"
-    c = cfg(tokens=[{"name": "t", "user": "owner", "sha256": hash_token(tok), "expires": "2099-01-01"}])
+    soon = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 7 * 86400))
+    c = cfg(tokens=[{"name": "t", "user": "owner", "sha256": hash_token(tok), "expires": soon}])
     assert c.api_token_user(tok)[1].name == "owner"
     assert c.api_token_user("oasa_other") is None
 

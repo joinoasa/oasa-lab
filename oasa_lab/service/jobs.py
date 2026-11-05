@@ -181,9 +181,14 @@ class JobManager:
         if who is not None and by != who.name:
             if not force:
                 raise JobError(403, f"the lab was paused by {by}; only they can resume it "
-                                    "(an admin may override with force, which is audited)")
+                                    "(a signed-in admin may override with force, which is audited)")
             if not who.can("pause"):
                 raise JobError(403, "your role may not do this")
+            if who.via == "api-token":
+                # An API token is what an unattended agent holds; text injected into what it reads must not be
+                # able to lift a person's pause. Overriding needs a person's own sign-in (Claude OAuth or Access).
+                raise JobError(403, f"the lab was paused by {by}; overriding needs a signed-in admin "
+                                    "(Claude sign-in or Cloudflare Access), not an API token")
             overrode = by
         if not self._clear_pause():
             return {"resumed": False}
@@ -264,12 +269,7 @@ class JobManager:
             raise JobError(400, f"unknown hardware profile; known: {', '.join(self.cfg.profiles) or 'none'}")
         if commit is not None and not isinstance(commit, str):
             raise JobError(400, "commit must be a full commit id")
-        mine = sum(1 for j in self.jobs.values() if j.status in ACTIVE and j.requested_by == who.name)
-        if mine >= self.cfg.max_active_per_user:
-            raise JobError(429, f"you already have {mine} jobs queued or running (the per-user limit is "
-                                f"{self.cfg.max_active_per_user}); wait for one to end or stop one")
-        if sum(1 for j in self.jobs.values() if j.status in ACTIVE) >= self.cfg.max_queued:
-            raise JobError(429, f"the queue is full (the lab-wide limit is {self.cfg.max_queued} jobs queued or running)")
+        self._check_limits(who)   # early, for a quick answer; again below, where it counts
         try:
             co = await self.checkouts.at(commit)
         except CheckoutError as exc:
@@ -291,10 +291,23 @@ class JobManager:
                   requested_by=who.name, via=who.via, commit=co.sha, created=now_rfc3339(),
                   transmits=suite["transmits"],
                   wiring_confirmed=self.wiring_to_confirm(suite) if suite["transmits"] and not self.simulated else None)
+        # The checks above await (git, inventory), so other submits ran meanwhile. Check again with no await
+        # between the check and the insert, or parallel requests would all pass the early check.
+        if (p := self.paused) is not None:
+            raise JobError(423, f"the lab is paused by {p.get('by')}: {p.get('reason') or 'no reason given'}")
+        self._check_limits(who)
         self.jobs[job.id] = job
         self._save(job)
         self._queue.put_nowait(job.id)
         return job
+
+    def _check_limits(self, who: Principal) -> None:
+        mine = sum(1 for j in self.jobs.values() if j.status in ACTIVE and j.requested_by == who.name)
+        if mine >= self.cfg.max_active_per_user:
+            raise JobError(429, f"you already have {mine} jobs queued or running (the per-user limit is "
+                                f"{self.cfg.max_active_per_user}); wait for one to end or stop one")
+        if sum(1 for j in self.jobs.values() if j.status in ACTIVE) >= self.cfg.max_queued:
+            raise JobError(429, f"the queue is full (the lab-wide limit is {self.cfg.max_queued} jobs queued or running)")
 
     def get(self, job_id: Any) -> Job:
         if not isinstance(job_id, str) or not JOB_ID_RE.match(job_id) or job_id not in self.jobs:

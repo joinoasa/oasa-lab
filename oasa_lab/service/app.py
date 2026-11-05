@@ -80,14 +80,17 @@ class Lab:
             return False
         try:
             new = load_config(self.config_path)
-        except (ConfigError, OSError) as exc:
-            self.audit.write(kind="service", event="reload_failed", error=str(exc))
-            print(f"oasa-lab: reload refused, keeping the running config: {exc}", file=sys.stderr, flush=True)
-            return False
+        except (ConfigError, OSError) as exc:   # our own messages: they name keys and entries, never secrets
+            return self._reload_failed(str(exc))
+        except Exception as exc:   # e.g. int("abc") from a typo; its text may quote a value, so give only the type
+            return self._reload_failed(f"{type(exc).__name__} while reading the config (a value of the wrong type?)")
         cfg = self.cfg
         restart_needed = sorted(f.name for f in fields(Config)
                                 if f.name not in self.RELOADED and getattr(new, f.name) != getattr(cfg, f.name))
-        gone = {u.name for u in cfg.users} - {u.name for u in new.users}
+        # A user is "gone" when the name is removed, or kept but now names another person (GitHub id or email
+        # changed): sessions signed in as the old identity must not carry over to the new one.
+        same = {(u.name, u.github_id, (u.email or "").lower()) for u in new.users}
+        gone = {u.name for u in cfg.users if (u.name, u.github_id, (u.email or "").lower()) not in same}
         # Every module holds this same Config object, so swapping its lists is the whole reload. A removed user is
         # dropped first: a request in between sees either the old pair or the new one, never a wider one.
         cfg.users = [u for u in cfg.users if u.name not in gone]
@@ -100,6 +103,11 @@ class Lab:
             print(f"oasa-lab: reloaded users and tokens; these changes need a restart: {', '.join(restart_needed)}",
                   file=sys.stderr, flush=True)
         return True
+
+    def _reload_failed(self, error: str) -> bool:
+        self.audit.write(kind="service", event="reload_failed", error=error)
+        print(f"oasa-lab: reload refused, keeping the running config: {error}", file=sys.stderr, flush=True)
+        return False
 
     def app(self) -> Starlette:
         cfg = self.cfg

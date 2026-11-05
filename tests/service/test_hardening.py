@@ -367,7 +367,8 @@ def test_any_pause_file_pauses_the_lab(make_service, kind):
         assert r.status_code == 423, kind
         assert c.get("/api/lab").json()["paused"] is not None
         assert c.post("/api/resume").status_code == 403             # nobody's pause: not cleared by accident
-        assert c.post("/api/resume", json={"force": True}).json()["resumed"] is True  # the API can still clear its own kind
+        assert c.post("/api/resume", json={"force": True}).status_code == 403   # nor by an API token with force
+        assert svc.lab.jobs.resume()["resumed"] is True              # the owner (or a signed-in admin) can clear it
         assert c.post("/api/jobs", json={"suite": "t-quick"}).status_code == 202
 
 

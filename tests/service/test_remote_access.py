@@ -77,6 +77,13 @@ def test_expiry_formats():
     assert parse_expires("2027-01-02T01:00:00+01:00") == day
 
 
+def test_an_expiry_beyond_the_cap_is_refused():
+    with pytest.raises(ConfigError, match="more than 90 days"):
+        cfg(tokens=[row(expires="2099-01-01")])
+    far = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 89 * 86400))
+    assert cfg(tokens=[row(expires=far)]).tokens
+
+
 def test_an_expired_token_matches_nothing():
     c = cfg(tokens=[row(token="old", expires=YESTERDAY), row("t2", token="new")])
     seen = []
@@ -180,6 +187,31 @@ def test_a_bad_reload_keeps_the_old_config(make_service):
     assert len(fails) == 2 and "no-expiry" in fails[1]["error"]
 
 
+def test_a_reload_with_a_wrong_type_is_refused_and_logged_without_the_value(make_service):
+    svc = make_service()
+    before = (list(svc.cfg.users), list(svc.cfg.tokens))
+    d = copy.deepcopy(svc.data)
+    d["service"]["max_queued"] = "abc-secretish"
+    d["tokens"] = d["tokens"][:1]
+    assert svc.reload(d) is False
+    assert (svc.cfg.users, svc.cfg.tokens) == before
+    fail = svc.audit_where(lambda r: r.get("event") == "reload_failed")[-1]
+    assert "ValueError" in fail["error"] and "abc-secretish" not in fail["error"]
+    assert svc.client("bob").get("/api/lab").status_code == 200
+
+
+def test_a_user_whose_identity_changes_loses_old_sessions(make_service):
+    svc = make_service()
+    p = svc.lab.provider
+    bob, owner = p._issue("c1", "bob"), p._issue("c2", "owner")
+    d = copy.deepcopy(svc.data)
+    next(u for u in d["users"] if u["name"] == "bob")["github_id"] = 9999   # the name now belongs to someone else
+    assert svc.reload(d)
+    assert not p.lookup(bob.access_token) and p.lookup(owner.access_token)
+    assert svc.audit_where(lambda r: r.get("event") == "reload")[-1]["removed_users"] == ["bob"]
+    assert svc.client("bob").get("/api/lab").status_code == 200    # the API token stays: the owner set it for that name
+
+
 def test_reload_drops_a_removed_users_sessions_and_keeps_the_rest(make_service):
     svc = make_service()
     p = svc.lab.provider
@@ -275,18 +307,31 @@ def test_resume_belongs_to_whoever_paused(make_service):
         assert c.post("/api/resume").json() == {"resumed": True}
         assert c.post("/api/pause").status_code == 200
 
+    # eve's API token (what an agent of hers would hold) may not override, even with force, on either surface
     with svc.client("eve") as c:
+        r = c.post("/api/resume", json={"force": True})
+        assert r.status_code == 403 and "not an API token" in r.json()["error"]
+
+    async def mcp_token_force():
+        async with Session(svc, "eve") as s:
+            err, msg = await s.call("resume_lab", force=True)
+            assert err and "not an API token" in json.dumps(msg)
+    run(mcp_token_force())
+    assert svc.lab.jobs.paused and not svc.audit_where(lambda r: r.get("event") == "resume_forced", 0.2)
+
+    eve_oauth = svc.lab.provider._issue("claude", "eve").access_token     # eve signed in herself
+    with httpx.Client(base_url=svc.url, headers={"Authorization": f"Bearer {eve_oauth}"}, timeout=30) as c:
         out = c.post("/api/resume", json={"force": True}).json()
         assert out == {"resumed": True, "overrode": "owner"}
     forced = svc.audit_where(lambda r: r.get("event") == "resume_forced")
-    assert forced[-1]["actor"] == "eve" and forced[-1]["paused_by"] == "owner"
+    assert forced[-1]["actor"] == "eve" and forced[-1]["paused_by"] == "owner" and forced[-1]["via"] == "oauth"
     http = svc.audit_where(lambda r: r.get("kind") == "http" and r.get("action") == "resume" and r.get("force") is True)
     assert http and http[-1]["overrode"] == "owner"
 
     async def mcp_force():
         async with Session(svc, "owner") as s:
             await s.call("pause_lab", reason="again")
-        async with Session(svc, "eve") as s:
+        async with Session(svc, token=svc.lab.provider._issue("claude", "eve").access_token) as s:
             err, r = await s.call("resume_lab", force=True)
             assert not err and r["resumed"] is True and r["overrode"] == "owner"
     run(mcp_force())
@@ -319,6 +364,24 @@ def test_one_user_cannot_fill_the_queue(make_service):
         assert r.status_code == 429 and "lab-wide limit is 3" in r.json()["error"]
         c.post(f"/api/jobs/{a['id']}/stop")
     assert svc.wait(a["id"], want=("stopped", "cancelled"))
+
+
+def test_parallel_submits_cannot_pass_the_limits(make_service):
+    svc = make_service(extra={"service": {"max_active_per_user": 2, "max_queued": 3}})
+
+    async def burst(user, n):
+        async with httpx.AsyncClient(base_url=svc.url, headers=svc.headers(user), timeout=60) as c:
+            rs = await asyncio.gather(*[c.post("/api/jobs", json={"suite": "t-slow"}) for _ in range(n)])
+            return sorted(r.status_code for r in rs)
+    try:
+        assert asyncio.run(burst("bob", 8)) == [202] * 2 + [429] * 6
+        assert asyncio.run(burst("owner", 6)) == [202] + [429] * 5          # the lab-wide limit holds too
+        active = [j for j in svc.lab.jobs.jobs.values() if j.status in ("queued", "running")]
+        assert len(active) == 3 and sum(j.requested_by == "bob" for j in active) == 2
+    finally:
+        with svc.client() as c:
+            for j in list(svc.lab.jobs.jobs.values()):
+                c.post(f"/api/jobs/{j.id}/stop")
 
 
 def test_the_per_user_limit_has_a_safe_default_and_checks():

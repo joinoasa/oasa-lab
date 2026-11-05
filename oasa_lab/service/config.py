@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import os
 import re
+import time
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -87,8 +88,6 @@ class ApiToken:
     role: str | None = None      # optional: lowers the user's role for this token, never raises it
 
     def expired(self, now: float | None = None) -> bool:
-        import time
-
         return (time.time() if now is None else now) >= self.expires
 
 
@@ -322,6 +321,9 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
         _need(cfg.user(str(t.get("user"))) is not None, f"token {t.get('name')}: unknown user {t.get('user')!r}")
         expires = parse_expires(t.get("expires"))
         _need(expires is not None, f"token {t.get('name')}: expires must be a date or time, e.g. 2026-12-31 or 2026-12-31T12:00:00Z")
+        # The same cap as `oasa-lab token --days` (plus a day for a date rounded up): no hand-written forever.
+        _need(expires <= time.time() + (MAX_TOKEN_DAYS + 1) * 86400,
+              f"token {t.get('name')}: expires is more than {MAX_TOKEN_DAYS} days away; make a new token with --days")
         role = t.get("role")
         _need(role is None or role in ROLES, f"token {t.get('name')}: role must be one of {', '.join(ROLES)}")
         cfg.tokens.append(ApiToken(str(t["name"]), str(t["user"]), str(t["sha256"]), expires, role and str(role)))

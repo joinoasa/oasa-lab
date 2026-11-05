@@ -168,8 +168,31 @@ class JobManager:
             await self._kill()
         return {**info, "cancelled": cancelled, "stopped": stopped}
 
-    def resume(self) -> bool:
-        """Clear the API's pause. A local pause stays until the owner removes the file."""
+    def resume(self, who: Principal | None = None, force: bool = False) -> dict:
+        """Clear the API's pause. A local pause stays until the owner removes the file.
+
+        Only the user who paused may resume. Another admin needs `force` (audited): someone may be working on the
+        bench, and an agent steered by text in a log must not be able to lift their pause by asking nicely.
+        `who=None` is the owner's own shell (tests and local tools), which may always clear it."""
+        if not os.path.lexists(self.pause_file):
+            return {"resumed": False}
+        by = self._pause_info(self.pause_file, "shell").get("by")
+        overrode = None
+        if who is not None and by != who.name:
+            if not force:
+                raise JobError(403, f"the lab was paused by {by}; only they can resume it "
+                                    "(an admin may override with force, which is audited)")
+            if not who.can("pause"):
+                raise JobError(403, "your role may not do this")
+            overrode = by
+        if not self._clear_pause():
+            return {"resumed": False}
+        if overrode is not None:
+            self.audit.write(kind="pause", event="resume_forced", actor=who.name, via=who.via,
+                             credential=who.credential, paused_by=overrode)
+        return {"resumed": True, **({"overrode": overrode} if overrode is not None else {})}
+
+    def _clear_pause(self) -> bool:
         try:
             if self.pause_file.is_dir() and not self.pause_file.is_symlink():
                 self.pause_file.rmdir()
@@ -241,8 +264,12 @@ class JobManager:
             raise JobError(400, f"unknown hardware profile; known: {', '.join(self.cfg.profiles) or 'none'}")
         if commit is not None and not isinstance(commit, str):
             raise JobError(400, "commit must be a full commit id")
+        mine = sum(1 for j in self.jobs.values() if j.status in ACTIVE and j.requested_by == who.name)
+        if mine >= self.cfg.max_active_per_user:
+            raise JobError(429, f"you already have {mine} jobs queued or running (the per-user limit is "
+                                f"{self.cfg.max_active_per_user}); wait for one to end or stop one")
         if sum(1 for j in self.jobs.values() if j.status in ACTIVE) >= self.cfg.max_queued:
-            raise JobError(429, "the queue is full")
+            raise JobError(429, f"the queue is full (the lab-wide limit is {self.cfg.max_queued} jobs queued or running)")
         try:
             co = await self.checkouts.at(commit)
         except CheckoutError as exc:

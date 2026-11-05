@@ -229,8 +229,17 @@ def build_routes(cfg: Config, jobs: JobManager, inventory: Inventory, auth: Auth
 
     @authed("pause")
     async def resume(request, who):
-        audit.note(action="resume")
-        out: dict = {"resumed": jobs.resume()}
+        body = await json_body(request)
+        unknown = set(body) - {"force"}
+        if unknown:
+            raise JobError(400, f"unknown field(s): {', '.join(sorted(unknown))}")
+        force = body.get("force", False)
+        if not isinstance(force, bool):
+            raise JobError(400, "force must be true or false")
+        audit.note(action="resume", force=force)
+        out: dict = jobs.resume(who, force)
+        if out.get("overrode"):
+            audit.note(overrode=out["overrode"])
         if (still := jobs.paused) is not None:
             out["still_paused"] = still  # the owner's local pause file; only they can remove it
         return JSONResponse(out)

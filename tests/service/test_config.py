@@ -37,7 +37,7 @@ def test_unknown_role_is_refused():
 
 def test_token_must_point_at_a_user():
     with pytest.raises(ConfigError, match="unknown user"):
-        cfg(tokens=[{"name": "t", "user": "nobody", "sha256": "0" * 64}])
+        cfg(tokens=[{"name": "t", "user": "nobody", "sha256": "0" * 64, "expires": "2099-01-01"}])
 
 
 def test_bad_rf_setup_is_refused():
@@ -58,7 +58,7 @@ def test_public_url_must_be_https_unless_local():
 
 def test_api_token_lookup_uses_the_hash():
     tok = "oasa_secret"
-    c = cfg(tokens=[{"name": "t", "user": "owner", "sha256": hash_token(tok)}])
+    c = cfg(tokens=[{"name": "t", "user": "owner", "sha256": hash_token(tok), "expires": "2099-01-01"}])
     assert c.api_token_user(tok)[1].name == "owner"
     assert c.api_token_user("oasa_other") is None
 

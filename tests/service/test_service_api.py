@@ -318,7 +318,8 @@ def test_pause_by_file_from_a_shell_and_resume(svc):
             assert r.status_code == 423 and "maintenance" in r.json()["error"]
     finally:
         with svc.client() as c:
-            assert c.post("/api/resume").json() == {"resumed": True}
+            assert c.post("/api/resume").status_code == 403   # a pause nobody in the config set needs force
+            assert c.post("/api/resume", json={"force": True}).json() == {"resumed": True, "overrode": "shell"}
     assert svc.wait(svc.submit("t-quick")["id"])["status"] == "passed"
 
 

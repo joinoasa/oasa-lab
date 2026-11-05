@@ -29,7 +29,7 @@ Follow the [OASA software standard](https://joinoasa.org/docs/software-standard/
 | `oasa-lab channel --help` | Run the simulated channel standalone |
 | `pip install -e '.[service]'` | Add the job service and Claude connector |
 | `oasa-lab serve --config service.toml` | Run the remote job service (localhost only); `--check` only checks the config |
-| `oasa-lab token NAME --user USER` | Make an API token (shown once; the config keeps only its hash) |
+| `oasa-lab token NAME --user USER [--days N] [--role runner]` | Make an API token (shown once; the config keeps only its hash; it expires, and `--role` can only lower the user's role). `systemctl reload oasa-lab` picks it up |
 | `pytest -o addopts="" tests/service` | Job service tests (needs the `service` extra; CI runs them; the polkit test uses node when present) |
 | `tail -f runs/*/log.jsonl` | Watch a run live |
 | `pytest -p oasa_lab.pytest_plugin suites/l0-lab` | A suite without a bundle (quick local loop) |

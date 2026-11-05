@@ -12,6 +12,9 @@ Group=oasalab
 # (deploy/polkit/50-oasa-lab.rules) allows exactly that and nothing else.
 EnvironmentFile=/etc/oasa-lab/env
 ExecStart=/opt/oasa-lab/venv/bin/oasa-lab serve --config /etc/oasa-lab/service.toml
+# `systemctl reload oasa-lab`: re-read [[users]] and [[tokens]] (revoke or add a token) without stopping a running job.
+# A config with an error is refused and the old one stays (see the journal and the audit log).
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
 # Jobs run in their own units (oasa-lab-job@*), not in this cgroup; the service stops the running job itself on shutdown.

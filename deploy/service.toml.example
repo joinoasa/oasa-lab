@@ -13,7 +13,8 @@ repo = "https://github.com/joinoasa/oasa-lab"
 # The branch, the oldest allowed commit, the job time limit, the device file, rf_setup and the wiring
 # confirmations are NOT here: they are in the root-owned /etc/oasa-lab/lab-policy.toml, which the job side
 # reads too (see lab-policy.toml.example). The service refuses to start if they appear here.
-max_queued = 20
+max_queued = 20                        # jobs queued or running, lab-wide
+max_active_per_user = 3                # jobs queued or running, per user
 # Finished jobs whose evidence is kept on disk; the oldest beyond this are deleted.
 keep_jobs = 100
 min_free_mb = 2000                     # a job does not start with less free disk than this
@@ -82,12 +83,15 @@ email = "you@example.com"              # yours: for Cloudflare Access on the API
 # role = "runner"
 # github_id = 123456
 
-# API tokens for scripts and other MCP clients. Make one with:  oasa-lab token owner-laptop --user owner
-# Paste the printed block here. Only the hash is stored.
+# API tokens for scripts and other MCP clients. Make one with:  oasa-lab token owner-laptop --user owner --days 30
+# Paste the printed block here, then: sudo systemctl reload oasa-lab. Only the hash is stored.
+# Every token needs `expires`. Agents and unattended scripts get `role = "runner"` (it can only lower the user's role).
 # [[tokens]]
-# name = "owner-laptop"
-# user = "owner"
-# sha256 = "..."
+# name    = "agent-ci"
+# user    = "owner"
+# role    = "runner"
+# expires = 2026-12-31T00:00:00Z
+# sha256  = "..."
 
 # Cloudflare Access on the API hostname (not the connector): the service checks the JWT Access adds.
 # [cloudflare_access]

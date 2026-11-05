@@ -29,6 +29,8 @@ oasa-lab run l1-channel
 | `l2-pluto-acceptance` | A Pluto+ clone is genuine: tuning range, crystal error, all four ports on cable (Pluto+ and RTL-SDR) |
 | `l2-lora-link` | The encrypted link over two LoRa modems on coax; the air shows only ciphertext; an SDR recording matches the airtime (needs `OASA_SEC_BIN_DIR`, `OASA_RADIO_BIN_DIR`) |
 | `l2-rf-control` | Negative control: the air check finds a plaintext LoRa packet |
+| `l2-sik-link` | R-COM1: an off-the-shelf SiK pair on cable through `oasa-radio bridge`: settings read and checked, bytes both ways, delivery and latency against `sik-64k`, the MTU; the bridge refuses a mismatched radio and one changed over the air with `RT` (needs `OASA_RADIO_BIN_DIR`) |
+| `l2-sik-oasa-link` | R-COM2 over that SiK pair: the encrypted link both ways, handshake and goodput against `sik-64k`, ciphertext only in what the radios delivered (needs `OASA_SEC_BIN_DIR`, `OASA_RADIO_BIN_DIR`) |
 | `l1-mavlink-sitl` | Real PX4 and ArduPilot simulators flown through the encrypted link, plus the drone-side MAVLink allowlist guard. Slow, not in CI (see below) |
 
 ### Hardware suites

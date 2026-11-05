@@ -7,6 +7,8 @@ The first suites that use real radios on cables. They are written and tested on 
 | `l2-pluto-acceptance` | A Pluto+ clone is what it claims: identity, tuning range, crystal error, all four RF ports | Pluto+, RTL-SDR |
 | `l2-lora-link` | The encrypted link works over two LoRa modems on coax, matches the airtime model, and the air shows only ciphertext | 2 Heltec modems, RTL-SDR, `oasa-sec`, `oasa-radio` |
 | `l2-rf-control` | Negative control: a plaintext LoRa packet **is** found by the same air check | 2 Heltec modems, RTL-SDR |
+| `l2-sik-link` | R-COM1 on an off-the-shelf pair: both radios report the declared settings, bytes cross both bridges both ways unchanged, delivery and latency match the `sik-64k` model, the MTU holds; the bridge refuses a radio whose settings differ, also after the other radio changed them with `RT` (H1) | 2 SiK radios, `oasa-radio` with `--sik-expect` |
+| `l2-sik-oasa-link` | R-COM2 over the R-COM1 radio: the encrypted link over the SiK pair, both ways, handshake and goodput against `sik-64k`, ciphertext only in what the radios delivered | 2 SiK radios, `oasa-sec`, `oasa-radio` with `--sik-expect` |
 | `l2-rx-noise` | Receive only: each radio is alive and its input is quiet, and the E310 draws normal power. Transmits nothing and only reads the supply | B200mini, E310, KORAD |
 | `l2-waveform-w1` | OASA's W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK: BER at a measured Eb/N0 within 1 dB of theory; noise gives no frames, the wrong demodulator passes no CRC; frame v1 found without the length; light-code packet loss within 1 dB of the simulation | B200mini, E310, `oasa-radio` |
 | `l2-e310-two-channel` | Both E310 receive channels in one stream (direction finding, step 1): no lost samples, independent noise and matching floors with the transmitter off, channel isolation, and `oasa-radio waveform df` agrees with the lab's own phase sum | B200mini, E310, `oasa-radio` |
@@ -38,6 +40,7 @@ What the simulation **cannot** show: the real tools and libraries, USB and seria
 | `pluto` | Pluto+ (AD9363, 2 TX, 2 RX, TCXO) | `devices/pluto.py` | pyadi-iio (optional extra), over Ethernet or USB |
 | `rtlsdr` | RTL-SDR Blog V4 (receive only) | `devices/rtlsdr.py` | `rtl_sdr` and `rtl_test` as separate processes; records raw IQ (`cu8`) |
 | `serial-radio` | Heltec WiFi LoRa 32 V3 with the OASA LoRa modem firmware | `devices/modem.py` | pyserial; oasa-radio serial framing |
+| `sik` | SiK telemetry radio (Holybro SiK V3 915 MHz) | `devices/sik.py`, `devices/sikat.py` | pyserial; reads the settings with AT commands (`+++`, `ATI`, `ATI5`, `ATO`) when opened and records firmware and settings; never changes them. Then a transparent byte stream with oasa-radio's framing, through the same tap as the LoRa modem |
 | `korad` | KORAD KA3005P bench supply | `devices/korad.py` | pyserial. Never above 6 V, 3 A; `lab.toml` can only lower that. `hold_output = true` for a supply that feeds a radio |
 | `b200` | Ettus B200mini | `devices/usrp.py` | UHD tools as separate processes; records raw IQ (`cf32_le`); transmits only a test tone (`tx_waveforms`) or a test waveform the suite made (`tx_samples_from_file`), TX gain capped by `max_tx_gain` (default 40 dB) |
 | `e310` | Ettus USRP E310 | `devices/usrp.py` | UHD tools as separate processes, `type=e3xx,addr=...` over the network; records raw IQ (`ci16_le`); test tone from TRX-A, same cap |
@@ -102,6 +105,20 @@ The Pluto+ puts out about +7 dBm at most. Sixty dB leaves -53 dBm at a receiver 
 
 Set the modems to 10 dBm. At 72 dB B hears A at about -62 dBm (LoRa SF7 needs -123). The RTL-SDR sees about -56 dBm, 20 dB or more over its noise at a low gain.
 
+### SiK pair (`wiring.sik`)
+
+```
+              RP-SMA/SMA   30 dB    30 dB   SMA/RP-SMA
+ SiK A (USB) ----[ADP]----[ATT]----[ATT]----[ADP]---- SiK B (USB)        A to B and B to A: 60 dB
+```
+
+The Holybro SiK V3 puts out up to 20 dBm (100 mW). At 60 dB the other radio hears about -40 dBm, far above its
+sensitivity (about -117 dBm at 64 kbps, Holybro's figure, est.) and below what can hurt it. Both radios transmit,
+so both directions need 60 dB. Power both from the lab PC's USB. A SiK radio transmits whenever it is powered
+(its TDM link keeps sending, est.), so connect the attenuators **before** you plug the radios in; the lab's
+transmit gate covers what the lab sends, not what the radio's firmware sends by itself. No RTL-SDR: SiK hops
+over 50 channels from 915 to 928 MHz by default, wider than an RTL-SDR sees at once.
+
 ### USRP loopback (`wiring.usrp`)
 
 ```
@@ -134,12 +151,24 @@ oasa-lab run l2-pluto-acceptance --confirm-wiring pluto
 OASA_SEC_BIN_DIR=.../oasa-sec/target/debug OASA_RADIO_BIN_DIR=.../oasa-radio/target/debug \
   oasa-lab run l2-rf-control  --confirm-wiring lora
   oasa-lab run l2-lora-link   --confirm-wiring lora
+  oasa-lab run l2-sik-link     --confirm-wiring sik
+  oasa-lab run l2-sik-oasa-link --confirm-wiring sik
 oasa-lab check --require-hardware runs/<bundle>       # a real run must have no simulated device
 ```
 
 A suite whose hardware is not in `lab.toml` is skipped with the reason. A skipped suite does not pass the checker (its known-bad cases never ran). A transmitting suite on real hardware is skipped, with the reason, until `--confirm-wiring` names its wiring.
 
 Run `l2-rf-control` before `l2-lora-link`: it shows the air check works with the real modems and SDR before you rely on its silence.
+
+### The SiK pair on day one
+
+1. Plug in one radio at a time, find its port (`ls -l /dev/serial/by-id/`) and USB serial (`udevadm info -q property -n PORT | grep SERIAL_SHORT`). Read it: `oasa-radio sik show --device PORT`.
+2. Pick a NETID for the pair (`shuf -i 1-65535 -n 1`) and set both radios, one at a time: `oasa-radio sik set --device PORT --netid N --mavlink 0 --air-speed 64 --ecc 0 --txpower 20`. Each prints before and after.
+3. Write both into `lab.toml` (`[devices.sik_a]`, `[devices.sik_b]` from `lab.example.toml`, with your ports, serials and NETID).
+4. Wire `wiring.sik` (60 dB, attenuators on **before** power), then `oasa-lab devices`: each radio must show its firmware and settings.
+5. `oasa-lab run l2-sik-link --confirm-wiring sik`, then `oasa-lab run l2-sik-oasa-link --confirm-wiring sik`, and `oasa-lab check --require-hardware` on each bundle.
+
+Both suites need an `oasa-radio` with `sik` and `--sik-expect` in `OASA_RADIO_BIN_DIR` (they skip otherwise, and a skipped suite fails the checker). CI builds oasa-radio `main`, so the oasa-radio change that adds `--sik-expect` merges before the suites do.
 
 ### First run on real hardware
 
@@ -195,6 +224,27 @@ app -> oasa-link -> bridge -> pty -> TAP -> modem A ~~ coax ~~ modem B -> TAP ->
 - **The air check.** The tap keeps every frame each modem delivered to its host: what anyone with a receiver would get. They are saved as `captures/NN-air-DEVICE.pcap` (frames in synthetic IP and UDP headers) and the checker scans them as it scans simulated captures: no marker, no MAVLink, random-looking bytes.
 - **The SDR recording.** The RTL-SDR records the whole exchange as SigMF (`cu8`, 250 kS/s, centered on the channel). The checker finds bursts of energy and lines them up with the frames: each frame needs a burst of the right length (airtime) at the right time. No demodulation.
 - `test_modems_pass_packets_both_ways` runs first and tells a radio fault from a link fault.
+
+### `l2-sik-link` (R-COM1)
+
+```
+app -> oasa-radio bridge --sik-expect -> pty -> TAP -> SiK A ~~ coax ~~ SiK B -> TAP -> pty -> bridge -> app
+```
+
+| Test | Shows |
+|---|---|
+| `test_radios_report_their_settings` | Both radios report (ATI5, read at open) what `[devices.ID.sik]` in `lab.toml` declares, `MAVLINK=0`, a NETID that is not the default 25, AIR_SPEED and ECC of the profile, the same link settings and firmware |
+| `test_bytes_both_ways` | Each bridge checks its radio (`--sik-expect`) and starts. 30 packets each way, one at a time, random sizes up to the MTU: delivered unchanged, once, in order; `delivery_ratio`, latency against the model. One packet of exactly the MTU arrives, one byte more is dropped by the bridge (`too_large`). A burst of 40 MTU packets: `burst_ratio` |
+| `test_bridge_refuses_mismatched_settings` | Known-bad: a bridge told to expect another NETID exits 1 with a failed `sik_check` naming NETID, and never starts |
+| `test_remote_change_is_caught` | Known-bad (H1): radio B lowers radio A's TX power one step over the air (`RTS4=...`, never up; at the lowest step DUTY_CYCLE instead), not saved. A's bridge refuses, naming the setting. Then A is put back through its own port: `+++`, `ATZ` (a reboot drops the unsaved change), read again; if that fails and A has a `hub_port`, a USB power cycle. The result is logged (`sik_restored`); a failed restore fails the test and says to power-cycle the radio |
+
+**The model** (`oasa_lab/siklink.py`): a packet of n bytes is `wire_len(n)` bytes on the serial line (oasa-radio's framing, the longest case). Alone, it takes the serial port in (10 bits a byte at SERIAL_SPEED), its airtime (`sik-64k`, [profiles](profiles.md)) and the serial port out. In a burst each packet costs the slower of the serial port and the air (at 57600 baud the serial port). Bridge MTU 242: framed it is at most 249 bytes, one SiK packet (250 bytes with ECC off).
+
+The simulated SiK radios start with the settings `lab.toml` expects (so the settings checks pass in CI); a `[devices.ID.sim]` table overrides them, and an l0-lab test starts one mismatched and sees the suite's check and the checker fail. They (`devices/simsik.py`) speak the AT protocol (guards, echo, `RT` run by the linked radio without authentication) and carry bytes on the simulated air with the profile's airtime, half-duplex, through 57600-baud serial ports, hearing each other only when their link settings match. They have no TDM windows and no hopping, so real latency will be higher: the latency limits leave room for a TDM window (est.).
+
+### `l2-sik-oasa-link` (R-COM2 over the R-COM1 radio)
+
+`l2-lora-link` on the SiK pair: `oasa-link` on each side, each through a bridge with `--sik-expect`. 28 marked packets each way (every seventh a MAVLink heartbeat), each delivered exactly once; the handshake against the floor (serial in, air, serial out for each handshake frame) and goodput against the model; the frames each radio delivered are saved as air captures and the checker scans them (no marker, no MAVLink, random). No SDR recording (hopping, above).
 
 ### `l2-usrp-loopback`
 
@@ -305,6 +355,21 @@ The limits are in each `suite.toml` under `[limits.*]`, with the reason next to 
 |---|---|---|
 | `handshake_excess_s` | -0.05 to 2.0 s | Handshake time minus the airtime of the handshake frames. Cannot beat the air; 2 s for process start, USB and firmware turnaround (est.). A lost packet costs a 5 s retry and fails on purpose |
 | `goodput_ratio` | 0.6 to 1.05 | Model time over measured time for a burst. Above 1.05 beats physics; below 0.6 wastes 40 % (est.) |
+
+### `l2-sik-link` and `l2-sik-oasa-link`
+
+| Metric | Limit | Why |
+|---|---|---|
+| `delivery_ratio` | at least 0.98 | On cable SiK should lose nothing (est.). Any changed, doubled or reordered packet fails the test anyway |
+| `latency_excess_p50_s` | -0.05 to 0.15 s | Median latency minus the model. Below: beats the model by more than sending part of a frame early can save (est.). Above: a TDM window (MAX_WINDOW 131 ms) plus USB latency (est.) |
+| `latency_excess_max_s` | -0.05 to 0.4 s | The worst packet: a window on each side plus the silence between, with room (est.) |
+| `burst_ratio` | 0.6 to 1.05 | Bottleneck time over measured time for 40 MTU packets. Above 1.05 beats the serial port; ArduPilot quotes about 90 % of the air rate one way (est.) |
+| `handshake_excess_s` | -0.1 to 2.0 s | Handshake time minus the floor of the frames carried; 2 s for processes, USB and TDM (est.). A lost handshake packet (5 s retry) fails on purpose |
+| `goodput_ratio` | 0.5 to 1.05 | Model time over measured time for the link's burst, both directions' frames (est.) |
+
+Simulated bench, seeds 1 to 3 (2026-11-05): delivery 1.0, median latency excess -5 to +3 ms, worst +6 to +28 ms, burst ratio 0.97 to 0.98, handshake excess 0.03 to 0.06 s, goodput 0.94 to 0.97. The simulation has no TDM windows, so expect the real latency well above these.
+
+**Checker (check 7) for `sik` devices:** each must record its ATI5 settings and the settings `lab.toml` expected, and they must agree; `MAVLINK` must be recorded and 0; a real radio's expectation must name at least NETID and MAVLINK; all SiK radios in a run must share the settings that let them link (NETID, AIR_SPEED, ECC, band, LBT_RSSI, MAX_WINDOW); a real one must record its firmware (the `ATI` banner).
 
 ### What the checker fixes (check 7, not tunable by a test)
 

@@ -697,7 +697,10 @@ def check_expectations(b: Bundle) -> dict:
 
 
 # --- check 7: radio evidence ----------------------------------------------------------------
-DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310")
+DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio", "sik", "korad", "b200", "e310")
+# SiK settings that must match on both radios of a link (ArduPilot SiK configuration page). Kept here on
+# purpose (the checker imports nothing from the lab); oasa_lab/devices/sikat.py has the same list.
+SIK_LINK_KEYS = ("AIR_SPEED", "NETID", "ECC", "MIN_FREQ", "MAX_FREQ", "NUM_CHANNELS", "LBT_RSSI", "MAX_WINDOW")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded")
 RF_ANTENNA = "antenna"      # radios on antennas: only for a suite that declares radiates = true
@@ -739,11 +742,40 @@ def _device_errors(devices: Any, hub: Any) -> tuple[list[str], dict[str, dict]]:
         if d.get("backend") == "hardware":
             if d.get("serial") in ("n/a", None, ""):
                 errs.append(f"{tag}: a real device must have a serial number on record")
-            if d.get("kind") in ("pluto", "serial-radio", "b200", "e310") and d.get("firmware") in ("n/a", None, ""):
+            if d.get("kind") in ("pluto", "serial-radio", "sik", "b200", "e310") and d.get("firmware") in ("n/a", None, ""):
                 errs.append(f"{tag}: a real {d.get('kind')} must have its firmware version on record")
+        if d.get("kind") == "sik":
+            errs.extend(_sik_errors(tag, d))
+    siks = [d for d in by_id.values() if d.get("kind") == "sik" and isinstance(d.get("settings"), dict)]
+    for d in siks[1:]:
+        diff = [k for k in SIK_LINK_KEYS if d["settings"].get(k) != siks[0]["settings"].get(k)]
+        if diff:
+            errs.append(f"SiK radios {siks[0]['id']} and {d['id']} cannot link: {', '.join(diff)} differ")
     if hub is not None and not (isinstance(hub, dict) and hub.get("backend") in BACKENDS):
         errs.append("hardware.hub needs a backend (sim or hardware)")
     return errs, by_id
+
+
+def _sik_errors(tag: str, d: dict) -> list[str]:
+    """A SiK radio must record the settings it reported (ATI5) and what lab.toml expected, and they must agree."""
+    st, ex = d.get("settings"), d.get("expect")
+
+    def ints(m: Any) -> bool:
+        return isinstance(m, dict) and all(isinstance(k, str) and _int_ge0(v) for k, v in m.items())
+
+    if not (ints(st) and st):
+        return [f"{tag}: a SiK radio must record its settings (ATI5) as NAME: value"]
+    if not ints(ex):
+        return [f"{tag}: expect must be NAME: value"]
+    bad = [f"{k} is {st.get(k)}, expected {v}" for k, v in sorted(ex.items()) if st.get(k) != v]
+    errs = [f"{tag}: the radio did not have the declared settings: {'; '.join(bad)}"] if bad else []
+    if "MAVLINK" not in st:
+        errs.append(f"{tag}: the recorded settings have no MAVLINK; the bridge needs it reported as 0")
+    elif st["MAVLINK"] != 0:
+        errs.append(f"{tag}: MAVLINK framing was on ({st['MAVLINK']}); the bridge needs transparent bytes (0)")
+    if d.get("backend") == "hardware" and not {"NETID", "MAVLINK"} <= set(ex):
+        errs.append(f"{tag}: a real SiK radio needs lab.toml to expect at least NETID and MAVLINK ([devices.ID.sik])")
+    return errs
 
 
 def _antenna_errors(rf: dict, by_id: dict[str, dict]) -> list[str]:

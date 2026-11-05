@@ -95,9 +95,10 @@ class BridgeProc:
     """One `oasa-radio bridge --radio serial` process. Its JSON-lines output goes to a log in the bundle."""
 
     def __init__(self, exe: Path, device: str, *, baud: int, mtu: int, listen: tuple[str, int],
-                 send: tuple[str, int], log_path: Path):
+                 send: tuple[str, int], log_path: Path, extra: list[str] | None = None):
         self.cmd = [str(exe), "bridge", "--radio", "serial", "--device", device, "--baud", str(baud),
-                    "--mtu", str(mtu), "--udp-listen", f"{listen[0]}:{listen[1]}", "--udp-send", f"{send[0]}:{send[1]}"]
+                    "--mtu", str(mtu), "--udp-listen", f"{listen[0]}:{listen[1]}", "--udp-send", f"{send[0]}:{send[1]}",
+                    *(extra or [])]
         self.events: list[dict] = []
         self._lock = threading.Lock()
         self.proc = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -127,6 +128,13 @@ class BridgeProc:
         with self._lock:
             return [e for e in self.events if e.get("event") == event]
 
+    def wait_start(self, timeout: float = 20.0) -> None:
+        """Wait for the `start` line (after any --sik-expect check). Raises if the bridge exited instead."""
+        if not wait_for(lambda: bool(self.seen("start")) or self.proc.poll() is not None, timeout) or not self.seen("start"):
+            self._t.join(2)
+            why = [e for e in self.events if e.get("event") in ("sik_check", "raw_output", "error")]
+            raise AssertionError(f"the bridge did not start: {json.dumps(why)[:600]}")
+
     def stop(self) -> dict | None:
         if self.proc.poll() is None:
             self.proc.send_signal(signal.SIGTERM)
@@ -152,7 +160,8 @@ class LoraLinkRig:
         app A -> oasa-link A -> bridge A -> pty -> tap -> modem A ~~ air ~~ modem B -> tap -> pty -> bridge B -> oasa-link B -> app B
     """
 
-    def __init__(self, lab, bench: LoraBench, bins: Bins, radio_exe: Path, base: Path, mtu: int = 252, baud: int = 115200):
+    def __init__(self, lab, bench: Any, bins: Bins, radio_exe: Path, base: Path, mtu: int = 252, baud: int = 115200,
+                 bridge_extra: dict[str, list[str]] | None = None):
         self.lab, self.bench, self.mtu = lab, bench, mtu
         self.alice, self.bob = make_identity(bins, base, "alice"), make_identity(bins, base, "bob")
         trust(bins, self.alice, self.bob)
@@ -161,11 +170,19 @@ class LoraLinkRig:
         ports = {k: (HOST, free_udp_port()) for k in ("a_bind", "b_bind", "a_plain", "b_plain", "a_bridge", "b_bridge")}
         self.p = ports
         pty_a, pty_b = bench.a.link.attach_pty(), bench.b.link.attach_pty()
+        extra = bridge_extra or {}
         self.bridge_a = BridgeProc(radio_exe, pty_a, baud=baud, mtu=mtu, listen=ports["a_bridge"], send=ports["a_bind"],
-                                   log_path=lab.file("bridge-a.jsonl"))
+                                   log_path=lab.file("bridge-a.jsonl"), extra=extra.get("a"))
         self.bridge_b = BridgeProc(radio_exe, pty_b, baud=baud, mtu=mtu, listen=ports["b_bridge"], send=ports["b_bind"],
-                                   log_path=lab.file("bridge-b.jsonl"))
-        time.sleep(0.5)  # let both bridges open their ports
+                                   log_path=lab.file("bridge-b.jsonl"), extra=extra.get("b"))
+        try:
+            self.bridge_a.wait_start()
+            self.bridge_b.wait_start()
+        except AssertionError:
+            self.bridge_a.stop()
+            self.bridge_b.stop()
+            raise
+        time.sleep(0.2)
         self.link_b = LinkProc(bins, self.bob, "alice", bind=ports["b_bind"], remote=ports["b_bridge"], initiate=False,
                                plain_listen=ports["b_plain"], plain_send=self.app_b.addr,
                                log_path=lab.file("link-bob.jsonl"), mtu=mtu)
@@ -213,7 +230,7 @@ class LoraLinkRig:
         self.close()
 
 
-def frames_between(bench: LoraBench, t0: float, t1: float) -> list[tuple[float, int]]:
+def frames_between(bench: Any, t0: float, t1: float) -> list[tuple[float, int]]:
     """(arrival time, size) of every frame either modem delivered to its host in [t0, t1]."""
     out = []
     for m in (bench.a, bench.b):

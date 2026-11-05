@@ -36,7 +36,7 @@ Each tier adds to the one before. Buy in order within a tier. **Open** means ope
 
 | Item | Price | Why | Open | Have |
 |---|---|---|---|---|
-| [Holybro SiK Telemetry Radio V3](https://holybro.com/products/sik-telemetry-radio-v3) pair, 915 MHz | $58.99 | The standard cheap drone telemetry link | Firmware yes (SiK) | |
+| [Holybro SiK Telemetry Radio V3](https://holybro.com/products/sik-telemetry-radio-v3) pair, 915 MHz | $58.99 | The standard cheap drone telemetry link. RP-SMA connectors: add RP-SMA to SMA adapters for the attenuators. Lab suites: `l2-sik-link`, `l2-sik-oasa-link` | Firmware yes (SiK) | |
 | [MatekSys mLRS MR900-30](https://racedayquads.com/products/mateksys-mlrs-900mhz-module-kit-mr900-30-tx) TX kit | $41.99 (+ RX, price not found) | Open long-range link built for MAVLink | Firmware yes | |
 | [Raspberry Pi 5 8 GB](https://www.raspberrypi.com/products/raspberry-pi-5/) | ~$175 *est.* | Always-on lab host and test ground station | Software yes | |
 | [NanoVNA-H4](https://eleshop.eu/nanovna-h4.html) | ~$55 | Check antennas, cables and attenuators | Firmware yes | |

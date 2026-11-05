@@ -1,0 +1,39 @@
+description = "R-COM1 on an off-the-shelf SiK pair on cable: the radios' settings (ATI5), bytes both ways through oasa-radio bridge --radio serial --sik-expect, delivery and latency against the sik-64k model, the MTU, and the bridge refusing a radio whose settings differ, including after a remote RT change (H1) (needs 2 SiK radios and OASA_RADIO_BIN_DIR)"
+expectations = ["test_bridge_refuses_mismatched_settings", "test_remote_change_is_caught"]
+transmits = true
+requires = ["sik:2"]
+wiring = "sik"
+
+# Limits for the numbers the tests measure. The checker applies the same limits from this file, so a test
+# cannot loosen them. Model and sources: docs/profiles.md (SiK) and docs/hardware-suites.md (l2-sik-link).
+# "est." = a first guess to tune on the real radios.
+
+[limits.delivery_ratio]
+min = 0.98
+max = 1.0
+reason = """Packets delivered / sent, one at a time with gaps, each direction. On a cable at 60 dB or more
+SiK should lose nothing (est.: it does not retry, OPPRESEND is off). Every delivered packet must also be
+unchanged, delivered once and in order; the test fails on any change, whatever this ratio."""
+
+[limits.latency_excess_p50_s]
+min = -0.05
+max = 0.15
+reason = """Median one-way latency minus the model: serial in at SERIAL_SPEED + airtime (sik-64k) + serial
+out. Below -0.05 s beats the model by more than the radio could save by sending part of a frame before the
+rest has arrived (est.). Above 0.15 s: SiK waits for its TDM window (up to MAX_WINDOW, 131 ms by default)
+and USB serial adds a few ms each side (est.)."""
+
+[limits.latency_excess_max_s]
+min = -0.05
+max = 0.4
+reason = """The worst packet's latency minus the model. A full TDM window on each side plus the silence
+between windows and USB latency stays well under 0.4 s (est.)."""
+
+[limits.burst_ratio]
+min = 0.6
+max = 1.05
+reason = """Model time / measured time for a back-to-back burst of MTU packets one way, from the first send to
+the last arrival. The model is the bottleneck alone: for each packet the slower of the serial port and the
+air (at 57600 baud the serial port). The measured time also holds the last packet's air and serial out, so
+a clean run reads a little under 1.0. Above 1.05 beats physics. ArduPilot quotes about 90 % of the air rate
+one way with ECC off; below 0.6 means the radio or the bridge wastes more than 40 % (est.)."""

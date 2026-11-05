@@ -1,0 +1,29 @@
+description = "R-COM2 over the R-COM1 radio: the encrypted oasa-sec link over two SiK radios on cable, each through oasa-radio bridge --sik-expect: delivery both ways, handshake and goodput against the sik-64k model, ciphertext only in what the radios delivered (needs 2 SiK radios, OASA_SEC_BIN_DIR and OASA_RADIO_BIN_DIR)"
+expectations = ["test_encrypted_link_over_sik"]
+transmits = true
+requires = ["sik:2"]
+wiring = "sik"
+
+[captures]
+encrypted = true
+# Data packets start with 5 (2-byte counter) or 7 (4-byte counter) header bytes; see oasa-sec docs/oasa-sec-v0-link.md §3.
+skip_header_bytes = 7
+
+# Model and sources: docs/profiles.md (SiK) and docs/hardware-suites.md (l2-sik-oasa-link). "est." = a first
+# guess to tune on the real radios.
+
+[limits.handshake_excess_s]
+min = -0.1
+max = 2.0
+reason = """Handshake time minus the floor: for each handshake frame the radios carried, serial in + airtime +
+serial out (sik-64k at SERIAL_SPEED). -0.1 s allows for a radio sending part of a frame before the rest
+has arrived (est.). Above the floor we allow 2 s for process start, the bridges, USB and SiK's TDM windows
+(est.). A lost handshake packet costs a 5 s retry and fails this on purpose: on a cable there should be none."""
+
+[limits.goodput_ratio]
+min = 0.5
+max = 1.05
+reason = """Model time / measured time for a back-to-back burst one way. The model is, for every frame the radios
+carried in the window (both directions: the medium is shared), the slower of the serial port and the air.
+Above 1.05 beats physics. Below 0.5 means the radios, the bridges or oasa-link waste more than half
+(est.: SiK's TDM gives each side its window; keepalives share the medium)."""

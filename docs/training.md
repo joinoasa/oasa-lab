@@ -96,5 +96,6 @@ Hardware suites add `transmits`, `requires`, `wiring` and limits: [hardware-suit
 ## Where to go next
 
 - The checker's checks: [checker.md](checker.md)
+- Using the lab from anywhere (tokens, roles, watching, downloads, pause): [training-remote.md](training-remote.md)
 - How the remote lab is locked down: [remote-lab.md](remote-lab.md)
 - Open work: issues labeled `agent-ready`, and [release.md](release.md) for what's left before each node is done

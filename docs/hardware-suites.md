@@ -168,7 +168,7 @@ Run `l2-rf-control` before `l2-lora-link`: it shows the air check works with the
 4. Wire `wiring.sik` (60 dB, attenuators on **before** power), then `oasa-lab devices`: each radio must show its firmware and settings.
 5. `oasa-lab run l2-sik-link --confirm-wiring sik`, then `oasa-lab run l2-sik-oasa-link --confirm-wiring sik`, and `oasa-lab check --require-hardware` on each bundle.
 
-Both suites need an `oasa-radio` with `sik` and `--sik-expect` in `OASA_RADIO_BIN_DIR` (they skip otherwise).
+Both suites need an `oasa-radio` with `sik` and `--sik-expect` in `OASA_RADIO_BIN_DIR` (they skip otherwise, and a skipped suite fails the checker). CI builds oasa-radio `main`, so the oasa-radio change that adds `--sik-expect` merges before the suites do.
 
 ### First run on real hardware
 
@@ -236,11 +236,11 @@ app -> oasa-radio bridge --sik-expect -> pty -> TAP -> SiK A ~~ coax ~~ SiK B ->
 | `test_radios_report_their_settings` | Both radios report (ATI5, read at open) what `[devices.ID.sik]` in `lab.toml` declares, `MAVLINK=0`, a NETID that is not the default 25, AIR_SPEED and ECC of the profile, the same link settings and firmware |
 | `test_bytes_both_ways` | Each bridge checks its radio (`--sik-expect`) and starts. 30 packets each way, one at a time, random sizes up to the MTU: delivered unchanged, once, in order; `delivery_ratio`, latency against the model. One packet of exactly the MTU arrives, one byte more is dropped by the bridge (`too_large`). A burst of 40 MTU packets: `burst_ratio` |
 | `test_bridge_refuses_mismatched_settings` | Known-bad: a bridge told to expect another NETID exits 1 with a failed `sik_check` naming NETID, and never starts |
-| `test_remote_change_is_caught` | Known-bad (H1): radio B sends `RTS4=11` (TX power) to radio A over the air, not saved. A's bridge refuses with TXPOWER. B sets it back, and `oasa-radio sik show` through A's tap confirms |
+| `test_remote_change_is_caught` | Known-bad (H1): radio B lowers radio A's TX power one step over the air (`RTS4=...`, never up; at the lowest step DUTY_CYCLE instead), not saved. A's bridge refuses, naming the setting. Then A is put back through its own port: `+++`, `ATZ` (a reboot drops the unsaved change), read again; if that fails and A has a `hub_port`, a USB power cycle. The result is logged (`sik_restored`); a failed restore fails the test and says to power-cycle the radio |
 
 **The model** (`oasa_lab/siklink.py`): a packet of n bytes is `wire_len(n)` bytes on the serial line (oasa-radio's framing, the longest case). Alone, it takes the serial port in (10 bits a byte at SERIAL_SPEED), its airtime (`sik-64k`, [profiles](profiles.md)) and the serial port out. In a burst each packet costs the slower of the serial port and the air (at 57600 baud the serial port). Bridge MTU 242: framed it is at most 249 bytes, one SiK packet (250 bytes with ECC off).
 
-The simulated SiK radios (`devices/simsik.py`) speak the AT protocol (guards, echo, `RT` run by the linked radio without authentication) and carry bytes on the simulated air with the profile's airtime, half-duplex, through 57600-baud serial ports, hearing each other only when their link settings match. They have no TDM windows and no hopping, so real latency will be higher: the latency limits leave room for a TDM window (est.).
+The simulated SiK radios start with the settings `lab.toml` expects (so the settings checks pass in CI); a `[devices.ID.sim]` table overrides them, and an l0-lab test starts one mismatched and sees the suite's check and the checker fail. They (`devices/simsik.py`) speak the AT protocol (guards, echo, `RT` run by the linked radio without authentication) and carry bytes on the simulated air with the profile's airtime, half-duplex, through 57600-baud serial ports, hearing each other only when their link settings match. They have no TDM windows and no hopping, so real latency will be higher: the latency limits leave room for a TDM window (est.).
 
 ### `l2-sik-oasa-link` (R-COM2 over the R-COM1 radio)
 
@@ -369,7 +369,7 @@ The limits are in each `suite.toml` under `[limits.*]`, with the reason next to 
 
 Simulated bench, seeds 1 to 3 (2026-11-05): delivery 1.0, median latency excess -5 to +3 ms, worst +6 to +28 ms, burst ratio 0.97 to 0.98, handshake excess 0.03 to 0.06 s, goodput 0.94 to 0.97. The simulation has no TDM windows, so expect the real latency well above these.
 
-**Checker (check 7) for `sik` devices:** each must record its ATI5 settings and the settings `lab.toml` expected, and they must agree; `MAVLINK` must be 0; all SiK radios in a run must share the settings that let them link (NETID, AIR_SPEED, ECC, band, LBT_RSSI, MAX_WINDOW); a real one must record its firmware (the `ATI` banner).
+**Checker (check 7) for `sik` devices:** each must record its ATI5 settings and the settings `lab.toml` expected, and they must agree; `MAVLINK` must be recorded and 0; a real radio's expectation must name at least NETID and MAVLINK; all SiK radios in a run must share the settings that let them link (NETID, AIR_SPEED, ECC, band, LBT_RSSI, MAX_WINDOW); a real one must record its firmware (the `ATI` banner).
 
 ### What the checker fixes (check 7, not tunable by a test)
 

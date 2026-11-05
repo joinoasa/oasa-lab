@@ -171,6 +171,8 @@ jobs:
           OASA_SEC_BIN_DIR="$GITHUB_WORKSPACE/oasa-sec/target/debug" \
           OASA_RADIO_BIN_DIR="$GITHUB_WORKSPACE/oasa-radio/target/debug" \
             oasa-lab run l2-lora-link --out runs | tee "$RUNNER_TEMP/run.txt"
+      # Needs oasa-radio main with --sik-expect (oasa-radio sik-settings-check merges first; until then these skip
+      # and the checker fails them).
       - name: Run l2-sik-link and l2-sik-oasa-link on the simulated bench (needs oasa-radio with --sik-expect)
         run: |
           set -euo pipefail

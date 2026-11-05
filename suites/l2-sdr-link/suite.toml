@@ -24,10 +24,13 @@ should be far above the modem's threshold: this suite tests the link, not the mo
 
 [limits.handshake_s]
 min = 0.0
-max = 360.0
+max = 240.0
 reason = """Seconds from the initiator's start to its session over the relay. A relay cycle is 14 to 20 s per direction
-on the bench (first run, 2026-11-05: B200 to E310 about 19.5 s, E310 to B200 about 14 s) and the link retries at 5 s
-backing off to 60 s, so the first answers miss retries: the first run took 170 s. Twice that is the limit."""
+on the bench (first run, 2026-11-05: B200 to E310 about 19.5 s, E310 to B200 about 14 s), so a round trip with
+queueing is 35 to 70 s. Both links get --handshake-rtt-ms 70000 (retry 107 s +-20 %, stale 428 s), so the answer
+arrives before the first retry: one round trip, at most 70 s. One lost handshake message adds a retry (at most
+128 s) and a round trip: about 200 s. 240 s allows that and no more. (Counted run 0e21d0f8787f, on the 5 s default
+retry that every answer missed, took 180.9 s.) est. until the first run with these timers."""
 
 [limits.delivery_a2b]
 min = 0.9

@@ -20,7 +20,12 @@ from oasa_lab.w1test import TooStrong
 
 RF_HZ = 915e6
 MTU = 200
-LINK_EXTRA = ["--keepalive-secs", "5"]
+# The relay's worst handshake round trip, queueing included: oasa-sec's R (docs/sdr-link.md, "Timing"). The bench
+# measured 35 to 70 s. The link derives its timers from it (retry 107 s, stale 428 s, keepalives off), so an answer
+# always gets back before the next retry. Both sides get the same value.
+RELAY_RTT_MS = 70_000
+LINK_EXTRA = ["--handshake-rtt-ms", str(RELAY_RTT_MS)]
+SESSION_WAIT_S = 420     # a lost handshake costs a retry (86 to 128 s) and a round trip; this leaves room for two
 N_A2B, N_B2A = 12, 6
 MSG_LEN = 80
 DATA_LEN = MSG_LEN + 22      # one message as a data packet: 22 bytes of link overhead with the 2-byte counter
@@ -29,6 +34,41 @@ STATE: dict = {}
 
 def drops(proc: LinkProc, reason: str) -> int:
     return sum(1 for e in proc.seen("drop") if e.get("reason") == reason)
+
+
+def exited(*procs: LinkProc) -> list[str]:
+    """Links that are no longer running, with their exit code and last line: a link that died sends nothing, and
+    waiting out the relay's timeout for it only hides why."""
+    out = []
+    for p in procs:
+        rc = p.proc.poll()
+        if rc is not None:
+            p.stop()                    # already ended: this only waits for its last output lines
+            last = p.events[-1] if p.events else {}
+            out.append(f"{p.log_path.name} exited with {rc}: {str(last.get('line') or last)[:200]}")
+    return out
+
+
+def start_link(make, name: str, tries: int = 3) -> tuple[LinkProc, tuple[str, int], tuple[str, int]]:
+    """Start a link on two free ports; returns (link, bind, plain_listen). `make(bind, plain, log_name)` starts it.
+
+    A port from free_udp_port is free only until another program binds it. If the link could not bind its port it
+    exits, sends nothing, and the run waits out the session time with empty air captures (CI, 2026-11-05). So:
+    wait until the link has bound its sockets (it logs `mavlink_guard` right after), and on "Address already in
+    use" try again on new ports. A failed try's log is kept as NAME-clashN.jsonl."""
+    for i in range(1, tries + 1):
+        bind, plain = (HOST, free_udp_port()), (HOST, free_udp_port())
+        p = make(bind, plain, f"{name}.jsonl")
+        end = time.monotonic() + 15
+        while time.monotonic() < end and p.proc.poll() is None and not p.seen("mavlink_guard"):
+            time.sleep(0.05)
+        if p.proc.poll() is not None:
+            p.stop()                    # already ended: this only waits for its last output lines
+        clash = p.proc.poll() is not None and any("Address already in use" in str(e.get("line", "")) for e in p.events)
+        if not clash or i == tries:
+            return p, bind, plain
+        p.log_path.rename(p.log_path.with_name(f"{p.log_path.stem}-clash{i}.jsonl"))
+    raise AssertionError("unreachable")
 
 
 @pytest.fixture
@@ -73,17 +113,20 @@ def bench(lab, hw: Hardware):
     trust(sec, alice, bob)
     trust(sec, bob, alice)
     app_a, app_b = Endpoint(), Endpoint()
-    a_bind, b_bind = (HOST, free_udp_port()), (HOST, free_udp_port())
-    a_plain, b_plain = (HOST, free_udp_port()), (HOST, free_udp_port())
     relay = RfRelay(radio, work, RF_HZ, {"a2b": (b200, e310, gains["a2b"][0]), "b2a": (e310, b200, gains["b2a"][0])},
-                    a_dest=a_bind, b_dest=b_bind, log=lab.log).start()
+                    a_dest=(HOST, 0), b_dest=(HOST, 0), log=lab.log).start()
     lab.air_capture(relay.legs["a2b"].air, e310.id, "b200-to-e310")
     lab.air_capture(relay.legs["b2a"].air, b200.id, "e310-to-b200")
-    link_b = LinkProc(sec, bob, "alice", bind=b_bind, remote=relay.addr_b, initiate=False, plain_listen=b_plain,
-                      plain_send=app_b.addr, log_path=lab.file("link-bob.jsonl"), mtu=MTU, extra=LINK_EXTRA)
-    t0 = time.monotonic()
-    link_a = LinkProc(sec, alice, "bob", bind=a_bind, remote=relay.addr_a, initiate=True, plain_listen=a_plain,
-                      plain_send=app_a.addr, log_path=lab.file("link-alice.jsonl"), mtu=MTU, extra=LINK_EXTRA)
+    link_b, b_bind, b_plain = start_link(lambda bind, plain, log: LinkProc(
+        sec, bob, "alice", bind=bind, remote=relay.addr_b, initiate=False, plain_listen=plain, plain_send=app_b.addr,
+        log_path=lab.file(log), mtu=MTU, extra=LINK_EXTRA), "link-bob")
+    relay.dest["a2b"] = b_bind
+    t0: list[float] = []
+    link_a, a_bind, a_plain = start_link(lambda bind, plain, log: t0.append(time.monotonic()) or LinkProc(
+        sec, alice, "bob", bind=bind, remote=relay.addr_a, initiate=True, plain_listen=plain, plain_send=app_a.addr,
+        log_path=lab.file(log), mtu=MTU, extra=LINK_EXTRA), "link-alice")
+    relay.dest["b2a"] = a_bind
+    t0 = t0[-1]
     STATE.update(relay=relay, link_a=link_a, link_b=link_b, app_a=app_a, app_b=app_b, a_plain=a_plain,
                  b_plain=b_plain, b200=b200, e310=e310, sec=sec, work=work, bob=bob, t0=t0)
     yield STATE
@@ -104,9 +147,14 @@ def _teardown():
 
 def test_encrypted_link_over_the_bench(lab, bench):
     relay, link_a, link_b = bench["relay"], bench["link_a"], bench["link_b"]
-    up = relay.run(lambda: bool(link_a.seen("session_established")), timeout=420)
+    up = relay.run(lambda: bool(link_a.seen("session_established")) or bool(exited(link_a, link_b)),
+                   timeout=SESSION_WAIT_S) and bool(link_a.seen("session_established"))
     hs = round(time.monotonic() - bench["t0"], 1)
-    assert up, "no session over the relay in 420 s; see logs/link-*.jsonl and the relay_cycle events"
+    lab.log("relay_after_handshake", **{d: relay.totals(d) for d in ("a2b", "b2a")})
+    dead = exited(link_a, link_b)
+    assert not dead, "; ".join(dead)
+    assert up, (f"no session over the relay in {SESSION_WAIT_S} s; see logs/link-*.jsonl and the relay_cycle events "
+                f"(frames sent/decoded a2b {relay.totals('a2b')}, b2a {relay.totals('b2a')})")
     assert lab.measure("handshake_s", "handshake over the relay", hs, "s"), f"{hs} s"
     marker = lab.marker()
     a2b = [f"{marker}|a2b|{i:03d}|".encode().ljust(MSG_LEN, b".") for i in range(N_A2B)]
@@ -179,12 +227,11 @@ def test_untrusted_identity_gets_no_session(lab, bench):
     bench["link_a"].stop()
     mallory = make_identity(bench["sec"], bench["work"], "mallory")
     trust(bench["sec"], mallory, bench["bob"])
-    m_bind = (HOST, free_udp_port())
-    relay.dest["b2a"] = m_bind
     before = drops(link_b, "untrusted_peer")
-    proc = LinkProc(bench["sec"], mallory, "bob", bind=m_bind, remote=relay.addr_a, initiate=True,
-                    plain_listen=(HOST, free_udp_port()), plain_send=(HOST, free_udp_port()),
-                    log_path=lab.file("link-mallory.jsonl"), mtu=MTU, extra=LINK_EXTRA)
+    proc, m_bind, _ = start_link(lambda bind, plain, log: LinkProc(
+        bench["sec"], mallory, "bob", bind=bind, remote=relay.addr_a, initiate=True, plain_listen=plain,
+        plain_send=(HOST, free_udp_port()), log_path=lab.file(log), mtu=MTU, extra=LINK_EXTRA), "link-mallory")
+    relay.dest["b2a"] = m_bind
     STATE["mallory"] = proc
     relay.run(lambda: drops(link_b, "untrusted_peer") > before, timeout=120)
     relay.run(lambda: False, timeout=20)     # time for any answer to come back over the air

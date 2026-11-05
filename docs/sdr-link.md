@@ -35,10 +35,20 @@ Then the other direction. Half duplex, one UHD process per radio at a time: UHD 
 
 **Sizes.** A v1 frame carries up to 255 bytes. `oasa-link --mtu 200` keeps every packet in one frame (handshakes are 119 and 55 bytes; data is plaintext + 22). One datagram, one frame: nothing is split or joined, so loss stays packet loss, which the link already handles.
 
-**Timing.** A cycle is about 5 to 10 s per direction (the transmit tool's start, the E310's claim, the recording and the decode, as seen in W1). The link's timers fit that:
+**Timing.** A cycle is 14 to 20 s per direction on the bench (the transmit tool's start, the E310's claim, the recording and the decode; first run 2026-11-05). A packet that just missed its cycle waits for it to end and for the other direction's cycle, so a round trip with queueing is **35 to 70 s**. On the simulated bench a cycle takes well under a second to a few seconds.
 
-- The handshake retry starts at 5 s and backs off to 60 s. The first answer may miss the first retry; once the back-off is longer than a round trip (about 20 s), the handshake completes. Expect up to about a minute.
-- Stale after 30 s of silence while sending payload. Both links run with `--keepalive-secs 5`, so every cycle has traffic both ways and a round trip stays under 30 s.
+The link must know this. Both links run with `--handshake-rtt-ms 70000`: oasa-sec's *R* is the worst handshake round trip **including queueing and relays**, not only airtime (security review L1). From it the link sets (oasa-sec `Config::for_airtime`):
+
+| Timer | Value | Why it fits |
+|---|---|---|
+| Handshake retry | 107 s (1.5 R + 2 s), ±20 %, backing off to 428 s | The answer (≤ 70 s) arrives before the earliest retry (86 s) |
+| Stale | 428 s (4 × retry) | A side answers payload after half of it (214 s), far over a round trip |
+| Keepalive | off (R > 2 s) | Not needed: the session confirmation and acks are sent anyway, and every keepalive costs a frame in the cycle |
+| Rekey / reject | 600 s / 1028 s | Rekey ≥ 4 × retry, as oasa-sec requires |
+
+So a handshake takes one round trip, and only a lost frame costs a retry. Before this (default 5 s retry, `--keepalive-secs 5`) every answer missed its retry: the initiator kept sending new handshakes and re-handshaking sessions the responder had not yet confirmed, and the counted run's handshake took 180.9 s. Do not use a fixed `--stale-secs` instead: it leaves the retry at 5 s.
+
+If the relay gets slower (more frames per cycle, a slower radio), measure the round trip from the `relay_cycle` events and raise `RELAY_RTT_MS` in the test with it.
 
 **Level.** The TX gain is found as W1 does (probe, then set for a clear margin): frames well above threshold, because the point here is the link, not the modem's limits. Eb/N0 is measured from each recording as W1 does.
 
@@ -57,7 +67,9 @@ The plaintext control is its own suite, **`l2-sdr-control`**: plaintext frames w
 
 Alice sends first: per the link spec the responder sends on a new session only after the initiator's first data packet arrives (anything earlier is dropped as `no_session`).
 
-**Limits** (`suite.toml`, est. until the first runs): delivery ≥ 90 % each way, handshake ≤ 180 s, frames decoded ≥ 95 % of frames sent, probe Eb/N0 ≥ 8 dB.
+**Limits** (`suite.toml`, est. until the first runs): delivery ≥ 90 % each way, handshake ≤ 240 s (one round trip expected; room for one lost handshake message), frames decoded ≥ 95 % of frames sent, probe Eb/N0 ≥ 8 dB.
+
+**Starting the links.** The links' ports come from `free_udp_port`, which is free only until another program binds it. A link that cannot bind its port exits and sends nothing: the run then waits out the session time and ends with empty air captures, `no data packet was carried`, and only the stranger test passing (CI, 2026-11-05). The suite waits until each link has bound its sockets and starts it again on new ports after "Address already in use" (the failed try's log is kept as `link-NAME-clashN.jsonl`). If a link exits later, the first test stops at once and names it with its last output line.
 
 **Evidence:** link logs (`link-*.jsonl`, contents never logged), the air capture, one SigMF recording per direction, the relay's per-cycle log (frames sent, found, CRC passes, Eb/N0), the oasa-sec and oasa-radio binaries' hashes.
 

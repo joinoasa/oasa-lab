@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import ipaddress
 import os
 import re
+import time
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -29,8 +31,36 @@ DEFAULT_REDIRECTS = (
 )
 
 
+MAX_TOKEN_DAYS = 90       # the longest `oasa-lab token --days` writes
+DEFAULT_TOKEN_DAYS = 30
+DEFAULT_MAX_ACTIVE_PER_USER = 3
+
+
 class ConfigError(ValueError):
     pass
+
+
+def lower_role(role: str, cap: str | None) -> str:
+    """The lower of two roles. A token's role can only take rights away from its user."""
+    if cap is None:
+        return role
+    return ROLES[min(ROLES.index(role), ROLES.index(cap))]
+
+
+def parse_expires(value: Any) -> float | None:
+    """A token's `expires`: a TOML date or datetime, or the same as an ISO string. A date means the start of
+    that day (UTC); a time without an offset is UTC. Returns a Unix time, or None if it cannot be read."""
+    if isinstance(value, str):
+        try:
+            value = dt.datetime.fromisoformat(value.replace("Z", "+00:00")) if "T" in value or " " in value \
+                else dt.date.fromisoformat(value)
+        except ValueError:
+            return None
+    if isinstance(value, dt.datetime):
+        return (value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)).timestamp()
+    if isinstance(value, dt.date):
+        return dt.datetime(value.year, value.month, value.day, tzinfo=dt.timezone.utc).timestamp()
+    return None
 
 
 def hash_token(token: str) -> str:
@@ -54,6 +84,11 @@ class ApiToken:
     name: str
     user: str
     sha256: str
+    expires: float = 0.0         # Unix time; refused from then on
+    role: str | None = None      # optional: lowers the user's role for this token, never raises it
+
+    def expired(self, now: float | None = None) -> bool:
+        return (time.time() if now is None else now) >= self.expires
 
 
 @dataclass(frozen=True)
@@ -95,6 +130,7 @@ class Config:
     job_timeout_seconds: float = 1800
     stop_grace_seconds: float = 10
     max_queued: int = 20
+    max_active_per_user: int = DEFAULT_MAX_ACTIVE_PER_USER  # queued + running jobs one user may have
     rf_setup: str = "unset"
     devices_file: str = ""  # the hardware suites' device file (lab.toml: serials, ports, cabling), passed to jobs
     confirm_wiring: dict[str, str] = field(default_factory=dict)  # suite -> wiring the owner says is connected
@@ -131,8 +167,8 @@ class Config:
     def user(self, name: str) -> User | None:
         return next((u for u in self.users if u.name == name), None)
 
-    def api_token_user(self, token: str) -> tuple[ApiToken, User] | None:
-        """Match a bearer token to a configured API token (constant-time over all of them)."""
+    def match_api_token(self, token: str) -> ApiToken | None:
+        """The configured API token this bearer token is (constant-time over all of them), expired or not."""
         import hmac
 
         digest = hash_token(token)
@@ -140,8 +176,20 @@ class Config:
         for t in self.tokens:
             if hmac.compare_digest(digest, t.sha256):
                 found = t
+        return found
+
+    def api_token_user(self, token: str, on_expired=None) -> tuple[ApiToken, User] | None:
+        """A bearer token -> (its config entry, the user it acts as, with the token's role applied). None for an
+        unknown or expired token or a removed user; `on_expired(entry)` is called for an expired one."""
+        found = self.match_api_token(token)
         u = self.user(found.user) if found else None
-        return (found, u) if found and u else None
+        if not (found and u):
+            return None
+        if found.expired():
+            if on_expired:
+                on_expired(found)
+            return None
+        return found, replace(u, role=lower_role(u.role, found.role))
 
 
 def _need(cond: bool, msg: str) -> None:
@@ -191,6 +239,8 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
     cfg.job_timeout_seconds = float(s.get("job_timeout_seconds", cfg.job_timeout_seconds))
     cfg.stop_grace_seconds = float(s.get("stop_grace_seconds", cfg.stop_grace_seconds))
     cfg.max_queued = int(s.get("max_queued", cfg.max_queued))
+    cfg.max_active_per_user = int(s.get("max_active_per_user", cfg.max_active_per_user))
+    _need(cfg.max_queued >= 1 and 1 <= cfg.max_active_per_user, "max_queued and max_active_per_user must be 1 or more")
     cfg.devices_file = str(s.get("devices_file", ""))
     _need(not cfg.devices_file or os.path.isabs(cfg.devices_file), "service.devices_file must be an absolute path")
     cfg.min_commit = str(s.get("min_commit", ""))
@@ -261,10 +311,24 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
               f"user {name}: github_id is required (the number, not the name: gh api users/NAME --jq .id)")
         cfg.users.append(User(name, role, gid, u.get("github_login"), u.get("email")))
     _need(len({u.name for u in cfg.users}) == len(cfg.users), "user names must be unique")
+    no_expiry = [str(t.get("name")) for t in data.get("tokens", []) if "expires" not in t]
+    _need(not no_expiry, f"API token(s) without `expires`: {', '.join(no_expiry)}. Tokens no longer last forever: "
+          f"delete these [[tokens]] entries, make new ones with `oasa-lab token NAME --user USER --days N` "
+          f"(at most {MAX_TOKEN_DAYS}), and hand them out again")
     for t in data.get("tokens", []):
+        _need(bool(NAME_RE.match(str(t.get("name", "")))), f"bad token name {t.get('name')!r}")
         _need(bool(re.fullmatch(r"[0-9a-f]{64}", str(t.get("sha256", "")))), f"token {t.get('name')}: sha256 must be 64 hex characters")
         _need(cfg.user(str(t.get("user"))) is not None, f"token {t.get('name')}: unknown user {t.get('user')!r}")
-        cfg.tokens.append(ApiToken(str(t["name"]), str(t["user"]), str(t["sha256"])))
+        expires = parse_expires(t.get("expires"))
+        _need(expires is not None, f"token {t.get('name')}: expires must be a date or time, e.g. 2026-12-31 or 2026-12-31T12:00:00Z")
+        # The same cap as `oasa-lab token --days` (plus a day for a date rounded up): no hand-written forever.
+        _need(expires <= time.time() + (MAX_TOKEN_DAYS + 1) * 86400,
+              f"token {t.get('name')}: expires is more than {MAX_TOKEN_DAYS} days away; make a new token with --days")
+        role = t.get("role")
+        _need(role is None or role in ROLES, f"token {t.get('name')}: role must be one of {', '.join(ROLES)}")
+        cfg.tokens.append(ApiToken(str(t["name"]), str(t["user"]), str(t["sha256"]), expires, role and str(role)))
+    _need(len({t.name for t in cfg.tokens}) == len(cfg.tokens), "token names must be unique")
+    _need(len({t.sha256 for t in cfg.tokens}) == len(cfg.tokens), "the same token hash appears twice")
 
     gh = data.get("github", {})
     cfg.github_client_id = str(gh.get("client_id", ""))

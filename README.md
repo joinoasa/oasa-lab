@@ -115,7 +115,7 @@ From Python: `from oasa_lab.channel import Channel, ChannelSettings`. Other repo
 
 ```
 pip install -e '.[service]'
-oasa-lab token owner-laptop --user citruscybersec   # an API token; paste the printed block in service.toml
+oasa-lab token owner-laptop --user citruscybersec --days 30   # an API token (expires); paste the block in service.toml, then reload
 oasa-lab serve --config service.toml                    # localhost only
 ```
 

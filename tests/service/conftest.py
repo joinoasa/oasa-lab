@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import json
 import os
 import shutil
 import socket
@@ -23,6 +25,7 @@ from oasa_lab.service.config import Config, parse_config  # noqa: E402
 from oasa_lab.service.inventory import SimulatedInventory  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
+TOMORROW = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 86400))
 GIT = ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid"]
 
 QUICK = '''
@@ -139,6 +142,16 @@ class Running:
     server: uvicorn.Server
     thread: threading.Thread
     inv: SimulatedInventory
+    data: dict | None = None        # the config as written to config_path
+    config_path: Path | None = None
+
+    def reload(self, data: dict | None = None, text: str | None = None) -> bool:
+        """Write a new config file and reload it on the service's own event loop, as SIGHUP does."""
+        self.config_path.write_text(text if text is not None else toml_dump(data))
+        done: concurrent.futures.Future = concurrent.futures.Future()
+        loop = self.lab.jobs._worker.get_loop()
+        loop.call_soon_threadsafe(lambda: done.set_result(self.lab.reload()))
+        return done.result(10)
 
     def headers(self, user: str = "owner") -> dict[str, str]:
         return {"Authorization": f"Bearer {self.tokens[user]}"}
@@ -182,9 +195,32 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def start(repo: Path, state: Path, *, extra: dict | None = None, env: dict | None = None,
-          present: dict | None = None, http=None, policy_uid: int = 0) -> Running:
-    port = free_port()
+def toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    if isinstance(v, str):
+        return json.dumps(v)   # a JSON string is a valid TOML basic string for what the tests write
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(toml_value(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{ " + ", ".join(f"{json.dumps(k)} = {toml_value(x)}" for k, x in v.items()) + " }"
+    raise TypeError(type(v))
+
+
+def toml_dump(data: dict) -> str:
+    """Just enough TOML for the service config: top-level arrays first, then one table per section."""
+    out = [f"{k} = {toml_value(v)}" for k, v in data.items() if not isinstance(v, dict)]
+    for k, v in data.items():
+        if isinstance(v, dict):
+            out.append(f"\n[{k}]")
+            out += [f"{json.dumps(kk)} = {toml_value(vv)}" for kk, vv in v.items()]
+    return "\n".join(out) + "\n"
+
+
+def service_data(repo: Path, state: Path, port: int, extra: dict | None = None) -> tuple[dict, dict[str, str]]:
+    """The config of a test service (as parsed TOML) and its users' API tokens."""
     tokens, token_rows = {}, []
     users = [{"name": "owner", "role": "admin", "github_id": 1001, "github_login": "owner-gh", "email": "owner@example.invalid"},
              {"name": "bob", "role": "runner", "github_id": 1002},
@@ -192,7 +228,7 @@ def start(repo: Path, state: Path, *, extra: dict | None = None, env: dict | Non
     for u in users:
         t, h = new_api_token()
         tokens[u["name"]] = t
-        token_rows.append({"name": f"{u['name']}-token", "user": u["name"], "sha256": h})
+        token_rows.append({"name": f"{u['name']}-token", "user": u["name"], "sha256": h, "expires": TOMORROW})
     data = {
         "service": {"port": port, "public_url": f"http://127.0.0.1:{port}", "state_dir": str(state), "repo": str(repo),
                     "stop_grace_seconds": 1, "job_timeout_seconds": 120, "min_free_mb": 100},
@@ -211,9 +247,18 @@ def start(repo: Path, state: Path, *, extra: dict | None = None, env: dict | Non
             data["service"].pop(k, None)
         data.pop("lab", None)
         data.pop("confirm_wiring", None)
+    return data, tokens
+
+
+def start(repo: Path, state: Path, *, extra: dict | None = None, env: dict | None = None,
+          present: dict | None = None, http=None, policy_uid: int = 0) -> Running:
+    port = free_port()
+    data, tokens = service_data(repo, state, port, extra)
+    config_path = state.parent / f"{state.name}.toml"   # what a reload (SIGHUP) reads
+    config_path.write_text(toml_dump(data))
     cfg = parse_config(data, state.parent, {"OASA_LAB_GITHUB_CLIENT_SECRET": "gh-secret", **(env or {})}, policy_uid=policy_uid)
     inv = SimulatedInventory(cfg.devices, present or {})
-    lab = Lab(cfg, inventory=inv, http=http)
+    lab = Lab(cfg, inventory=inv, http=http, config_path=config_path)
     server = uvicorn.Server(uvicorn.Config(lab.app(), host="127.0.0.1", port=port, log_level="error"))
     th = threading.Thread(target=server.run, daemon=True)
     th.start()
@@ -222,7 +267,7 @@ def start(repo: Path, state: Path, *, extra: dict | None = None, env: dict | Non
             break
         time.sleep(0.05)
     assert server.started, "service did not start"
-    return Running(lab, cfg, f"http://127.0.0.1:{port}", tokens, server, th, inv)
+    return Running(lab, cfg, f"http://127.0.0.1:{port}", tokens, server, th, inv, data, config_path)
 
 
 def stop(r: Running) -> None:

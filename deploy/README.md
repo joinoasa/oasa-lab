@@ -103,10 +103,10 @@ Leave `rf_setup = "unset"` (in `lab-policy.toml`) until you have checked the ben
 Make an API token for scripts (optional):
 
 ```
-sudo -u oasalab /opt/oasa-lab/venv/bin/oasa-lab token owner-laptop --user citruscybersec
+sudo -u oasalab /opt/oasa-lab/venv/bin/oasa-lab token owner-laptop --user citruscybersec --days 30
 ```
 
-Paste the printed `[[tokens]]` block into `service.toml`. The token itself is shown once; keep it in your password manager.
+Paste the printed `[[tokens]]` block into `service.toml`, then `sudo systemctl reload oasa-lab` (no restart; a running job is not touched). The token itself is shown once; keep it in your password manager. Every token expires (`--days`, at most 90). For an agent or a script that runs unattended, add `--role runner`: it can run suites and stop its own jobs, but not pause, resume or stop others' jobs. To revoke a token, delete its block and reload. See [API tokens](../docs/remote-lab.md#api-tokens-expiry-roles-revocation).
 
 ### 7. The tunnel (OWNER)
 
@@ -140,7 +140,8 @@ Optional hardening: a Cloudflare WAF rule on the MCP hostname that blocks `/mcp`
 
 | Want | Do |
 |---|---|
-| Upgrade the service | `git pull && sudo ./05-service.sh` (jobs always run the newest `main` anyway) |
+| Upgrade the service | `git pull && sudo ./05-service.sh` (jobs always run the newest `main` anyway). If it stops with "API token(s) without `expires`", see below |
+| Add or revoke a token or a member | Edit `/etc/oasa-lab/service.toml`, then `sudo systemctl reload oasa-lab` (keeps the running job; a file with an error is refused and the old one stays: `journalctl -u oasa-lab`) |
 | Pause all new runs | In chat: "pause the lab". Or on the PC: `sudo touch /etc/oasa-lab/PAUSE` (Claude cannot clear this one; delete it to resume) |
 | Stop the running job | In chat: "stop job <id>". Or `curl -X POST -H "Authorization: Bearer $TOKEN" .../api/jobs/<id>/stop` |
 | Stop the service (kills any run) | `sudo systemctl stop oasa-lab` |
@@ -148,6 +149,8 @@ Optional hardening: a Cloudflare WAF rule on the MCP hostname that blocks `/mcp`
 | Everything off | `sudo systemctl disable --now oasa-lab cloudflared` |
 | Cut off Claude only | Claude: remove the connector. PC: delete `/var/lib/oasa-lab/state/oauth.json` and restart the service |
 | Look at what happened | `less /var/lib/oasa-lab/state/audit.jsonl`, `journalctl -u oasa-lab` |
+
+**Upgrading from a version without token expiry.** API tokens now need an `expires` line, and the service refuses to start without one (`05-service.sh` runs `serve --check` first, so the running service is not restarted). For each token the message names: make a new one with `oasa-lab token NAME --user USER --days 30` (`--role runner` for agents), replace the old `[[tokens]]` block with the new one, give the new token to whoever used the old one, and run `sudo ./05-service.sh` again. The old tokens stop working at that point.
 
 ## Files here
 

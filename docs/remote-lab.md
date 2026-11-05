@@ -66,6 +66,8 @@ No crypto is invented here: PKCE, token checks and metadata come from the SDK; G
 
 **Other ways in** (all end in a user and role from `service.toml`): an API token (bearer; only its hash is stored) for scripts and other MCP clients. Nothing else is accepted. Identity headers such as `X-Forwarded-User` mean nothing.
 
+**API tokens** (see [API tokens](#api-tokens-expiry-roles-revocation) below) always expire, may carry a lower role than their user, and are revoked with a reload, not a restart.
+
 ## Threat model, in plain words
 
 **What we protect:** the radios (a wrong transmission can break rules or burn a receiver), the lab PC, the integrity of the evidence, the owner's accounts.
@@ -90,6 +92,9 @@ No crypto is invented here: PKCE, token checks and metadata come from the SDK; G
 | A commit with hostile code in `suites/` or in `oasa_lab/` is merged and the service reads it | The service never runs code from a commit: it reads each `suite.toml` as data (`git cat-file`) and parses it with its own installed parser. The suites folder it gives the checker is rebuilt from plain files. |
 | Someone asks for a commit that is not on `main`, or an old one | `job-run` checks again, in the root-controlled mirror: the commit must be reachable from `main` and not older than `min_commit`. The mirror is updated only by `oasa-lab-mirror.service` (user `oasalab-mirror`); neither the service nor the job user can write it. |
 | Two jobs fight over the radios | One job at a time, first in first out. |
+| An API token leaks (a script, an agent's environment) | Every token has an `expires` (`oasa-lab token --days`, at most 90; the service refuses to start with a token that has none). An expired token gets the same 401 as an unknown one, and the audit log names it (`api_token_expired`); the extra audit write makes that answer about a millisecond slower, which tells a caller only that they hold a token that once worked. Give agents and scripts a token with `role = "runner"` (or `viewer`): it can run suites and stop its own jobs, never pause, resume, stop others' jobs or pick a commit. Revoke one by deleting its `[[tokens]]` entry and `sudo systemctl reload oasa-lab`: the running job and the queue are not touched. |
+| Text in a log, a job's stop reason or a summary steers an admin's agent | Agents get runner tokens (above), so the worst they can do is run allowed suites and stop their own jobs. `resume_lab` clears only a pause the same user set; another admin must pass `force` while signed in themselves (Claude sign-in or Cloudflare Access, never an API token), and it is audited (`resume_forced`). Bench work uses the local pause file, which no API call clears. |
+| One member fills the queue | Each user may have at most `max_active_per_user` jobs queued or running (default 3), inside the lab-wide `max_queued`. The 429 says which limit was hit. |
 | A run goes wrong | Stop it (SIGTERM, then SIGKILL after `stop_grace_seconds`, whole cgroup). Or pause the lab (refuses new jobs, cancels the queue). Or from a shell `sudo touch /etc/oasa-lab/PAUSE`: any file or folder at that path pauses the lab, and no API or Claude call can remove it (`/var/lib/oasa-lab/state/PAUSE` works too, but the API can clear that one). Runs also have a time limit. |
 | Someone claims a result that did not happen | A run counts only if `get_results` shows `"counted": true`: job passed and checker passed. A stopped run is never counted. |
 | The service (or anything else on the PC) is taken over and talks to a networked radio directly | The E310 (UHD) and a Pluto (iiod) take unauthenticated commands over IP, so a radio reachable from the service could be made to transmit with no job, no interlock and no caps. With `RADIO_ADDRS` set in `setup.env`, `03-firewall.sh` lets only the job user (`oasalab-job`) reach those addresses; everyone else (the service, cloudflared, root) gets only SSH (which needs the radio's own login) and ping. The service checks a networked radio is there by connecting to its SSH port. `check.sh` tries the radio ports as the service user and fails if they answer. |
@@ -157,7 +162,7 @@ Then talk normally:
 | `get_results` | Counts, each checker check, `summary.md`, links, `counted` | viewer |
 | `stop_job` | Stop a queued or running job (own jobs; admin: any) | runner |
 | `lab_status` | Devices present, RF setup, paused or not, profiles ready | viewer |
-| `pause_lab`, `resume_lab` | The kill switch | admin |
+| `pause_lab`, `resume_lab` | The kill switch. `resume_lab` clears only your own pause; `force` overrides another's (signed-in admin only, not an API token; audited) | admin |
 
 Claude can tell you a run counted only after `get_results` says so. Bundles and `check.json` download from the API host (links in the results); they are not readable through the chat.
 
@@ -182,6 +187,32 @@ curl -sNH "Authorization: Bearer $TOKEN" "https://lab-api.example.com/api/jobs/<
 
 `commit` may only be a full commit id that is on `main`. Leave it out for the newest.
 
+`POST /api/resume` clears a pause only for the user who set it. Another admin sends `{"force": true}` through a Claude sign-in or Cloudflare Access; with an API token it is refused (403), because that is what an unattended agent holds. The audit log records an override (`resume_forced`, with who paused). A pause set on the PC (`/etc/oasa-lab/PAUSE`) is never cleared by the API, force or not.
+
+A user may have at most `max_active_per_user` jobs (default 3) queued or running; `max_queued` (default 20) caps the whole lab. Either answers 429 and says which.
+
+## API tokens: expiry, roles, revocation
+
+```
+sudo -u oasalab /opt/oasa-lab/venv/bin/oasa-lab token ci-runner --user alex --days 30 --role runner
+```
+
+prints the token once and a block for `service.toml`:
+
+```toml
+[[tokens]]
+name    = "ci-runner"
+user    = "alex"
+role    = "runner"              # optional; can only lower alex's role, never raise it
+expires = 2026-12-05T10:00:00Z  # required; a date (2026-12-05, start of day UTC) works too
+sha256  = "..."
+```
+
+- **Expiry is required.** `--days` defaults to 30 and may be 1 to 90. The service refuses to start (and `serve --check` fails) if any token has no `expires`, or one more than 90 days away, naming each one. `serve --check` also warns about tokens that expire within 7 days or have expired.
+- **Agents get runner tokens.** An AI agent running without a person watching gets a token with `role = "runner"` (or `viewer` if it only reads), even if its user is an admin. Admin rights stay in a person's own session (Claude sign-in or their own token). The token's role applies on `/mcp` and the REST API alike.
+- **Physical work on the bench** uses the local pause: `sudo touch /etc/oasa-lab/PAUSE` (delete it when done). No API call, and no agent, can clear it. Pausing through the API is for remote use; a signed-in admin with `force` can lift that one.
+- **Revoke or add** a token or a user: edit `service.toml`, then `sudo systemctl reload oasa-lab` (SIGHUP). It re-reads `[[users]]` and `[[tokens]]` only; the running job, the queue and Claude sign-ins stay, except a removed user's sign-ins, which are revoked. A file that does not load changes nothing: the old users and tokens stay, and the error goes to the journal and the audit log (`reload_failed`). A user whose `github_id` or `email` changed counts as removed for their sign-ins; their API tokens, listed by name in the same file, keep working, so after a compromised account delete that user's `[[tokens]]` entries too. Other settings still need `sudo systemctl restart oasa-lab` (which interrupts a running job); the reload's audit line lists any it saw changed (`needs_restart`). A reload sent while the service is still starting stops it (systemd's `Restart=on-failure` starts it again in 5 s): reload after it is up.
+
 ## Config: users, roles, devices
 
 `/etc/oasa-lab/service.toml` (example: [deploy/service.toml.example](../deploy/service.toml.example)). Ships with one admin. More people later is a config change:
@@ -193,7 +224,7 @@ role = "runner"          # viewer | runner | admin
 github_id = 123456       # numeric id, not the name
 ```
 
-Roles live in `oasa_lab/service/config.py` (`PERMISSIONS`). Restart the service after editing.
+Roles live in `oasa_lab/service/config.py` (`PERMISSIONS`). After editing users or tokens: `sudo systemctl reload oasa-lab` (no restart, no lost run).
 
 **Devices** come from a pluggable inventory: `usb` (reads `/sys/bus/usb/devices`, and one TCP connect to the Pluto+'s iiod port to see that it answers; it never opens a radio) or `simulated` (tests and demos). A **profile** names devices that must be present; a suite may also list `requires = ["pluto"]` in its `suite.toml`. Missing devices stop the job before it starts.
 
@@ -227,6 +258,7 @@ Refused calls, failed sign-ins and unauthorized requests are logged too. Token v
 | No new runs | Chat: "pause the lab". Or on the PC: `sudo touch /etc/oasa-lab/PAUSE` (Claude and the API cannot clear it; delete it to resume) |
 | The service (also kills a run) | `sudo systemctl stop oasa-lab` |
 | The internet door | `sudo systemctl stop cloudflared`, or delete the tunnel in Cloudflare |
+| One token or one member | Delete the `[[tokens]]` entry (or the `[[users]]` entry: that also ends their Claude sign-ins), then `sudo systemctl reload oasa-lab` |
 | Claude's access only | Remove the connector in Claude; delete `/var/lib/oasa-lab/state/oauth.json`; restart the service |
 | Everything | `sudo systemctl disable --now oasa-lab cloudflared`, and `sudo wg-quick down wg0` |
 

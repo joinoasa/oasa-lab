@@ -13,7 +13,7 @@ import secrets
 from dataclasses import dataclass
 from typing import Any
 
-from .config import Config, User, hash_token
+from .config import ApiToken, Config, User, hash_token
 
 
 @dataclass(frozen=True)
@@ -65,15 +65,25 @@ class AccessVerifier:
             return None
 
 
+def expired_logger(audit_log):
+    """What to do when someone presents an expired API token: refuse it like an unknown one (the caller sees the
+    same 401), but say in the audit log which token it was, so the owner can tell a leak from a forgotten script."""
+    def log(t: ApiToken) -> None:
+        if audit_log is not None:
+            audit_log.write(kind="auth", event="api_token_expired", actor=t.user, credential=t.name, expired_at=int(t.expires))
+    return log
+
+
 class Authenticator:
-    def __init__(self, cfg: Config, oauth_lookup=None):
+    def __init__(self, cfg: Config, oauth_lookup=None, audit_log=None):
         self.cfg = cfg
         self.oauth_lookup = oauth_lookup  # token string -> (user name, client id) | None
+        self.on_expired = expired_logger(audit_log)
         self.access = (AccessVerifier(cfg.access_team_domain, cfg.access_audience, cfg.access_jwks_url)
                        if cfg.access_team_domain else None)
 
     def bearer(self, token: str) -> Principal | None:
-        hit = self.cfg.api_token_user(token)
+        hit = self.cfg.api_token_user(token, self.on_expired)
         if hit:
             return Principal(hit[1], "api-token", hit[0].name)
         if self.oauth_lookup:

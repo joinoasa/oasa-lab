@@ -366,7 +366,9 @@ def test_any_pause_file_pauses_the_lab(make_service, kind):
         r = c.post("/api/jobs", json={"suite": "t-quick"})
         assert r.status_code == 423, kind
         assert c.get("/api/lab").json()["paused"] is not None
-        assert c.post("/api/resume").json()["resumed"] is True      # the API can still clear its own kind
+        assert c.post("/api/resume").status_code == 403             # nobody's pause: not cleared by accident
+        assert c.post("/api/resume", json={"force": True}).status_code == 403   # nor by an API token with force
+        assert svc.lab.jobs.resume()["resumed"] is True              # the owner (or a signed-in admin) can clear it
         assert c.post("/api/jobs", json={"suite": "t-quick"}).status_code == 202
 
 
@@ -391,7 +393,7 @@ def test_pause_via_mcp_resume_also_keeps_the_local_pause(make_service, tmp_path)
     local = tmp_path / "owner-pause2"
     svc = make_service(extra={"service": {"local_pause_file": str(local)}})
     local.write_text("x")
-    assert svc.lab.jobs.resume() is False and svc.lab.jobs.paused["local"] is True
+    assert svc.lab.jobs.resume()["resumed"] is False and svc.lab.jobs.paused["local"] is True
 
 
 # --- disk, retention, read caps (L6) ----------------------------------------------------------------------------

@@ -38,6 +38,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from . import audit
+from .auth import expired_logger
 from .config import Config, User
 
 SCOPE = "lab"
@@ -356,10 +357,14 @@ class LabOAuthProvider:
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         """Used for every MCP request: an OAuth token, or one of the configured API tokens."""
-        hit = self.cfg.api_token_user(token)
+        hit = self.cfg.api_token_user(token, expired_logger(self.audit))
         if hit:
+            # `role` is the user's role lowered by the token's (RH1 b); the tools apply it on every call.
             return AccessToken(token=token, client_id=f"api-token:{hit[0].name}", scopes=[SCOPE], subject=hit[1].name,
-                               resource=self.cfg.mcp_url, claims={"via": "api-token", "iss": self.cfg.public_url})
+                               expires_at=int(hit[0].expires), resource=self.cfg.mcp_url,
+                               claims={"via": "api-token", "iss": self.cfg.public_url, "role": hit[1].role})
+        if self.cfg.match_api_token(token):   # an expired API token: never fall through to the OAuth table
+            return None
         r = self.access.get(_h(token))
         if not r or r["expires_at"] < time.time() or not self.cfg.user(r["user"]):
             return None
@@ -377,6 +382,15 @@ class LabOAuthProvider:
         for table in (self.access, self.refresh):
             table.pop(_h(token.token), None)
         self._save()
+
+    def revoke_users(self, users: set[str]) -> int:
+        """Drop every session (access and refresh tokens, unused codes) of these users. Used when a reload removes them."""
+        n = sum(1 for t in (self.access, self.refresh) for v in t.values() if v.get("user") in users)
+        self.access = {k: v for k, v in self.access.items() if v.get("user") not in users}
+        self.refresh = {k: v for k, v in self.refresh.items() if v.get("user") not in users}
+        self.codes = {k: v for k, v in self.codes.items() if v.subject not in users}
+        self._save()
+        return n
 
     def revoke_all(self) -> int:
         n = len(self.access) + len(self.refresh)

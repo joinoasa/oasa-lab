@@ -42,7 +42,7 @@ How to use it:
 
 # No pattern or range limits in the schemas on purpose: our own checks (jobs.py) run, and the audit log
 # records the refused call. The schema only types and describes.
-JobId = Annotated[str, Field(description="Job id (12 hex characters) from run_suite or job_status")]
+JobId = Annotated[str, Field(description="Job id (32 hex characters, the full id) from run_suite or job_status")]
 READ = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False)
 STOP = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False)

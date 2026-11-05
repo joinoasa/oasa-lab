@@ -434,3 +434,14 @@ def test_watch_job_asks_for_the_end_of_the_log_cheaply(make_service):
             err, w = await s.call("watch_job", job_id=done["id"], lines=2)
             assert not err and len(w["lines"]) == 2 and w["offset"] > 0
     run(go())
+
+
+def test_only_an_admin_may_pick_a_commit(svc, lab_repo):
+    """Review M2: a runner gets the head of the branch; naming a commit (even the head) is admin-only."""
+    head = subprocess.run(["git", "-C", str(lab_repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    with svc.client("bob") as c:
+        r = c.post("/api/jobs", json={"suite": "t-quick", "commit": head})
+        assert r.status_code == 403 and "only an admin" in r.json()["error"]
+        assert c.post("/api/jobs", json={"suite": "t-quick"}).status_code == 202
+    with svc.client() as c:
+        assert c.post("/api/jobs", json={"suite": "t-quick", "commit": head}).status_code == 202

@@ -17,7 +17,7 @@ ROLES = ("viewer", "runner", "admin")
 PERMISSIONS = {
     "viewer": {"read"},
     "runner": {"read", "run", "stop_own"},
-    "admin": {"read", "run", "stop_own", "stop_any", "pause"},
+    "admin": {"read", "run", "stop_own", "stop_any", "pause", "pick_commit"},   # pick_commit: run an older commit
 }
 from ..policy import DEFAULT_POLICY, NAME_RE, RF_SAFE, RF_SETUPS, Policy, PolicyError, load_policy  # noqa: F401
 

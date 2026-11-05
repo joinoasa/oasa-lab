@@ -37,7 +37,7 @@ import time
 from pathlib import Path
 
 from .gitsafe import GIT_SAFE, git_env
-from .policy import (DEFAULT_POLICY, JOB_ID_RE, MAX_SEED, SHA_RE, SUITE_RE, Policy, PolicyError, confirm_for_run,
+from .policy import (DEFAULT_POLICY, commit_floor, JOB_ID_RE, MAX_SEED, SHA_RE, SUITE_RE, Policy, PolicyError, confirm_for_run,
                      interlock, load_policy)
 from .service import files
 from .suites import parse_suite, suite_facts
@@ -128,9 +128,11 @@ def clone_commit(policy: Policy, commit: str, dest: str) -> None:
         raise Refused(f"the mirror has no {policy.branch} branch")
     if _git(policy, f"--git-dir={mirror}", "merge-base", "--is-ancestor", commit, ref, check=False).returncode != 0:
         raise Refused(f"commit {commit[:12]} is not on {policy.branch}")
-    if policy.min_commit and _git(policy, f"--git-dir={mirror}", "merge-base", "--is-ancestor", policy.min_commit,
-                                  commit, check=False).returncode != 0:
-        raise Refused(f"commit {commit[:12]} is older than the lowest commit this lab runs ({policy.min_commit[:12]})")
+    floor = commit_floor(policy)
+    if floor and _git(policy, f"--git-dir={mirror}", "merge-base", "--is-ancestor", floor,
+                      commit, check=False).returncode != 0:
+        raise Refused(f"commit {commit[:12]} is older than the lowest commit this lab runs ({floor[:12]}"
+                      f"{'' if policy.min_commit else ', the installed oasa-lab'}), or the mirror does not have it yet")
     _git(policy, "clone", "-q", "--no-checkout", "--no-hardlinks", "--template=", mirror, dest)
     _git(policy, "checkout", "-q", "--detach", commit, cwd=dest)
     if _git(policy, "rev-parse", "HEAD", cwd=dest).stdout.strip() != commit:

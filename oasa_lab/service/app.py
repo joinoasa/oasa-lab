@@ -14,6 +14,7 @@ from .api import build_routes
 from .audit import AuditLog, AuditMiddleware
 from .auth import Authenticator
 from .checkout import Checkouts
+from ..policy import installed_commit
 from .config import Config
 from .inventory import Inventory, make_inventory
 from .jobs import JobManager
@@ -55,7 +56,7 @@ class Lab:
         self.provider = LabOAuthProvider(cfg, self.audit, http)
         self.inventory = inventory or make_inventory(cfg)
         pol = cfg.policy   # systemd mode: the git mirror belongs to root's timer; we only read it
-        self.checkouts = Checkouts(cfg.repo, cfg.branch, cfg.state_dir / "git", cfg.min_commit,
+        self.checkouts = Checkouts(cfg.repo, cfg.branch, cfg.state_dir / "git", cfg.min_commit or installed_commit() or "",
                                   mirror=Path(pol.mirror) if pol else None, git_config=pol.git_config if pol else None)
         self.jobs = JobManager(cfg, self.checkouts, self.inventory, self.audit)
         self.checkouts.refresh = getattr(self.jobs.sandbox, "refresh_mirror", None)

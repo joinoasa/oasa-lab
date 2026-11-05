@@ -92,7 +92,7 @@ No crypto is invented here: PKCE, token checks and metadata come from the SDK; G
 | Two jobs fight over the radios | One job at a time, first in first out. |
 | A run goes wrong | Stop it (SIGTERM, then SIGKILL after `stop_grace_seconds`, whole cgroup). Or pause the lab (refuses new jobs, cancels the queue). Or from a shell `sudo touch /etc/oasa-lab/PAUSE`: any file or folder at that path pauses the lab, and no API or Claude call can remove it (`/var/lib/oasa-lab/state/PAUSE` works too, but the API can clear that one). Runs also have a time limit. |
 | Someone claims a result that did not happen | A run counts only if `get_results` shows `"counted": true`: job passed and checker passed. A stopped run is never counted. |
-| Someone asks for an old, vulnerable commit | `min_commit` in the policy file is the oldest commit a job may run. Both the service and `job-run` enforce it. |
+| Someone asks for an old, vulnerable commit | Only an admin may name a commit at all (`pick_commit`); everyone else runs the head of the branch. `min_commit` in the policy file is the oldest commit a job may run; left empty, it is the commit the service was installed from, so an upgrade retires older code (older radio code would otherwise run under today's wiring confirmations). Both the service and `job-run` enforce it. |
 | The disk fills | A job does not start below `min_free_mb`; only the newest `keep_jobs` finished jobs keep their evidence; log reads and live streams are capped. |
 | We need to know what happened | Audit log: one JSON line per request (who, what, when, result), no secrets. |
 
@@ -174,7 +174,7 @@ GET  /healthz                    (open; says only {"ok": true})
 ```
 
 ```
-TOKEN=...   # from: oasa-lab token owner-laptop --user citruscybersec
+TOKEN=...   # from: oasa-lab token owner-laptop --user owner
 curl -sH "Authorization: Bearer $TOKEN" -d '{"suite":"l1-channel"}' https://lab-api.example.com/api/jobs
 curl -sNH "Authorization: Bearer $TOKEN" "https://lab-api.example.com/api/jobs/<id>/log?follow=1"
 ```
@@ -210,8 +210,8 @@ Roles live in `oasa_lab/service/config.py` (`PERMISSIONS`). Restart the service 
 `/var/lib/oasa-lab/state/audit.jsonl`, one JSON object per line:
 
 ```
-{"ts":"2026-10-23T19:04:19.121Z","kind":"http","method":"POST","path":"/api/jobs","status":202,"actor":"citruscybersec","via":"api-token","remote":"203.0.113.9","action":"submit","suite":"l1-channel","job":"dfc81700af0c"}
-{"ts":"...","kind":"tool","tool":"run_suite","actor":"citruscybersec","via":"oauth","args":{"suite":"l1-channel","seed":1},"status":"ok","job":"dfc81700af0c"}
+{"ts":"2026-10-23T19:04:19.121Z","kind":"http","method":"POST","path":"/api/jobs","status":202,"actor":"owner","via":"api-token","remote":"203.0.113.9","action":"submit","suite":"l1-channel","job":"dfc81700af0c"}
+{"ts":"...","kind":"tool","tool":"run_suite","actor":"owner","via":"oauth","args":{"suite":"l1-channel","seed":1},"status":"ok","job":"dfc81700af0c"}
 {"ts":"...","kind":"job","event":"finished","job":"dfc81700af0c","status":"passed","check_ok":true}
 {"ts":"...","kind":"oauth","event":"login_denied","github_login":"stranger"}
 ```

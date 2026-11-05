@@ -11,6 +11,7 @@ a job transmit: the job side applies the owner's rules itself. The rules (`inter
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import stat
@@ -90,6 +91,24 @@ def _abs(value: object, what: str, allow_empty: bool = True) -> str:
     _need(os.path.isabs(value) and "\0" not in value and ".." not in value.split("/") and len(value) < 300,
           f"{what} must be a plain absolute path")
     return value
+
+
+def installed_commit() -> str | None:
+    """The oasa-lab commit this program was installed from (pip's direct_url.json for a git install), or None for
+    an editable or local install. With no `min_commit` in the policy it is the floor: a job never runs code older
+    than the service that decides on it, so an upgrade retires older suites and older radio code by itself."""
+    import importlib.metadata as md
+    try:
+        info = json.loads(md.distribution("oasa-lab").read_text("direct_url.json") or "{}")
+    except (md.PackageNotFoundError, ValueError, TypeError):
+        return None
+    sha = (info.get("vcs_info") or {}).get("commit_id")
+    return sha if isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha) else None
+
+
+def commit_floor(policy: "Policy") -> str:
+    """The oldest commit a job may run: the owner's `min_commit`, else the installed commit, else none ("")."""
+    return policy.min_commit or installed_commit() or ""
 
 
 def parse_policy(data: dict) -> Policy:

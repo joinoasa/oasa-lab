@@ -13,11 +13,9 @@ see `read_suites`) and, to judge evidence, a copy of the `suites/` folder (`expo
 from __future__ import annotations
 
 import asyncio
-import io
 import os
 import re
 import shutil
-import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -66,6 +64,9 @@ async def _git(*args: str, cwd: Path | None = None, timeout: float = 120, readab
 MAX_SUITE_TOML = 65536
 MAX_SUITES = 500
 LS_TREE_ENTRY = re.compile(rb"^(\d{6}) (\w+) ([0-9a-f]{40})\t(.+)$", re.S)
+LS_TREE_LONG = re.compile(rb"^(\d{6}) (\w+) ([0-9a-f]{40}) +(\d+|-)\t(.+)$", re.S)   # ls-tree -l
+MAX_EXPORT_BYTES = 200_000_000
+MAX_EXPORT_FILES = 20_000
 SUITE_TOML_PATH = re.compile(r"^suites/([a-z0-9][a-z0-9-]{0,63})/suite\.toml$")
 
 
@@ -171,53 +172,72 @@ class Checkouts:
         if not oids:
             return {}
         order = sorted(oids)
+        bodies = await self._blobs([oids[n] for n in order])
+        return {n: b for n, b in zip(order, bodies) if b is not None and len(b) <= MAX_SUITE_TOML}
+
+    async def _blobs(self, oids: list[str]) -> list[bytes | None]:
+        """The bytes of each blob, in order (None for anything that is not a blob), from `git cat-file --batch`."""
+        if not oids:
+            return []
         raw = await _git_bytes("cat-file", "--batch", cwd=self.mirror, global_config=self.git_config,
-                               stdin=("\n".join(oids[n] for n in order) + "\n").encode())
-        found: dict[str, bytes] = {}
+                               stdin=("\n".join(oids) + "\n").encode())
+        out: list[bytes | None] = []
         pos = 0
-        for name in order:
+        for _ in oids:
             nl = raw.find(b"\n", pos)
             if nl < 0:
-                break
+                out.append(None)
+                continue
             fields = raw[pos:nl].split()
             if len(fields) != 3 or fields[1] != b"blob" or not fields[2].isdigit():
+                out.append(None)
                 pos = nl + 1
                 continue
             size = int(fields[2])
             body = raw[nl + 1: nl + 1 + size]
             pos = nl + 1 + size + 1
-            if size <= MAX_SUITE_TOML and len(body) == size:
-                found[name] = body
-        return found
+            out.append(body if len(body) == size else None)
+        return out
 
     async def export_suites(self, sha: str, dest: Path) -> Path:
         """Write the `suites/` folder of a commit to `dest/suites` and return `dest`: plain files and folders only,
-        made by us. The independent checker reads suite.toml and the test names from it. No link is ever created."""
+        made by us. The independent checker reads suite.toml and the test names from it. No link is ever created.
+
+        Built from the commit's objects (`ls-tree`, `cat-file`), not `git archive`: an archive honours the
+        commit's own `.gitattributes` (export-ignore, export-subst), so a merged commit could make the checker's
+        copy differ from what ran."""
         if not SHA_RE.match(sha):
             raise CheckoutError("bad commit id")
-        tar_bytes = await _git_bytes("archive", "--format=tar", sha, "suites", cwd=self.mirror, global_config=self.git_config)
+        listing = await _git_bytes("ls-tree", "-r", "-z", "-l", "--full-tree", sha, "--", "suites", cwd=self.mirror,
+                                   global_config=self.git_config)
+        files: list[tuple[list[str], str]] = []
+        total = 0
+        for entry in listing.split(b"\0"):
+            m = LS_TREE_LONG.match(entry)
+            if not m or m.group(1) not in (b"100644", b"100755") or m.group(2) != b"blob":
+                continue                                   # links, submodules
+            try:
+                parts = m.group(5).decode("utf-8").split("/")
+            except UnicodeDecodeError:
+                continue
+            if parts[0] != "suites" or len(parts) < 2 or any(p in ("", ".", "..") or "\0" in p for p in parts):
+                continue
+            total += int(m.group(4))
+            if total > MAX_EXPORT_BYTES or len(files) >= MAX_EXPORT_FILES:
+                raise CheckoutError("the suites folder is too big")
+            files.append((parts, m.group(3).decode()))
+        bodies = await self._blobs([oid for _, oid in files])
         shutil.rmtree(dest, ignore_errors=True)
         dest.mkdir(parents=True, mode=0o755)
-        total = 0
-        with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tar:
-            for m in tar:
-                parts = m.name.rstrip("/").split("/")
-                if parts[0] != "suites" or any(p in ("", ".", "..") for p in parts) or "\0" in m.name:
-                    continue
-                target = dest.joinpath(*parts)
-                if m.isdir():
-                    target.mkdir(mode=0o755, parents=True, exist_ok=True)
-                elif m.isreg():
-                    total += m.size
-                    if total > 200_000_000:
-                        raise CheckoutError("the suites folder is too big")
-                    target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-                    src = tar.extractfile(m)
-                    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-                    with os.fdopen(fd, "wb") as out:
-                        shutil.copyfileobj(src, out)
+        for (parts, _), body in zip(files, bodies):
+            if body is None:
+                raise CheckoutError("could not read a file of the suites folder")
+            target = dest.joinpath(*parts)
+            target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)   # every folder here is ours
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, "wb") as out:
+                out.write(body)
         return dest
-
 
 _SUITES: dict[str, dict[str, dict]] = {}  # commit -> suites; a commit never changes
 REQ_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}(:[0-9]{1,2})?\Z")

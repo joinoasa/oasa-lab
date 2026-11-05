@@ -29,6 +29,10 @@ Wiring: [hardware-suites.md](hardware-suites.md) (`usrp`). Measured on this benc
 |---|---|---|---|
 | 1 | Linux VM: 4 vCPU, 6 GB RAM, 64 GB disk, Ubuntu 24.04 LTS, on an existing Proxmox host | $0 (existing host) | Runs the job service, UHD 4.6 (from Ubuntu), the evidence store. Decodes W1 at real time with all 4 cores |
 | 1 | Cloudflare Tunnel (free plan) | $0 | The only way in from the internet: the job service's API and the Claude connector, nothing else ([remote-lab.md](remote-lab.md)) |
+| 1 | A domain on Cloudflare DNS, two hostnames (connector, API) | existing domain | Public names for the tunnel ([deploy/README.md](../deploy/README.md) step 7) |
+| 1 | Cloudflare Zero Trust (free plan): an Access application on the API hostname | $0 | Email sign-in (or a service token for scripts) in front of the REST API and downloads |
+| 1 | GitHub OAuth app | $0 | Proves who signs in to the Claude connector; users are matched by numeric GitHub id |
+| 1 | WireGuard on the lab host and the owner's laptop | $0 | Maintenance only (SSH); never used by the service or by Claude |
 
 ## Software (all open, installed by `deploy/`)
 

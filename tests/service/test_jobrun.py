@@ -441,3 +441,50 @@ def test_a_full_run_writes_the_bundle_the_log_and_the_exit_file(bench):
     assert "tests:" in (res / "stdout.log").read_text()
     assert bench.exit_info(ID)["code"] == 0
     assert (res.stat().st_mode & 0o750) == 0o750
+
+
+def test_without_min_commit_the_installed_commit_is_the_floor(bench, spy, lab_repo, tmp_path, monkeypatch):
+    """Review M2: an older commit carries older radio code but would run under today's wiring confirmations.
+    With no min_commit, job-run refuses anything older than the installed oasa-lab; min_commit overrides it."""
+    from oasa_lab import policy as policy_mod
+    up = tmp_path / "up"
+    git("clone", "-q", str(lab_repo), str(up))
+    old = git("rev-parse", "HEAD", cwd=up)
+    (up / "z.txt").write_text("z")
+    git("add", "-A", cwd=up)
+    git("commit", "-q", "-m", "installed", cwd=up)
+    new = git("rev-parse", "HEAD", cwd=up)
+    git("--git-dir", str(bench.mirror), "fetch", "-q", "--force", str(up), "refs/heads/main:refs/heads/main")
+    monkeypatch.setattr(policy_mod, "installed_commit", lambda: new)
+    bench.write_policy()                          # min_commit = ""
+    bench.request(ID, commit=old)
+    assert job(bench) == jobrunner.EX_REFUSED
+    assert "the installed oasa-lab" in bench.exit_info(ID)["error"]
+    assert not spy
+    other = "4" * 32
+    bench.request(other, commit=new)
+    assert job(bench, other) == 0 and len(spy) == 1
+    # the owner may let older commits run again by naming a floor
+    bench.write_policy(min_commit=old)
+    third = "5" * 32
+    bench.request(third, commit=old)
+    assert job(bench, third) == 0 and len(spy) == 2
+
+
+def test_installed_commit_reads_a_git_install_only(monkeypatch):
+    import importlib.metadata as md
+    from oasa_lab import policy as policy_mod
+
+    class Dist:
+        def __init__(self, text):
+            self.text = text
+
+        def read_text(self, name):
+            return self.text
+    for text, want in (('{"url": "x", "vcs_info": {"vcs": "git", "commit_id": "%s"}}' % ("a" * 40), "a" * 40),
+                       ('{"url": "file:///src", "dir_info": {"editable": true}}', None),
+                       ('{"vcs_info": {"commit_id": "abc"}}', None), (None, None), ("not json", None)):
+        monkeypatch.setattr(md, "distribution", lambda name, t=text: Dist(t))
+        assert policy_mod.installed_commit() == want, text
+    pol = policy_mod.parse_policy({"lab": {"min_commit": "b" * 40}})
+    assert policy_mod.commit_floor(pol) == "b" * 40

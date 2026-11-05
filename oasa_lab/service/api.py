@@ -84,6 +84,10 @@ def build_routes(cfg: Config, jobs: JobManager, inventory: Inventory, auth: Auth
         unknown = set(body) - {"suite", "seed", "profile", "commit"}
         if unknown:
             raise JobError(400, f"unknown field(s): {', '.join(sorted(unknown))}")
+        if body.get("commit") is not None and not who.can("pick_commit"):
+            # An older commit carries older radio code (its TX gate, caps and clamps) but would run under today's
+            # wiring confirmations, so only an admin may choose one. Everyone else gets the head of the branch.
+            raise JobError(403, "only an admin may pick a commit; leave it out to run the head of the branch")
         audit.note(action="submit", suite=str(body.get("suite"))[:64], seed=body.get("seed", 0),
                    profile=body.get("profile"))
         job = await jobs.submit(who, body.get("suite"), body.get("seed", 0), body.get("profile"), body.get("commit"))

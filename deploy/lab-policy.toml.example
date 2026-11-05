@@ -13,8 +13,8 @@ simulated = false                      # true: run on the simulated bench (tryin
 # The hardware suites' device file (see lab.example.toml): serials, ports, cable losses. Jobs get it as OASA_LAB_INVENTORY.
 devices_file = "/etc/oasa-lab.d/lab.toml"
 branch = "main"                        # must match LAB_BRANCH in setup.env (the mirror follows that branch)
-# The oldest commit a job may run (a full 40-character id). Empty: any commit on the branch.
-# Set it when a suite or the checker is fixed and the older versions must not run any more.
+# The oldest commit a job may run (a full 40-character id). Empty: the commit oasa-lab was installed from, so
+# nothing older than the installed service runs. Set an older one to allow re-running older commits on purpose.
 min_commit = ""
 job_timeout_seconds = 1800             # the service stops a job here; job-run cuts it off 30 s later. At most 3600.
 stop_grace_seconds = 10                # SIGTERM, then SIGKILL after this long

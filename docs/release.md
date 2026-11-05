@@ -18,7 +18,7 @@ Rules for every node:
 | Docs | README, [hardware suites](hardware-suites.md), [remote lab](remote-lab.md), [checker](checker.md) | ✅ |
 | BOM | The bench as built, with parts, prices and what each does: [bench-bom.md](bench-bom.md) | ✅ (this PR) |
 | Test results | Counted runs on real hardware for every L2 suite the bench has gear for (`l2-rx-noise`, `l2-usrp-loopback`, `l2-waveform-w1`, `l2-e310-two-channel`), published in [results/](results/); L0–L1 green in CI | ✅ four counted hardware runs in [results/](results/README.md); L0–L1 green in CI |
-| Security review | Of the job service, the job sandbox, the TX interlock and the checker: [security-review.md](security-review.md) | ⬜ written (internal): no high findings; M1 and M2 to fix first |
+| Security review | Of the job service, the job sandbox, the TX interlock and the checker: [security-review.md](security-review.md) | ⬜ written (internal): no high findings; M2 fixed, M1 to fix first |
 | Training guide | From a laptop to a first counted run, and how to read the evidence: [training.md](training.md) | ✅ (this PR) |
 
 ## R-SEC1: Device identity, keys, pairing (oasa-sec)
@@ -58,7 +58,7 @@ Needs R-COM1 and R-SEC1 done first.
 
 ## Next
 
-1. T-BENCH1: fix the review's M1 (radios reachable from the service) and M2 (old commits under today's wiring confirmations). Then the owner marks it done, which unlocks T-BENCH2 (the remote autonomous lab, largely built already).
+1. T-BENCH1: fix the review's M1 (radios reachable from the service). Then the owner marks it done, which unlocks T-BENCH2 (the remote autonomous lab, largely built already).
 2. R-COM2: `l2-sdr-link` (in progress).
 3. R-SEC1: security review and guide in oasa-sec.
 4. R-COM1: needs a radio pair.

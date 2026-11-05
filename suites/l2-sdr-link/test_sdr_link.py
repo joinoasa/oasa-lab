@@ -22,6 +22,8 @@ RF_HZ = 915e6
 MTU = 200
 LINK_EXTRA = ["--keepalive-secs", "5"]
 N_A2B, N_B2A = 12, 6
+MSG_LEN = 80
+DATA_LEN = MSG_LEN + 22      # one message as a data packet: 22 bytes of link overhead with the 2-byte counter
 STATE: dict = {}
 
 
@@ -107,8 +109,8 @@ def test_encrypted_link_over_the_bench(lab, bench):
     assert up, "no session over the relay in 420 s; see logs/link-*.jsonl and the relay_cycle events"
     assert lab.measure("handshake_s", "handshake over the relay", hs, "s"), f"{hs} s"
     marker = lab.marker()
-    a2b = [f"{marker}|a2b|{i:03d}|".encode().ljust(80, b".") for i in range(N_A2B)]
-    b2a = [f"{marker}|b2a|{i:03d}|".encode().ljust(80, b".") for i in range(N_B2A)]
+    a2b = [f"{marker}|a2b|{i:03d}|".encode().ljust(MSG_LEN, b".") for i in range(N_A2B)]
+    b2a = [f"{marker}|b2a|{i:03d}|".encode().ljust(MSG_LEN, b".") for i in range(N_B2A)]
     # Alice first: per the link spec the responder (Bob) sends on a new session only after a data packet from the
     # initiator arrives on it (anything Bob sends before that is dropped as no_session, by design).
     bench["app_a"].send_paced(a2b, bench["a_plain"], batch=4, gap=0.05)
@@ -139,11 +141,13 @@ def test_encrypted_link_over_the_bench(lab, bench):
 
 
 def _carried_data(relay: RfRelay) -> bytes:
-    """A data packet Alice sent that the relay carried: the last one big enough to hold a message."""
-    big = [p for p in relay.legs["a2b"].carried if len(p) >= 80 + 22]
-    if not big:
+    """A data packet Alice sent that the relay carried: the last one exactly the size of a message. (Not just "a big
+    one": on the bench Alice also sends 119-byte handshake initiations after the session is up, and replaying one
+    of those tests the handshake's replay rule, `stale_handshake`, not the data path's.)"""
+    data = [p for p in relay.legs["a2b"].carried if len(p) == DATA_LEN]
+    if not data:
         pytest.fail("no data packet was carried a2b to work with")
-    return big[-1]
+    return data[-1]
 
 
 def test_replayed_packet_is_dropped(lab, bench):

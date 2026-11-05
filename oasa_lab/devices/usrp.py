@@ -130,10 +130,10 @@ class Usrp(Device):
         return shutil.which(name) or next(
             (str(p) for p in (Path(d) / name for d in EXAMPLE_DIRS) if p.is_file()), None)
 
-    def _run(self, cmd: list[str], timeout: float) -> str:
+    def _run(self, cmd: list[str], timeout: float, cwd: Path | None = None) -> str:
         try:
             r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               timeout=timeout)
+                               timeout=timeout, cwd=cwd)
         except subprocess.TimeoutExpired:
             raise DeviceError(f"{self.id}: {Path(cmd[0]).name} did not finish in {timeout:.0f} s") from None
         text = r.stdout.decode("utf-8", "replace")
@@ -316,27 +316,33 @@ class Usrp(Device):
         return {"underflows": sum(l.count("U") for l in self._tx_log if l.strip() and set(l.strip()) <= {"U"})}
 
     # --- what suites call ------------------------------------------------------------------------
-    def capture(self, center_hz: float, sample_rate: float, samples: int, gain_db: float = 40.0) -> IQ:
-        """Receive `samples` IQ pairs and return them in memory. `iq.datatype` and `iq.start_time` say how and when."""
-        center_hz, sample_rate, samples, gain_db = float(center_hz), float(sample_rate), int(samples), float(gain_db)
+    def _check_rx(self, sample_rate: float, samples: int, gain_db: float) -> None:
         if not 0 < sample_rate <= self.max_rx_rate:
             raise DeviceError(f"{self.id}: refused {sample_rate:g} S/s, max_rx_rate is {self.max_rx_rate:g}")
         if not 0 <= gain_db <= self.max_rx_gain:
             raise DeviceError(f"{self.id}: refused gain {gain_db:g} dB, max_rx_gain is {self.max_rx_gain:g}")
         if samples <= 0:
             raise DeviceError(f"{self.id}: samples must be above 0")
+
+    @staticmethod
+    def _retry_claim(fn: Any) -> Any:
+        for attempt in range(CLAIM_RETRIES + 1):
+            try:
+                return fn()
+            except DeviceError as exc:
+                if CLAIM_CLASH not in str(exc) or attempt == CLAIM_RETRIES:
+                    raise
+                time.sleep(CLAIM_WAIT_S)
+
+    def capture(self, center_hz: float, sample_rate: float, samples: int, gain_db: float = 40.0) -> IQ:
+        """Receive `samples` IQ pairs and return them in memory. `iq.datatype` and `iq.start_time` say how and when."""
+        center_hz, sample_rate, samples, gain_db = float(center_hz), float(sample_rate), int(samples), float(gain_db)
+        self._check_rx(sample_rate, samples, gain_db)
         seconds = samples / sample_rate
         if self.backend == "sim":
             data, ended = self._sim_capture(center_hz, sample_rate, samples, gain_db), time.time()
         else:
-            for attempt in range(CLAIM_RETRIES + 1):
-                try:
-                    data, ended = self._receive(center_hz, sample_rate, samples, gain_db, seconds)
-                    break
-                except DeviceError as exc:
-                    if CLAIM_CLASH not in str(exc) or attempt == CLAIM_RETRIES:
-                        raise
-                    time.sleep(CLAIM_WAIT_S)
+            data, ended = self._retry_claim(lambda: self._receive(center_hz, sample_rate, samples, gain_db, seconds))
         iq = IQ(data, self.datatype, sample_rate, center_hz)
         iq.start_time = ended - seconds  # type: ignore[attr-defined]
         return iq
@@ -366,35 +372,51 @@ class Usrp(Device):
 
     def _sim_capture(self, center_hz: float, fs: float, n: int, gain_db: float) -> bytes:
         """Noise, plus every simulated tone that reaches this receiver through a [wiring] path."""
+        return self._sim_capture_ports(center_hz, fs, n, gain_db, [self.rx_port])[0]
+
+    def _sim_capture_ports(self, center_hz: float, fs: float, n: int, gain_db: float, ports: list[str]) -> list[bytes]:
+        """One recording per receive port, sampled together: each tone has the same phase on every port it
+        reaches (plus the port's `sim.port_phase_deg`, the receiver's own channel offset); the noise is
+        independent per port."""
         rng = self.world.rng if self.world is not None else random.Random(1)
         sim = self.cfg.get("sim") or {}
         dbfs = float(sim.get("noise_dbfs", SIM_NOISE_DBFS_AT_0DB + gain_db))
         sigma = 10 ** (dbfs / 20) / math.sqrt(2)
         my_ppm = float(sim.get("xo_ppm", 0.0))
-        tones = []
+        port_phase = sim.get("port_phase_deg") or {}
+        tones: list[tuple[float, float, list[complex] | None, int, list[float | None]]] = []
         if self.world is not None:
             for src, t in list(self.world.tones.items()):
-                loss = self.world.path_loss_db(src, f"{self.id}:{self.rx_port}", default=math.inf)
-                if math.isinf(loss):
+                losses = [self.world.path_loss_db(src, f"{self.id}:{p}", default=math.inf) for p in ports]
+                if all(math.isinf(x) for x in losses):
                     continue
-                amp = 10 ** ((t["dbm"] - loss + gain_db + SIM_RX_K_DB) / 20)
                 f = t["rf_hz"] * (1 + t["ppm"] * 1e-6) - center_hz * (1 + my_ppm * 1e-6)
                 if abs(f) < fs / 2:
                     iq = t.get("iq")
                     if iq is not None and float(t["fs"]) != fs:
                         continue   # a different sample rate: not modelled, the receiver sees noise only
-                    tones.append((amp, 2 * math.pi * f / fs, rng.uniform(0, 2 * math.pi), iq,
-                                  rng.randrange(len(iq)) if iq else 0))
-        out = []
-        for k in range(n):
-            v = complex(rng.gauss(0, sigma), rng.gauss(0, sigma))
-            for amp, w, ph, iq, start in tones:
-                rot = cmath.exp(1j * (w * k + ph))
-                v += amp * rot * (iq[(start + k) % len(iq)] if iq is not None else 1.0)
-            out.append(v)
-        if self.datatype == "cf32_le":
-            return array("f", (c for v in out for c in (v.real, v.imag))).tobytes()
-        return array("h", (max(-32768, min(32767, round(c * 32767))) for v in out for c in (v.real, v.imag))).tobytes()
+                    ph, start = rng.uniform(0, 2 * math.pi), (rng.randrange(len(iq)) if iq else 0)
+                    amps = [None if math.isinf(x) else 10 ** ((t["dbm"] - x + gain_db + SIM_RX_K_DB) / 20)
+                            for x in losses]
+                    tones.append((2 * math.pi * f / fs, ph, iq, start, amps))
+        outs = []
+        for i, port in enumerate(ports):
+            offset = math.radians(float(port_phase.get(port, 0.0)))
+            out = []
+            for k in range(n):
+                v = complex(rng.gauss(0, sigma), rng.gauss(0, sigma))
+                for w, ph, iq, start, amps in tones:
+                    if amps[i] is None:
+                        continue
+                    rot = cmath.exp(1j * (w * k + ph + offset))
+                    v += amps[i] * rot * (iq[(start + k) % len(iq)] if iq is not None else 1.0)
+                out.append(v)
+            if self.datatype == "cf32_le":
+                outs.append(array("f", (c for v in out for c in (v.real, v.imag))).tobytes())
+            else:
+                outs.append(array("h", (max(-32768, min(32767, round(c * 32767)))
+                                        for v in out for c in (v.real, v.imag))).tobytes())
+        return outs
 
 
 class B200Mini(Usrp):
@@ -425,9 +447,57 @@ class E310(Usrp):
     default_tx_port = "trx-a"
     default_tx_subdev = "A:0"     # TX on side A, port TRX-A
 
+    pair_ports = ("rx2-a", "rx2-b")   # channels 0 and 1 of subdev "A:0 A:1"
+
     @property
     def rx_port(self) -> str:
         return str(self.cfg.get("rx_port", "rx2-b" if int(self.cfg.get("channel", 0)) == 1 else "rx2-a"))
+
+    def capture_pair(self, center_hz: float, sample_rate: float, samples: int,
+                     gain_db: float = 40.0) -> tuple[IQ, IQ]:
+        """Both receive channels in one stream, sample for sample: (RX2-A, RX2-B), same gain on both.
+
+        One `rx_samples_to_file --channels 0,1` run. UHD 4.6 writes each channel to `ch<N>_<file>`, with the
+        prefix on the whole path, so the tool runs in the temporary folder with a bare file name.
+        """
+        center_hz, sample_rate, samples, gain_db = float(center_hz), float(sample_rate), int(samples), float(gain_db)
+        self._check_rx(sample_rate, samples, gain_db)
+        seconds = samples / sample_rate
+        if self.backend == "sim":
+            datas, ended = self._sim_capture_ports(center_hz, sample_rate, samples, gain_db, list(self.pair_ports)), time.time()
+        else:
+            datas, ended = self._retry_claim(lambda: self._receive_pair(center_hz, sample_rate, samples, gain_db, seconds))
+        out = []
+        for d in datas:
+            iq = IQ(d, self.datatype, sample_rate, center_hz)
+            iq.start_time = ended - seconds  # type: ignore[attr-defined]
+            out.append(iq)
+        return out[0], out[1]
+
+    def pair_command(self, center_hz: float, sample_rate: float, samples: int, gain_db: float) -> list[str]:
+        return [str(self._rx_tool), "--args", self.device_args(), "--file", "pair.iq", "--type", "short",
+                "--nsamps", str(samples), "--rate", f"{sample_rate:.0f}", "--freq", f"{center_hz:.0f}",
+                "--gain", f"{gain_db:g}", "--ant", str(self.cfg.get("antenna", self.default_antenna)),
+                "--channels", "0,1", "--subdev", "A:0 A:1"]
+
+    def _receive_pair(self, center_hz: float, fs: float, n: int, gain: float, seconds: float) -> tuple[list[bytes], float]:
+        assert self._tmp is not None
+        files = [self._tmp / f"ch{i}_pair.iq" for i in (0, 1)]
+        for f in files:
+            f.unlink(missing_ok=True)
+        text = self._run(self.pair_command(center_hz, fs, n, gain), START_TIMEOUT_S + seconds * 2, cwd=self._tmp)
+        ended = time.time()
+        if re.search(r"overflow|^[ODS]+\s*$|\bLate\b|ERROR_CODE", text, re.IGNORECASE | re.MULTILINE):
+            raise DeviceError(f"{self.id}: samples were lost at {fs:g} S/s: {text.strip()[-200:]}")
+        per_sample = DATATYPES[self.datatype]
+        datas = []
+        for f in files:
+            if not f.is_file() or f.stat().st_size != per_sample * n:
+                size = f.stat().st_size if f.is_file() else 0
+                raise DeviceError(f"{self.id}: asked for {n} samples on {f.name}, got {size / per_sample:g}")
+            datas.append(f.read_bytes())
+            f.unlink()
+        return datas, ended
 
     def device_args(self) -> str:
         addr = self.cfg.get("addr")

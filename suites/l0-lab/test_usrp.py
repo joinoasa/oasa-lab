@@ -60,7 +60,12 @@ def uhd(tmp_path, monkeypatch):
             print("Error: no device"); sys.exit(1)
         if mode == "short":
             n //= 2
-        open(a[a.index("--file") + 1], "wb").write(bytes(4 * n))
+        chans = a[a.index("--channels") + 1].split(",")
+        if len(chans) == 1:
+            open(a[a.index("--file") + 1], "wb").write(bytes(4 * n))
+        else:   # UHD 4.6: ch<N>_ in front of the whole --file string, so relative to the working folder
+            for i in range(len(chans) if mode != "onefile" else 1):
+                open(f"ch{i}_" + a[a.index("--file") + 1], "wb").write(bytes([i + 1]) * (4 * n))
         print({"overflow": "Got an overflow indication.", "letters": "OOO"}.get(mode, "Done!"))
     '''))
     tool(tmp_path, "rx_samples_c", logline + textwrap.dedent('''
@@ -370,3 +375,69 @@ def test_rate_and_gain_limits_never_reach_the_tool(uhd):
 def test_lab_toml_can_raise_the_rate_once_proven(uhd):
     with radio("e310", max_rx_rate=4e6) as dev:
         assert dev.capture(915e6, 4e6, 1000).n == 1000
+
+
+def test_e310_pair_capture_is_one_two_channel_stream(uhd):
+    with radio("e310", subdev="A:0 A:1", channel=1) as dev:
+        a, b = dev.capture_pair(915e6, 1e6, 1000, gain_db=40)
+    line = uhd.read_text().splitlines()[-1]
+    for part in ("--channels 0,1", "--subdev A:0 A:1", "--file pair.iq", "--type short", "--gain 40", "--ant RX2"):
+        assert part in line
+    assert a.n == b.n == 1000 and a.start_time == b.start_time
+    assert a.data == bytes([1]) * 4000 and b.data == bytes([2]) * 4000      # channel 0 is RX2-A, 1 is RX2-B
+
+
+@pytest.mark.parametrize("mode,message", [("overflow", "samples were lost"), ("short", "got 500"),
+                                          ("onefile", "ch1_pair.iq, got 0"), ("fail", "no device")])
+def test_pair_capture_losses_are_errors(uhd, monkeypatch, mode, message):
+    monkeypatch.setenv("FAKE_RX", mode)
+    with radio("e310") as dev:
+        with pytest.raises(DeviceError, match=message):
+            dev.capture_pair(915e6, 1e6, 1000)
+
+
+def test_pair_capture_limits_never_reach_the_tool(uhd):
+    with radio("e310") as dev:
+        with pytest.raises(DeviceError, match="refused"):
+            dev.capture_pair(915e6, 2e6, 1000)
+    assert "rx_samples" not in uhd.read_text()
+
+
+def _pair_bench(wiring_paths, port_phase):
+    import copy
+    d = copy.deepcopy(DEFAULT_SIM)
+    d["devices"]["e3100"].setdefault("sim", {})["port_phase_deg"] = port_phase
+    d["wiring"]["usrp"]["paths"] = wiring_paths
+    inv = Inventory.from_dict(d, "test", force_sim=True)
+    world = SimWorld(5, inv.wiring)
+    return (make_device(i, inv, None, world).open() for i in ("b2000", "e3100"))
+
+
+def test_simulated_pair_sees_one_tone_with_the_channel_offset():
+    from oasa_lab.usrptest import cross
+    split = [{"name": "b200-a", "from": "b2000:tx/rx", "to": "e3100:rx2-a", "loss_db": 63.5},
+             {"name": "b200-b", "from": "b2000:tx/rx", "to": "e3100:rx2-b", "loss_db": 63.5}]
+    b200, e310 = _pair_bench(split, {"rx2-a": 0.0, "rx2-b": 37.0})
+    b200.tx_tone(915e6, 1e5, 40, 0.3, 1e6)
+    a, b = e310.capture_pair(915e6, 1e6, 16384, gain_db=40)
+    b200.tx_off()
+    x = cross(a, b)
+    # coherence = snr / (1 + snr) for equal channels; the tone is near 0 dB SNR here
+    assert abs(x["phase_deg"] - 37.0) < 1.0 and x["coherence"] > 0.2, x
+    off = cross(*e310.capture_pair(915e6, 1e6, 16384, gain_db=40))
+    assert off["coherence"] < 0.05, off                       # independent noise once the tone is off
+
+
+def test_simulated_pair_on_the_usrp_wiring_hears_the_tone_on_rx2_b_only():
+    from oasa_lab.iq import tone_report
+    from oasa_lab.usrptest import cross, level_at_dbfs
+    inv = Inventory.from_dict(DEFAULT_SIM, "test", force_sim=True)
+    world = SimWorld(3, inv.wiring)
+    b200, e310 = (make_device(i, inv, None, world).open() for i in ("b2000", "e3100"))
+    b200.tx_tone(915e6, 1e5, 40, 0.3, 1e6)
+    a, b = e310.capture_pair(915e6, 1e6, 16384, gain_db=40)
+    b200.tx_off()
+    f = tone_report(b)["freq_hz"]
+    assert level_at_dbfs(b, f) - level_at_dbfs(a, f) > 30
+    assert abs(level_at_dbfs(b, f) - tone_report(b)["tone_dbfs"]) < 0.5      # one DFT bin reads the tone's power
+    assert cross(a, a)["coherence"] > 0.999                                  # one channel twice: what the suite catches

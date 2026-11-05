@@ -1,0 +1,62 @@
+description = "Both E310 receive channels in one stream, the first step of direction finding (oasa-radio#7): a B200mini tone over the 60 dB cable to RX2-B, recorded on RX2-A and RX2-B together. The two channels stream without loss, are independent noise with the transmitter off (not one channel written twice), have matching noise floors, RX2-A hears the tone far below RX2-B (channel isolation), and oasa-radio waveform df reads the same phase and coherence as the lab's own sum (needs a B200mini, an E310 and OASA_RADIO_BIN_DIR)"
+expectations = [
+  "test_wired_channel_hears_the_tone",
+  "test_channel_isolation",
+  "test_channels_are_independent_without_signal",
+  "test_noise_floors_match",
+  "test_waveform_df_agrees",
+]
+transmits = true
+requires = ["b200", "e310"]
+wiring = "usrp"
+
+# "est." = a first guess, to tune as runs come in. First two-channel capture (2026-11-04, no TX): noise floors
+# 0.39 dB apart, coherence 0.002 to 0.010 over 34000 samples.
+
+[limits.rx_level_dbfs]
+min = -100.0
+max = -20.0
+reason = """Tone level on RX2-B, the wired channel, at TX gain 40, RX gain 40, amplitude 0.3: as l2-usrp-loopback
+(first bench -66 dBFS). Below -100 the tone is lost; above -20 the path has far less than 60 dB."""
+
+[limits.tone_snr_db]
+min = -10.0
+max = 200.0
+reason = "Tone against the total noise in the 1 MHz band on RX2-B, as l2-usrp-loopback (first bench about +3 dB). est."
+
+[limits.channel_isolation_db]
+min = 20.0
+max = 200.0
+reason = """Tone level on RX2-B minus the level at the same frequency on RX2-A, which has no cable (one Hann-windowed
+DFT bin each). Measures leakage between the two receive chains, or, when the leak is below the noise, a lower bound
+(the noise in one bin is about 48 dB under this tone). Under 20 dB the second channel is not independent enough for
+direction finding, or the cable is on the wrong port. est."""
+
+[limits.noise_coherence]
+min = 0.0
+max = 0.05
+reason = """|mean(b conj(a))| / sqrt(pa pb) with the transmitter off. Independent noise gives about 1/sqrt(N) (0.004
+for 70000 samples). Near 1 means one channel was written twice, or both see the same interference. The known-bad
+case: a driver that streams one channel into both files."""
+
+[limits.noise_balance_db]
+min = -3.0
+max = 3.0
+reason = """RX2-B minus RX2-A noise power, transmitter off, same RX gain. First capture 0.39 dB. More than 3 dB means
+one chain is set differently (gain, port) or damaged. est."""
+
+[limits.df_phase_agreement_deg]
+min = 0.0
+max = 0.05
+reason = """oasa-radio waveform df against the lab's own sum, on the same recording (tone on): the phase must agree.
+Both compute angle(mean(b conj(a))); the difference is float rounding (f32 samples), far under 0.05 degrees."""
+
+[limits.df_coherence_agreement]
+min = 0.0
+max = 0.0001
+reason = "The same comparison for the coherence. Rounding only."
+
+[limits.tx_underflows]
+min = 0
+max = 0
+reason = "The transmit tool reported no underflows (U)."

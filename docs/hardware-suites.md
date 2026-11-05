@@ -9,9 +9,10 @@ The first suites that use real radios on cables. They are written and tested on 
 | `l2-rf-control` | Negative control: a plaintext LoRa packet **is** found by the same air check | 2 Heltec modems, RTL-SDR |
 | `l2-rx-noise` | Receive only: each radio is alive and its input is quiet, and the E310 draws normal power. Transmits nothing and only reads the supply | B200mini, E310, KORAD |
 | `l2-waveform-w1` | OASA's W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK: BER at a measured Eb/N0 within 1 dB of theory; noise gives no frames, the wrong demodulator passes no CRC | B200mini, E310, `oasa-radio` |
+| `l2-e310-two-channel` | Both E310 receive channels in one stream (direction finding, step 1): no lost samples, independent noise and matching floors with the transmitter off, channel isolation, and `oasa-radio waveform df` agrees with the lab's own phase sum | B200mini, E310, `oasa-radio` |
 | `l2-usrp-loopback` | A tone each way between a B200mini and an E310 over cable: the level follows the TX gain, the crystal offset is in spec and mirrors between directions, and the tone stops when the transmitter does | B200mini, E310 |
 
-> **Safety. Never connect two transmitters, or a transmitter and a receiver, by coax without at least 60 dB of attenuation between them.** Receive-only gear (the RTL-SDR) needs 40 dB. Fixed attenuators first, then cables. Check the wiring against the diagrams below before every transmitting run. The lab refuses to transmit on real hardware until you type the wiring name: `--confirm-wiring NAME`. The checker fails any bundle whose declared paths are below the limits. Radiating over the air is not part of L2.
+> **Safety. Never connect two transmitters, or a transmitter and a receiver, by coax without at least 60 dB of attenuation between them.** Receive-only gear (the RTL-SDR) needs 40 dB. Fixed attenuators first, then cables. Check the wiring against the diagrams below before every transmitting run. The lab refuses to transmit on real hardware until you type the wiring name: `--confirm-wiring NAME`. The checker fails any bundle whose declared paths are below the limits. Radiating over the air only in suites with `radiates = true` (see *Over the air* below).
 
 ## The simulated bench
 
@@ -201,6 +202,19 @@ gain. At the last gain it measures the level, the SNR and where the tone landed;
 records again: the tone must be gone (the known-bad case). The two directions' crystal offsets must add up to
 about zero. The transmitter is a `tx_waveforms` process; it also stops by itself after `max_tx_seconds` (60 s), and
 `close()` stops it in any case. Limits and their reasons: the suite's `suite.toml`.
+
+### `l2-e310-two-channel`
+
+Both E310 receive channels in one UHD stream (`E310.capture_pair`: `rx_samples_to_file --channels 0,1 --subdev
+"A:0 A:1"`, which writes `ch0_` and `ch1_` files), the first step of direction finding (oasa-radio#7). On the
+`usrp` cables the B200mini's tone reaches RX2-B only, so the suite measures what can be measured without a splitter:
+the tone on RX2-B, how far below it RX2-A hears the same frequency (channel isolation, or a lower bound set by the
+noise), that the two channels are independent noise with the transmitter off (coherence about 1/sqrt(N); a driver
+writing one channel twice gives 1), that their noise floors match, and that `oasa-radio waveform df` gives the
+same phase and coherence as the lab's own `r = mean(b conj(a))` on the same recording. All four recordings are
+saved. With a splitter feeding both channels (a later wiring) the same capture measures the channels' phase
+offset, the calibration for direction finding. The simulated bench gives each port its own noise and a
+configurable channel offset (`sim.port_phase_deg`).
 
 ### `l2-waveform-w1`
 

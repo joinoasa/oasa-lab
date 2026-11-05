@@ -249,6 +249,22 @@ def test_the_suites_copy_for_the_checker_has_plain_files_only(tmp_path):
     assert not any(p.is_symlink() for p in (root / "suites").rglob("*")), "a link in the commit is not copied"
 
 
+def test_the_suites_copy_ignores_the_commits_gitattributes(tmp_path):
+    """I4: `git archive` honours in-tree .gitattributes, so a commit could hide a test from the checker or
+    rewrite a file in its copy. The copy is built from the objects, byte for byte."""
+    test = "def test_a(): pass\n# $Format:%H$\n"
+    repo, sha = _suite_repo(tmp_path, {"ok": 'description = "fine"\n'}, {
+        "suites/ok/test_a.py": test, "suites/ok/test_hidden.py": "def test_b(): pass\n",
+        ".gitattributes": "suites/ok/test_hidden.py export-ignore\nsuites/ok/test_a.py export-subst\n",
+        "suites/.gitattributes": "* export-ignore\n"})
+    cks = Checkouts(str(repo), "main", tmp_path / "git")
+    run(cks.at(sha))
+    root = run(cks.export_suites(sha, tmp_path / "judge"))
+    ok = root / "suites" / "ok"
+    assert (ok / "test_hidden.py").is_file() and (ok / "suite.toml").is_file()
+    assert (ok / "test_a.py").read_text() == test
+
+
 def test_the_service_does_not_keep_a_second_suite_parser():
     src = (ROOT / "oasa_lab" / "service" / "checkout.py").read_text()
     assert "tomllib" not in src

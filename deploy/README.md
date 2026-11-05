@@ -147,7 +147,7 @@ Optional hardening: a Cloudflare WAF rule on the MCP hostname that blocks `/mcp`
 | Close the internet door | `sudo systemctl stop cloudflared` |
 | Everything off | `sudo systemctl disable --now oasa-lab cloudflared` |
 | Cut off Claude only | Claude: remove the connector. PC: delete `/var/lib/oasa-lab/state/oauth.json` and restart the service |
-| Look at what happened | `less /var/lib/oasa-lab/audit.jsonl`, `journalctl -u oasa-lab` |
+| Look at what happened | `less /var/lib/oasa-lab/state/audit.jsonl`, `journalctl -u oasa-lab` |
 
 ## Files here
 

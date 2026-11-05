@@ -216,6 +216,11 @@ jobs:
           set -euo pipefail
           OASA_LAB_SIM=1 OASA_RADIO_BIN_DIR="$GITHUB_WORKSPACE/oasa-radio/target/debug" \
             oasa-lab run l2-waveform-w1 --out runs | tee -a "$RUNNER_TEMP/run.txt"
+      - name: Run l2-e310-two-channel on the simulated bench
+        run: |
+          set -euo pipefail
+          OASA_LAB_SIM=1 OASA_RADIO_BIN_DIR="$GITHUB_WORKSPACE/oasa-radio/target/debug" \
+            oasa-lab run l2-e310-two-channel --out runs | tee -a "$RUNNER_TEMP/run.txt"
       - name: Show the summary
         if: always()
         run: cat runs/*/summary.md >> "$GITHUB_STEP_SUMMARY" || true

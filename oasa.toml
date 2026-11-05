@@ -115,6 +115,22 @@ required = false
 repos = ["oasa-sec", "oasa-radio"]
 needs = ["both built with cargo build --locked --bins"]
 
+[[check]]
+name = "l2-sdr-link"
+run = 'OASA_SEC_BIN_DIR="${OASA_SEC_BIN_DIR:-$OASA_ROOT_OASA_SEC/target/debug}" OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-$OASA_ROOT_OASA_RADIO/target/debug}" .venv/bin/oasa-lab run l2-sdr-link'
+env = { OASA_LAB_SIM = "1" }
+required = false
+repos = ["oasa-sec", "oasa-radio"]
+needs = ["both built with cargo build --locked --bins"]
+
+[[check]]
+name = "l2-sdr-control"
+run = 'OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-$OASA_ROOT_OASA_RADIO/target/debug}" .venv/bin/oasa-lab run l2-sdr-control'
+env = { OASA_LAB_SIM = "1" }
+required = false
+repos = ["oasa-radio"]
+needs = ["oasa-radio built with cargo build --locked --bins"]
+
 # The suites, by what they need. hardware = true means the real run needs gear on the bench;
 # with OASA_LAB_SIM=1 they run on the simulated bench without it.
 [[lab]]
@@ -147,6 +163,30 @@ hardware = true
 suite = "l2-lora-link"
 hardware = true
 
+[[lab]]
+suite = "l2-rx-noise"
+hardware = true
+
+[[lab]]
+suite = "l2-usrp-loopback"
+hardware = true
+
+[[lab]]
+suite = "l2-waveform-w1"
+hardware = true
+
+[[lab]]
+suite = "l2-e310-two-channel"
+hardware = true
+
+[[lab]]
+suite = "l2-sdr-link"
+hardware = true
+
+[[lab]]
+suite = "l2-sdr-control"
+hardware = true
+
 [hardware]
 needed = false
-optional = ["ADALM-Pluto+", "RTL-SDR V4L", "2x Heltec LoRa V3"]
+optional = ["Ettus B200mini", "Ettus USRP E310", "KORAD KA3005P", "ADALM-Pluto+", "RTL-SDR V4L", "2x Heltec LoRa V3"]

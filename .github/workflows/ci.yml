@@ -171,6 +171,15 @@ jobs:
           OASA_SEC_BIN_DIR="$GITHUB_WORKSPACE/oasa-sec/target/debug" \
           OASA_RADIO_BIN_DIR="$GITHUB_WORKSPACE/oasa-radio/target/debug" \
             oasa-lab run l2-lora-link --out runs | tee "$RUNNER_TEMP/run.txt"
+      - name: Run l2-sdr-link and l2-sdr-control on the simulated bench
+        run: |
+          set -euo pipefail
+          for s in l2-sdr-link l2-sdr-control; do
+            OASA_LAB_SIM=1 \
+            OASA_SEC_BIN_DIR="$GITHUB_WORKSPACE/oasa-sec/target/debug" \
+            OASA_RADIO_BIN_DIR="$GITHUB_WORKSPACE/oasa-radio/target/debug" \
+              oasa-lab run "$s" --out runs | tee -a "$RUNNER_TEMP/run.txt"
+          done
       - name: Show the summary
         if: always()
         run: cat runs/*/summary.md >> "$GITHUB_STEP_SUMMARY" || true

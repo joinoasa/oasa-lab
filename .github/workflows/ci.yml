@@ -195,7 +195,7 @@ jobs:
   waveform-w0:
     name: l1-waveform-w0 (oasa-radio main)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:

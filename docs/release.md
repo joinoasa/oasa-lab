@@ -51,14 +51,14 @@ Needs R-COM1 and R-SEC1 done first.
 |---|---|---|
 | Build | `oasa-link` builds and CI is green | ✅ |
 | Docs | [Link spec v0](https://github.com/joinoasa/oasa-sec/blob/main/docs/oasa-sec-v0-link.md) | ✅ |
-| BOM | The radios the results used | ⬜ |
-| Test results | `l1-oasa-link` counted (loss, reorder, replay, attacker, rekey); the link over at least one real radio counted with ciphertext-only air: `l2-sdr-link` on the SDR bench ([sdr-link.md](sdr-link.md)) and over the R-COM1 radio | ⬜ L1 in CI; L2 not built yet |
+| BOM | The radios the results used | ⬜ SDR bench: [bench-bom.md](bench-bom.md); the R-COM1 radio pair to add |
+| Test results | `l1-oasa-link` counted (loss, reorder, replay, attacker, rekey); the link over at least one real radio counted with ciphertext-only air: `l2-sdr-link` on the SDR bench ([sdr-link.md](sdr-link.md)) and over the R-COM1 radio | ⬜ L1 in CI; **SDR bench counted** ([l2-sdr-link](results/l2-sdr-link-0e21d0f8787f.md)); the R-COM1 radio still to do |
 | Security review | Of the link protocol and implementation, in oasa-sec | ⬜ |
 | Training guide | Encrypted MAVLink (or any UDP) between two machines over a radio | ⬜ |
 
 ## Next
 
 1. T-BENCH1: fix the review's M1 (radios reachable from the service). Then the owner marks it done, which unlocks T-BENCH2 (the remote autonomous lab, largely built already).
-2. R-COM2: `l2-sdr-link` (in progress).
+2. R-COM2: `l2-sdr-link` counted on the SDR bench; next the link over the R-COM1 radio, then the security review and guide.
 3. R-SEC1: security review and guide in oasa-sec.
 4. R-COM1: needs a radio pair.

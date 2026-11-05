@@ -136,8 +136,61 @@ def test_driver_records_firmware_and_settings_and_refuses_no_sik():
         mav = {**info, "expect": {}, "settings": {**info["settings"], "MAVLINK": 1}}
         assert "MAVLINK" in " ".join(_device_errors([mav], None)[0])
         assert "record its settings" in " ".join(_device_errors([{**info, "settings": {}}], None)[0])
+        no_mav = {k: v for k, v in info["settings"].items() if k != "MAVLINK"}
+        assert "no MAVLINK" in " ".join(_device_errors([{**info, "expect": {}, "settings": no_mav}], None)[0])
+        real = {**info, "backend": "hardware", "serial": "A1", "firmware": "SiK 2.2 on HM-TRP"}
+        assert not _device_errors([real], None)[0]
+        assert "at least NETID and MAVLINK" in " ".join(_device_errors([{**real, "expect": {}}], None)[0])
+        assert "at least NETID and MAVLINK" in " ".join(_device_errors([{**real, "expect": {"NETID": 4242}}], None)[0])
         real = {**info, "backend": "hardware", "firmware": "n/a"}
         assert "firmware" in " ".join(_device_errors([real], None)[0])
         d.close()
     finally:
         world.close()
+
+
+def test_a_radio_that_starts_mismatched_fails_the_settings_check():
+    """The simulated radios start from lab.toml's expectation; a [sim] table makes one differ. Then the suite's
+    check and the checker must both say no."""
+    from oasa_lab.siklink import settings_problems
+    import copy
+    data = copy.deepcopy(DEFAULT_SIM)
+    data["devices"]["sik_b"]["sim"] = {"NETID": 25, "MAVLINK": 1}
+    inv = Inventory.from_dict(data, "test", force_sim=True)
+    world = SimWorld(3, inv.wiring)
+    try:
+        a = make_device("sik_a", inv, SimHub(inv.hub), world).open()
+        b = make_device("sik_b", inv, SimHub(inv.hub), world).open()
+        problems = " ".join(settings_problems(a, b))
+        assert "sik_b does not have the settings" in problems and "MAVLINK framing must be off" in problems
+        assert "NETID is the SiK default" in problems and "cannot link: ['NETID']" in problems
+        errs = " ".join(_device_errors([a.info(), b.info()], None)[0])
+        assert "did not have the declared settings" in errs and "cannot link: NETID" in errs
+        assert not settings_problems(a, a)
+    finally:
+        world.close()
+
+
+def test_lower_setting_never_raises_power():
+    from oasa_lab.siklink import lower_setting
+    assert lower_setting({"TXPOWER": 20}) == ("TXPOWER", 17)
+    assert lower_setting({"TXPOWER": 11}) == ("TXPOWER", 8)
+    assert lower_setting({"TXPOWER": 2}) == ("TXPOWER", 1)
+    assert lower_setting({"TXPOWER": 1, "DUTY_CYCLE": 100}) == ("DUTY_CYCLE", 90)
+
+
+def test_reboot_unsaved_puts_back_a_remote_change(pair):
+    a, b = pair("a"), pair("b")
+    sikat.remote(b, ["RTS4=11"])
+    assert a.params["TXPOWER"] == 11
+    sikat.reboot_unsaved(a)
+    time.sleep(1.2)
+    assert sikat.read_report(a).settings["TXPOWER"] == 20 and a.reboots == 1
+
+
+def test_ok_after_air_bytes_and_banner():
+    assert sikat.ok_after_escape(b"\x9f\x01air bytes" + b"OK\r\n")
+    assert not sikat.ok_after_escape(b"+++")
+    assert sikat.parse_ati(b"ATI\r\nOK\r\nRFD SiK 2.65 on RFD900X\r\n") == "RFD SiK 2.65 on RFD900X"
+    with pytest.raises(sikat.AtError):
+        sikat.parse_ati(b"ATI\r\nsomething else\r\n")

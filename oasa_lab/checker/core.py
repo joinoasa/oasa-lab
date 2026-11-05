@@ -769,8 +769,12 @@ def _sik_errors(tag: str, d: dict) -> list[str]:
         return [f"{tag}: expect must be NAME: value"]
     bad = [f"{k} is {st.get(k)}, expected {v}" for k, v in sorted(ex.items()) if st.get(k) != v]
     errs = [f"{tag}: the radio did not have the declared settings: {'; '.join(bad)}"] if bad else []
-    if st.get("MAVLINK") not in (None, 0):
-        errs.append(f"{tag}: MAVLINK framing was on ({st.get('MAVLINK')}); the bridge needs transparent bytes (0)")
+    if "MAVLINK" not in st:
+        errs.append(f"{tag}: the recorded settings have no MAVLINK; the bridge needs it reported as 0")
+    elif st["MAVLINK"] != 0:
+        errs.append(f"{tag}: MAVLINK framing was on ({st['MAVLINK']}); the bridge needs transparent bytes (0)")
+    if d.get("backend") == "hardware" and not {"NETID", "MAVLINK"} <= set(ex):
+        errs.append(f"{tag}: a real SiK radio needs lab.toml to expect at least NETID and MAVLINK ([devices.ID.sik])")
     return errs
 
 

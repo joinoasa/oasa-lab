@@ -116,6 +116,22 @@ repos = ["oasa-sec", "oasa-radio"]
 needs = ["both built with cargo build --locked --bins"]
 
 [[check]]
+name = "l2-sik-link"
+run = 'OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-$OASA_ROOT_OASA_RADIO/target/debug}" .venv/bin/oasa-lab run l2-sik-link'
+env = { OASA_LAB_SIM = "1" }
+required = false
+repos = ["oasa-radio"]
+needs = ["oasa-radio with sik and --sik-expect, built with cargo build --locked --bins"]
+
+[[check]]
+name = "l2-sik-oasa-link"
+run = 'OASA_SEC_BIN_DIR="${OASA_SEC_BIN_DIR:-$OASA_ROOT_OASA_SEC/target/debug}" OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-$OASA_ROOT_OASA_RADIO/target/debug}" .venv/bin/oasa-lab run l2-sik-oasa-link'
+env = { OASA_LAB_SIM = "1" }
+required = false
+repos = ["oasa-sec", "oasa-radio"]
+needs = ["oasa-sec built, and oasa-radio with sik and --sik-expect, with cargo build --locked --bins"]
+
+[[check]]
 name = "l2-sdr-link"
 run = 'OASA_SEC_BIN_DIR="${OASA_SEC_BIN_DIR:-$OASA_ROOT_OASA_SEC/target/debug}" OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-$OASA_ROOT_OASA_RADIO/target/debug}" .venv/bin/oasa-lab run l2-sdr-link'
 env = { OASA_LAB_SIM = "1" }

@@ -27,6 +27,12 @@ expectations = [
   "test_real_hardware_without_a_gate_never_transmits",
   "test_real_hardware_needs_the_confirmed_wiring_even_with_a_gate",
   "test_real_hardware_for_a_suite_that_does_not_say_whether_it_transmits_is_refused",
+  "test_bad_calibration_files_are_refused",
+  "test_a_calibration_older_than_the_last_recabling_is_refused",
+  "test_an_invalid_calibration_is_refused_not_skipped",
+  "test_tampered_calibration_copy_is_caught",
+  "test_bad_calibration_fields_are_caught",
+  "test_sensor_refuses_a_reading_near_its_maximum_input",
 ]
 
 [captures]

@@ -25,7 +25,7 @@ from .air import check_air
 from .pcapread import Packet, PcapError, parse_pcap
 from .stats import binomial_bound, chi2_bytes, poisson_limit
 
-CHECKER_VERSION = "1.2"
+CHECKER_VERSION = "1.3"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
@@ -223,6 +223,58 @@ def _air_settings_errors(cid: str, s: dict) -> list[str]:
     return errs
 
 
+CALIBRATION_FILE = "calibration.toml"   # a run that used the bench calibration keeps a copy here
+DATE = re.compile(r"^\d{4}-\d\d-\d\d$")
+
+
+def _calibration_errors(b: Bundle, m: dict) -> list[str]:
+    """manifest["calibration"]: absent (older bundles) or null (none configured), or the file's sha256, date,
+    version, valid and used. A run that used it keeps a copy in the bundle, which must hash to the same."""
+    if "calibration" not in m or m["calibration"] is None:
+        if (b.root / CALIBRATION_FILE).exists():
+            return [f"{CALIBRATION_FILE} is in the bundle but the manifest records no calibration"]
+        return []
+    c = m["calibration"]
+    if not isinstance(c, dict):
+        return ["calibration must be null or an object"]
+    errs: list[str] = []
+    if not (isinstance(c.get("sha256"), str) and HEX64.match(c["sha256"])):
+        errs.append("calibration.sha256 must be 64 lowercase hex characters")
+    d = c.get("date")
+    if d is not None:
+        try:
+            if not (isinstance(d, str) and DATE.match(d)):
+                raise ValueError
+            datetime.strptime(d, "%Y-%m-%d")
+        except ValueError:
+            errs.append("calibration.date must be YYYY-MM-DD or null")
+    if not (c.get("version") is None or (isinstance(c["version"], int) and not isinstance(c["version"], bool))):
+        errs.append("calibration.version must be an integer or null")
+    for k in ("valid", "used"):
+        if not isinstance(c.get(k), bool):
+            errs.append(f"calibration.{k} must be true or false")
+    if errs:
+        return errs
+    copy = b.root / CALIBRATION_FILE
+    if c["used"]:
+        if not c["valid"] or c["version"] != 1 or d is None:
+            errs.append("calibration: a run may only use a valid version 1 calibration with a date")
+        if not copy.is_file():
+            errs.append(f"calibration was used but {CALIBRATION_FILE} is not in the bundle")
+        else:
+            if sha256_file(copy) != c["sha256"]:
+                errs.append(f"{CALIBRATION_FILE} in the bundle does not match calibration.sha256")
+            try:
+                data = tomllib.loads(copy.read_text(encoding="utf-8"))
+                if data.get("version") != 1 or str(data.get("date")) != d:
+                    errs.append(f"{CALIBRATION_FILE}: version or date differs from the manifest")
+            except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+                errs.append(f"{CALIBRATION_FILE} is not valid TOML ({exc})")
+    elif copy.exists():
+        errs.append(f"{CALIBRATION_FILE} is in the bundle but calibration.used is false")
+    return errs
+
+
 def check_manifest(b: Bundle) -> dict:
     m = b.manifest()
     errs: list[str] = []
@@ -264,6 +316,7 @@ def check_manifest(b: Bundle) -> dict:
     for i, bn in enumerate(m.get("binaries") if isinstance(m.get("binaries"), list) else []):
         need(isinstance(bn, dict) and bool(HEX64.match(str(bn.get("sha256", "")))), f"binaries[{i}].sha256 must be 64 hex characters")
     need(isinstance(m.get("binaries"), list), "binaries must be a list")
+    errs.extend(_calibration_errors(b, m))
 
     chans = m.get("channels") if isinstance(m.get("channels"), list) else None
     caps = m.get("captures") if isinstance(m.get("captures"), list) else None
@@ -697,7 +750,7 @@ def check_expectations(b: Bundle) -> dict:
 
 
 # --- check 7: radio evidence ----------------------------------------------------------------
-DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310")
+DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310", "power_sensor")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded")
 RF_ANTENNA = "antenna"      # radios on antennas: only for a suite that declares radiates = true

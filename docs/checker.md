@@ -36,6 +36,7 @@ Each check is `pass` or `fail`, with a reason in plain words.
 - Python and OS versions are present; the package list includes pytest and oasa-lab.
 - Every channel has settings in range (probabilities 0 to 1, no negative delays). Airtime settings, if present, must be complete and give a positive airtime (older bundles without them still pass).
 - Every binary has a 64-hex SHA-256.
+- `calibration` (the bench calibration, [calibration.md](calibration.md)) is absent (older bundles), null, or has a 64-hex `sha256`, a `YYYY-MM-DD` `date` (or null), an integer `version` (or null), and `valid` and `used` as true or false. A run that `used` it must have used a valid version 1 file and keep a copy, `calibration.toml`, whose hash, version and date match. A copy with no `used` entry fails.
 - Markers are unique strings of 12 or more characters.
 - Every `.pcap` in `captures/` is declared. A capture the manifest doesn't mention would escape the scan, so it fails.
 - If a `suites/` folder is given (the default for `oasa-lab check`), the suite must exist there.

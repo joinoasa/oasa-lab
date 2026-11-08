@@ -1,0 +1,57 @@
+# calibration.toml: the bench calibration (version 1). Copy, then replace every number with your own
+# measurements. THE VALUES BELOW ARE PLACEHOLDERS, NOT MEASUREMENTS. Format and rules: docs/calibration.md.
+# lab.toml points at it:   [calibration]  path = "calibration.toml"
+# This file may be copied into public evidence bundles: no serial numbers in clear (hash prefixes only).
+
+version = 1
+date = "2026-01-15"                  # the day the measurements were taken
+operator = "example"
+vna = { model = "example VNA", cal_kit = "example SOLT kit", cal_date = "2026-01-15" }
+power_sensor = { model = "example power sensor", serial_hash = "sha256:0000000000", cal_cert_date = "2025-09-01" }
+
+# One table per route the tests use. Loss in dB (positive) at each listed frequency.
+# 60 dB or more between transmitters; a route to a receive-only device says receive_only = true (40 dB or more).
+[paths.b200_to_e310]
+route = ["b200.tx", "cable.c1", "att.30a", "att.20a", "att.10a", "cable.c2", "e310.rx2b"]
+freq_mhz  = [915, 920, 2400, 2450, 5800]
+loss_db   = [60.4, 60.4, 61.0, 61.1, 62.3]
+phase_deg = [10.0, 8.5, -80.0, -95.0, 30.0]
+s2p = "calibration/vna/route-b200_to_e310-2026-01-15.s2p"
+
+[paths.e310_to_b200]
+route = ["e310.trxa", "cable.c3", "att.30b", "att.20b", "att.10b", "cable.c4", "b200.rx2"]
+freq_mhz  = [915, 920, 2400, 2450, 5800]
+loss_db   = [60.5, 60.5, 61.1, 61.2, 62.4]
+phase_deg = [11.0, 9.5, -79.0, -94.0, 31.0]
+
+[paths.b200_to_sensor]
+route = ["b200.tx", "cable.c5", "att.30c", "att.10c", "sensor"]
+receive_only = true
+freq_mhz  = [915, 920]
+loss_db   = [40.3, 40.3]
+phase_deg = [5.0, 4.8]
+
+# TX power out of the port (dBm): one row per frequency, one value per gain step.
+[radios.b200.tx]
+freq_mhz = [915, 920]
+gain_db  = [0, 10, 20, 30, 40, 50, 60, 70, 80, 89.75]
+dbm_out  = [[-60.0, -50.1, -40.2, -30.3, -20.5, -10.8, -1.2, 7.5, 12.0, 13.5],
+            [-60.1, -50.2, -40.3, -30.4, -20.6, -10.9, -1.3, 7.4, 11.9, 13.4]]
+spread_db_max = 0.15
+
+# RX scale: dBm_in = dBFS + dbfs_to_dbm; floor_dbfs is the terminated noise floor.
+[radios.b200.rx]
+freq_mhz = [915, 920]
+gain_db  = [0, 20, 40, 60, 76]
+dbfs_to_dbm = [[-10.0, -30.0, -50.0, -70.0, -86.0],
+               [-10.1, -30.1, -50.1, -70.1, -86.1]]
+floor_dbfs  = [[-110.0, -105.0, -95.0, -80.0, -68.0],
+               [-110.0, -105.0, -95.0, -80.0, -68.0]]
+
+[radios.e310.rx]
+freq_mhz = [915, 920]
+gain_db  = [0, 20, 40, 60, 70]
+dbfs_to_dbm = [[-12.0, -32.0, -52.0, -72.0, -82.0],
+               [-12.1, -32.1, -52.1, -72.1, -82.1]]
+floor_dbfs  = [[-108.0, -102.0, -92.0, -78.0, -72.0],
+               [-108.0, -102.0, -92.0, -78.0, -72.0]]

@@ -13,6 +13,8 @@ from typing import Any
 import pytest
 
 from . import context, sigmf
+from .calibration import Calibration, CalibrationError
+from .calibration import load_configured as load_calibration
 from .channel import Channel, ChannelSettings
 from .context import RunContext, derive_seed, make_rng, sha256_file
 from .devices import Inventory, InventoryError
@@ -164,6 +166,35 @@ class Lab:
         self.log("measurement", metric=metric, name=name, value=value, unit=unit, min=lo, max=hi, ok=ok)
         return ok
 
+    @property
+    def calibration(self) -> Calibration | None:
+        """The bench calibration from lab.toml's [calibration], or None if none is configured.
+
+        Raises CalibrationError if one is configured and is unreadable, invalid or older than the last
+        re-cabling. Once read, the run's manifest records it as used and the bundle keeps a copy."""
+        if self.ctx.calibration is None:
+            try:
+                inv = Inventory.load()
+            except InventoryError as exc:
+                raise CalibrationError(f"lab.toml is not usable: {exc}") from None
+            cal = load_calibration(inv)
+            if cal is None:
+                return None
+            cal.used = True
+            self.ctx.calibration = cal
+            self.log("calibration", sha256=cal.sha256, date=cal.date)
+        return self.ctx.calibration
+
+    def require_calibration(self) -> Calibration:
+        """The calibration, or skip this test when none is configured. A bad one fails the test."""
+        try:
+            cal = self.calibration
+        except CalibrationError as exc:
+            pytest.fail(f"bench calibration refused: {exc}", pytrace=False)
+        if cal is None:
+            pytest.skip("no bench calibration: add [calibration] path = ... to lab.toml (see docs/calibration.md)")
+        return cal
+
     def _finish(self) -> None:
         for link, cap, rel, n in self._air:
             w = PcapWriter(self.ctx.run_dir / rel)
@@ -183,6 +214,8 @@ class Lab:
 @pytest.fixture
 def lab(request: pytest.FixtureRequest):
     obj = Lab(context.current(), request.node.nodeid)
+    if obj.ctx.suite.needs_calibration:
+        obj.require_calibration()
     try:
         yield obj
     finally:

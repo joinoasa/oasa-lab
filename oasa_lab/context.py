@@ -35,6 +35,7 @@ class RunContext:
         self.binaries: dict[str, dict[str, Any]] = {}
         self.hardware: dict[str, Any] = {"devices": {}, "hub": None, "rf": None}
         self.recordings: list[dict[str, Any]] = []
+        self.calibration: Any = None   # the Calibration a test read (oasa_lab.calibration), once loaded
         self._lock = threading.Lock()
         self._n = 0
 

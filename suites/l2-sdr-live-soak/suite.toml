@@ -1,0 +1,89 @@
+description = "F11: the l2-sdr-live-link run for 24 hours (lab.toml [sdr_live] soak_duration_s, 86400 s by default; the same radios, cables, settings, interlocks and limits). The job may run that long only because the lab policy lists this suite in [lab] long_jobs (owner, 2026-11-07); every other suite keeps the one-hour cap. The report adds each hour's loss and one-way median, p99.9 and worst per direction (event live_hours), so a drift over the day shows. On the simulated bench it runs the same short check as l2-sdr-live-link (30 s), so CI stays fast."
+expectations = [
+  "test_live_soak",
+]
+transmits = true
+requires = ["b200", "e310"]
+wiring = "usrp"
+
+# The same limits as l2-sdr-live-link, held over the whole day: worst-case limits are the largest 10-minute maximum
+# of the 24 hours, loss and percentiles are over every message.
+# The targets for the control link (owner, 2026-11-06 and 2026-11-07): 32-byte encrypted messages, one-way median
+# <= 5 ms on the dev boards and <= 6 ms on this bench (it has hops a product will not: the lab VM, Ethernet to the
+# E310, USB to the B200mini), p99 <= 10 ms, p99.9 <= 15 ms, worst <= 20 ms in any 10 minutes, loss < 0.1 %.
+# One-way delays: each message carries its send time, Bob's app stamps its arrival, Alice's app the answer's arrival,
+# all on one host clock (oasa_lab/livelink.py). The simulated bench runs a fifth of the rates in a debug build, so
+# its delays say nothing about the radio: there the delay limits stay unmeasured (optional).
+
+[limits.handshake_s]
+min = 0.0
+max = 2.0
+reason = """Seconds from Alice's start to her session. Bench: 0.04 to 0.05 s with the radios streaming (2026-11-06).
+2 s allows one lost handshake message (oasa-link retries) on the simulated bench's slow debug build."""
+
+[limits.loss_a2b_pct]
+min = 0.0
+max = 0.1
+reason = "Messages Alice sent that Bob's app never received, % (B200mini to E310). Target: under 0.1 %."
+
+[limits.loss_b2a_pct]
+min = 0.0
+max = 0.1
+reason = """Echoes Bob's app sent that Alice's app never received, % of those Bob received (E310 to B200mini).
+Target: under 0.1 %."""
+
+[limits.one_way_p50_a2b_ms]
+min = 0.0
+max = 6.0
+optional = true
+reason = "One-way median, B200mini to E310. Bench gate 6 ms (F9: 5.14 ms over 1 h, unencrypted 32-byte frames)."
+
+[limits.one_way_p50_b2a_ms]
+min = 0.0
+max = 6.0
+optional = true
+reason = "One-way median, E310 to B200mini. Bench gate 6 ms (F9: 4.89 ms over 1 h, unencrypted 32-byte frames)."
+
+[limits.one_way_p99_a2b_ms]
+min = 0.0
+max = 10.0
+optional = true
+reason = "One-way 99th percentile, B200mini to E310. Target 10 ms (F9: 6.04 ms)."
+
+[limits.one_way_p99_b2a_ms]
+min = 0.0
+max = 10.0
+optional = true
+reason = "One-way 99th percentile, E310 to B200mini. Target 10 ms (F9: 5.54 ms)."
+
+[limits.one_way_p999_a2b_ms]
+min = 0.0
+max = 15.0
+optional = true
+reason = "One-way 99.9th percentile, B200mini to E310. Target 15 ms (F9: 6.38 ms)."
+
+[limits.one_way_p999_b2a_ms]
+min = 0.0
+max = 15.0
+optional = true
+reason = "One-way 99.9th percentile, E310 to B200mini. Target 15 ms (F9: 7.09 ms)."
+
+[limits.one_way_max_a2b_ms]
+min = 0.0
+max = 20.0
+optional = true
+reason = """Worst one-way delay of the run, B200mini to E310 (the largest of the 10-minute maxima). Target: 20 ms in
+any 10 minutes. F9: round trip at most 21.6 ms over 1 h."""
+
+[limits.one_way_max_b2a_ms]
+min = 0.0
+max = 20.0
+optional = true
+reason = "Worst one-way delay of the run, E310 to B200mini. Target: 20 ms in any 10 minutes."
+
+[limits.reopens]
+min = 0
+max = 0
+optional = true
+reason = """Times a radio helper had to open its radio again (the E310 hang of 2026-11-06 and its recovery). A
+reopen is an outage of seconds; a counted run has none. Hardware only."""

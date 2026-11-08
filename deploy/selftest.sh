@@ -48,6 +48,12 @@ for key in MemoryMax TasksMax RuntimeMaxUSec; do  # RuntimeMaxSec= in the unit i
   got="$(systemctl show -p "$key" --value "$UNIT" 2>/dev/null)"
   case "$got" in ""|infinity|0|"[not set]") fail "$key is not limited ('$got')";; *) pass "$key=$got";; esac
 done
+# The backstop must cover the longest job the policy allows (oasa_lab/policy.py MAX_LONG_JOB_SECONDS + 30 s + grace).
+rt_us="$(systemctl show -p RuntimeMaxUSec "$UNIT" 2>/dev/null | sed -n 's/^RuntimeMaxUSec=//p')"
+rt_s="$(python3 -I -c 'import sys,re
+v=sys.argv[1].strip(); u={"d":86400,"h":3600,"min":60,"s":1,"ms":.001,"us":1e-6}
+print(int(sum(float(n)*u[k] for n,k in re.findall(r"([0-9.]+)\s*(d|h|min|ms|us|s)", v))) if v and v not in ("infinity",) else 0)' "$rt_us" 2>/dev/null || echo 0)"
+[ "${rt_s:-0}" -ge 90090 ] && pass "RuntimeMaxSec covers a 25 h long job ($rt_s s)" || fail "RuntimeMaxSec is $rt_s s; it must be at least 90090 s (long_jobs 90000 + 30 + grace)"
 if command -v systemd-analyze >/dev/null; then
   note "systemd-analyze security: $(systemd-analyze security "$UNIT" --no-pager 2>/dev/null | tail -1)"
 fi

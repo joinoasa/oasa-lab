@@ -36,7 +36,7 @@ Tools run as **separate processes** (never imported, never shipped):
 |---|---|---|---|
 | [rtl-sdr-blog](https://github.com/rtlsdrblog/rtl-sdr-blog) `rtl_sdr`, `rtl_test` | GPL-2.0 | Records raw IQ from the RTL-SDR Blog V4 (the V4 needs this fork) | **GPL.** Subprocess only |
 | [UHD](https://github.com/EttusResearch/uhd) `uhd_usrp_probe`, `uhd_config_info`, `rx_samples_to_file`, `rx_samples_c`, `tx_waveforms`, `tx_samples_from_file` | GPL-3.0 | Identifies the B200mini and E310, records raw IQ, sends a test tone or a test waveform from a file | **GPL.** Separate processes only. Never imported, linked or shipped |
-| OASA radio helper `oasa-uhd-stream` (lab-only, in no OASA repo) | GPL-3.0 (links UHD) | `l2-sdr-live-link`: moves samples between one radio and two FIFOs, timed TX; installed on the lab host by the owner, pinned by sha256 in `lab.toml` `[sdr_live]` | **GPL.** Separate process only. Owner decision 2026-11-07: its source stays private to the lab; never imported, linked or shipped |
+| OASA radio helper `oasa-uhd-stream` (lab-only, in no OASA repo) | GPL-3.0 (links UHD) | `l2-sdr-live-link`, `l2-sdr-live-soak`: moves samples between one radio and two FIFOs, timed TX; installed on the lab host by the owner, pinned by sha256 in `lab.toml` `[sdr_live]` | **GPL.** Separate process only. Owner decision 2026-11-07: its source stays private to the lab; never imported, linked or shipped |
 | [uhubctl](https://github.com/mvp/uhubctl) | GPL-2.0 | Per-port USB power (one of two hub options) | **GPL.** Optional subprocess |
 | [ykushcmd](https://github.com/Yepkit/ykush) | Apache-2.0 | Per-port USB power for the YKUSH3 | |
 

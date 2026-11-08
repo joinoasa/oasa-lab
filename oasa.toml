@@ -132,6 +132,14 @@ repos = ["oasa-sec", "oasa-radio"]
 needs = ["both built with cargo build --locked --bins"]
 
 [[check]]
+name = "l2-sdr-live-soak"
+run = 'OASA_SEC_BIN_DIR="${OASA_SEC_BIN_DIR:-$OASA_ROOT_OASA_SEC/target/debug}" OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-$OASA_ROOT_OASA_RADIO/target/debug}" .venv/bin/oasa-lab run l2-sdr-live-soak'
+env = { OASA_LAB_SIM = "1" }
+required = false
+repos = ["oasa-sec", "oasa-radio"]
+needs = ["both built with cargo build --locked --bins"]
+
+[[check]]
 name = "l2-sdr-control"
 run = 'OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-$OASA_ROOT_OASA_RADIO/target/debug}" .venv/bin/oasa-lab run l2-sdr-control'
 env = { OASA_LAB_SIM = "1" }
@@ -197,6 +205,10 @@ hardware = true
 
 [[lab]]
 suite = "l2-sdr-live-link"
+hardware = true
+
+[[lab]]
+suite = "l2-sdr-live-soak"
 hardware = true
 
 [hardware]

@@ -29,11 +29,12 @@ def test_defaults_are_the_bench_settings_that_met_every_target():
     assert ll.HW_BRIDGE == ["--tx-mode", "burst", "--symbol-rate", "250000", "--if-hz", "175000", "--decimate", "1",
                             "--coarse-step", "4"]
     assert c["rate_hz"] == 100 and c["bridge_rt_prio"] == 30 and c["duration_s"] <= 3500
+    assert c["soak_duration_s"] == 86400, "the F11 soak is 24 hours"
 
 
 @pytest.mark.parametrize("bad", [
     {"duraton_s": 60},                                  # a typo is refused, not ignored
-    {"duration_s": 5}, {"rate_hz": 0}, {"b200_tx_gain": "40"}, {"bridge_rt_prio": 99},
+    {"duration_s": 5}, {"soak_duration_s": 90001}, {"soak_duration_s": True}, {"rate_hz": 0}, {"b200_tx_gain": "40"}, {"bridge_rt_prio": 99},
     {"e310_cpus": "2; rm"}, {"b200_helper_args": "--rt"}, {"helper_sha256": "abc"},
     {"e310_helper_args": ["--tx-gain", "89"]},          # the lab sets and caps the gain, never the config
     {"b200_helper_args": ["--max-seconds=99999"]},
@@ -93,6 +94,28 @@ def test_summary_percentiles_and_ten_minute_windows():
     assert s["p50"] == 5.0 and s["p99"] == 9.0 and s["max"] == 19.0 and s["n"] == 1000
     assert s["window_max"] == [5.0, 19.0] and sum(s["hist"].values()) == 1000
     assert ll.summarize([])["p50"] is None
+
+
+def test_the_result_reports_each_hour_from_the_fixed_tables():
+    from array import array
+
+    n, gap = 7300, 1.0                         # two full hours and 100 s of a third
+    back = bytearray([1]) * n
+    for k in (5, 6, 3700):                     # two lost in hour 0, one in hour 1
+        back[k] = 0
+    a2b = array("d", [5.0] * n)
+    b2a = array("d", [4.0] * n)
+    a2b[4000] = 19.0                           # hour 1's worst
+    rtt = array("d", (x + y for x, y in zip(a2b, b2a)))
+    t_rx = array("d", (1000.0 + k * gap for k in range(n)))
+    r = ll.result(n, gap, 1000.0, back, a2b, b2a, rtt, t_rx)
+    assert r["back"] == n - 3 and r["a2b"]["max"] == 19.0 and r["a2b"]["n"] == n - 3
+    assert [h["sent"] for h in r["hours"]] == [3600, 3600, 100]
+    assert [h["back"] for h in r["hours"]] == [3598, 3599, 100]
+    assert r["hours"][0]["loss_pct"] == round(100 * 2 / 3600, 4) and r["hours"][2]["loss_pct"] == 0
+    assert r["hours"][1]["a2b"] == {"p50": 5.0, "p999": 5.0, "max": 19.0} and r["hours"][0]["b2a"]["max"] == 4.0
+    assert r["lost_first"] == [5, 6, 3700] and r["outliers"] == []
+    json.dumps(r)                              # what ping writes
 
 
 def _free_port():

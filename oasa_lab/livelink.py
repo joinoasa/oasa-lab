@@ -40,6 +40,7 @@ from typing import Any
 PKT = struct.Struct(">Idd")          # seq, t_sent, t_echo (seconds since the epoch, one host clock)
 PKT_LEN = 32
 WINDOW_S = 600.0                     # the worst-case target is per 10 minutes
+HOUR_S = 3600.0                      # the soak reports each hour, so a drift over the day shows
 HIST_STEP_MS = 0.05                  # histogram bins: 0.05 ms up to HIST_TOP_MS, then one overflow bin
 HIST_TOP_MS = 200.0
 MAX_OUTLIERS = 500
@@ -55,6 +56,7 @@ SIM_BRIDGE = ["--tx-mode", "stream", "--sample-rate", "200000", "--symbol-rate",
 SIM_RATE = 200e3
 DEFAULTS: dict[str, Any] = {
     "duration_s": 3000.0,             # a counted job runs at most an hour (lab.job_timeout_seconds); 50 min + setup
+    "soak_duration_s": 86400.0,       # l2-sdr-live-soak: 24 h (its job time comes from the policy's long_jobs)
     "rate_hz": 100.0,                 # datagrams per second each way
     "b200_tx_freq": 915e6, "e310_tx_freq": 920e6,
     "b200_tx_gain": 40.0, "e310_tx_gain": 28.0,
@@ -93,13 +95,14 @@ class LiveConfig:
             raise LiveConfigError(f"[sdr_live]: unknown key(s) {', '.join(unknown)}")
         s = dict(DEFAULTS)
         s.update(d)
-        for k in ("duration_s", "rate_hz", "b200_tx_freq", "e310_tx_freq", "b200_tx_gain", "e310_tx_gain",
+        for k in ("duration_s", "soak_duration_s", "rate_hz", "b200_tx_freq", "e310_tx_freq", "b200_tx_gain", "e310_tx_gain",
                   "rx_gain", "b200_cfo_hz", "e310_cfo_hz"):
             if isinstance(s[k], bool) or not isinstance(s[k], (int, float)) or not math.isfinite(s[k]):
                 raise LiveConfigError(f"[sdr_live] {k} must be a number")
             s[k] = float(s[k])
-        if not 10 <= s["duration_s"] <= 90000:
-            raise LiveConfigError("[sdr_live] duration_s must be 10 to 90000")
+        for k in ("duration_s", "soak_duration_s"):
+            if not 10 <= s[k] <= 90000:
+                raise LiveConfigError(f"[sdr_live] {k} must be 10 to 90000")
         if not 1 <= s["rate_hz"] <= 500:
             raise LiveConfigError("[sdr_live] rate_hz must be 1 to 500")
         for k in ("b200_helper_args", "e310_helper_args"):
@@ -253,7 +256,7 @@ def _hist_index(ms: float) -> int:
     return min(nbins, max(0, int(ms / HIST_STEP_MS)))
 
 
-def summarize(values_ms: list[float], times: list[float] | None = None, t0: float | None = None) -> dict[str, Any]:
+def summarize(values_ms: Any, times: Any = None, t0: float | None = None) -> dict[str, Any]:
     """Percentiles, max, per-10-minute maxima and a histogram of one direction's delays (ms)."""
     v = sorted(values_ms)
     n = len(v)
@@ -347,15 +350,56 @@ def ping_main(listen: str, send: str, n: int, gap: float, out: str, drain_s: flo
             pass
         if t_end is not None and time.time() > t_end:
             break
-    ok = [k for k in range(n) if back[k]]
-    times = [t_rx[k] for k in ok]
-    res = {"n": n, "gap_s": gap, "start": start, "back": len(ok), "duplicates": dup, "bad": bad,
-           "a2b": summarize([a2b[k] for k in ok], times, start), "b2a": summarize([b2a[k] for k in ok], times, start),
-           "rtt": summarize([rtt[k] for k in ok], times, start),
-           "outliers": [{"seq": k, "a2b_ms": round(a2b[k], 3), "b2a_ms": round(b2a[k], 3), "t": round(t_rx[k], 4)}
-                        for k in ok if a2b[k] > 20 or b2a[k] > 20][:MAX_OUTLIERS],
-           "lost_first": [k for k in range(n) if not back[k]][:MAX_OUTLIERS]}
-    Path(out).write_text(json.dumps(res))
+    Path(out).write_text(json.dumps(result(n, gap, start, back, a2b, b2a, rtt, t_rx, dup, bad)))
+
+
+def _pick(values: array, back: bytearray, lo: int = 0, hi: int | None = None) -> array:
+    hi = len(back) if hi is None else hi
+    return array("d", (values[k] for k in range(lo, hi) if back[k]))
+
+
+def hours(n: int, gap: float, back: bytearray, a2b: array, b2a: array) -> list[dict[str, Any]]:
+    """Per hour of sending (by sequence number: message k is sent at k * gap): messages sent, round-trip loss, and
+    each direction's median, p99.9 and worst. A 24-hour soak's drift over the day shows here."""
+    per = max(1, round(HOUR_S / gap))
+    out = []
+    for lo in range(0, n, per):
+        hi = min(n, lo + per)
+        got = sum(back[lo:hi])
+        row: dict[str, Any] = {"hour": lo // per, "sent": hi - lo, "back": got,
+                               "loss_pct": round(100.0 * (hi - lo - got) / (hi - lo), 4)}
+        for d, arr in (("a2b", a2b), ("b2a", b2a)):
+            v = sorted(_pick(arr, back, lo, hi))
+            m = len(v)
+            row[d] = ({"p50": round(v[m // 2], 3), "p999": round(v[min(m - 1, int(.999 * m))], 3), "max": round(v[-1], 3)}
+                      if m else None)
+        out.append(row)
+    return out
+
+
+def result(n: int, gap: float, start: float, back: bytearray, a2b: array, b2a: array, rtt: array, t_rx: array,
+           dup: int = 0, bad: int = 0) -> dict[str, Any]:
+    """What `ping` writes. Built from the fixed tables without per-message Python lists, so a 24-hour run at
+    100/s (8.6 million messages) stays well inside the job's memory limit."""
+    times = _pick(t_rx, back)
+    res: dict[str, Any] = {"n": n, "gap_s": gap, "start": start, "back": len(times), "duplicates": dup, "bad": bad}
+    for d, arr in (("a2b", a2b), ("b2a", b2a), ("rtt", rtt)):
+        res[d] = summarize(_pick(arr, back), times, start)
+    res["hours"] = hours(n, gap, back, a2b, b2a)
+    res["outliers"] = []
+    for k in range(n):
+        if back[k] and (a2b[k] > 20 or b2a[k] > 20):
+            res["outliers"].append({"seq": k, "a2b_ms": round(a2b[k], 3), "b2a_ms": round(b2a[k], 3),
+                                    "t": round(t_rx[k], 4)})
+            if len(res["outliers"]) >= MAX_OUTLIERS:
+                break
+    res["lost_first"] = []
+    for k in range(n):
+        if not back[k]:
+            res["lost_first"].append(k)
+            if len(res["lost_first"]) >= MAX_OUTLIERS:
+                break
+    return res
 
 
 def _addr(s: str) -> tuple[str, int]:

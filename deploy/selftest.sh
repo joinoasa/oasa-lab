@@ -16,6 +16,9 @@ UNIT="oasa-lab-job@${ID}.service"
 RES=/var/lib/oasa-lab/results
 ERR="$(mktemp)"; trap 'rm -f "$ERR"' EXIT
 
+# A folder left by an earlier self-test (e.g. one refused while the lab was paused) makes job-run refuse with
+# "File exists" and the wait below would read that old exit.json: clear it first (only this fixed test id).
+rm -rf -- "${RES:?}/$ID"
 echo "The service user and the job unit:"
 if asservice systemctl --no-ask-password start --no-block "$UNIT" 2>"$ERR"; then pass "oasalab may start $UNIT"; else fail "oasalab could not start the job unit: $(cat "$ERR")"; fi
 for _ in $(seq 1 60); do [ -s "$RES/$ID/exit.json" ] && break; sleep 0.5; done

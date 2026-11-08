@@ -13,6 +13,7 @@ docs = [
   "SECURITY.md",
   "docs/checker.md",
   "docs/hardware-suites.md",
+  "docs/calibration.md",
   "docs/software-used.md",
   "docs/profiles.md",
 ]

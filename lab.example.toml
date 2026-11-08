@@ -77,6 +77,39 @@ serial = "00000000"           # `*IDN?` shows it. The driver refuses a different
 # max_a = 2.0
 # hold_output = true
 
+# --- tinySA Ultra+ as the level reference (reads only; F15) -------------------------------------------
+# USB serial console. Its 30 dB input pad is always fitted; input_pad_db is added to every reading (leave the
+# tinySA's own external gain at 0). Commands in devices/tinysa.py are to be confirmed against its firmware.
+[devices.tinysa0]
+kind = "tinysa"
+model = "tinySA Ultra+"
+port = "/dev/serial/by-id/usb-EXAMPLE_tinySA_000000000000-if00"   # yours: ls /dev/serial/by-id
+serial = "000000000000"       # the USB serial from the by-id name (the console does not report one)
+input_pad_db = 30.0
+max_input_dbm = 10.0          # at the tinySA's input, after the pad: set from its datasheet
+
+# --- RF power sensor (reads only; F15b, later) -------------------------------------------------------
+# SCPI over usbtmc, a serial port or a raw socket. `model` picks the command table in devices/powersensor.py:
+# "keysight-u2004a" or "generic" (commands to be confirmed against the programming guide; see docs/calibration.md).
+# "rs-nrp-z11" is a reserved slot with no backend yet (it needs the vendor's toolkit, not plain SCPI).
+# Keep 40 dB or more between any transmitter and the sensor, and set max_input_dbm from its datasheet.
+[devices.psens0]
+kind = "power_sensor"
+model = "keysight-u2004a"
+transport = "usbtmc"          # "usbtmc", "serial" or "tcp"
+port = "/dev/usbtmc0"         # usbtmc node or serial port (serial: baud = 9600)
+# host = "192.0.2.10"         # tcp: the sensor's address on the lab network; tcp_port = 5025
+serial = "XX00000000"         # `*IDN?` shows it. The driver refuses a different unit.
+max_input_dbm = 20.0          # readings within margin_db (3 dB) of this stop with an error
+# timeout_s = 5
+
+# --- Bench calibration (optional) ---------------------------------------------------------------------
+# Measured path losses, TX power and RX scale: docs/calibration.md, example in calibration.example.toml.
+# Each run's manifest records the file's sha256 and date. Without this table, nothing changes.
+# [calibration]
+# path = "calibration.toml"   # relative to this file
+# recabled = "2026-01-20"     # the last re-cabling: a calibration dated before it is refused
+
 # --- Ettus B200mini on USB and USRP E310 on the network ---------------------------------------------
 # UHD tools run as separate processes. `uhd_find_devices` shows the serials. The suite refuses a different unit.
 # max_rx_rate is the highest rate the driver will ask for. Raise it once your host shows the rate stays clean.

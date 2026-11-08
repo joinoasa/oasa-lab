@@ -30,7 +30,7 @@ MTU = 200
 SIM_DURATION_S, SIM_RATE_HZ = 30.0, 10.0     # a debug build at a fifth of the rates: 10 messages a second each way
 HELPER_START_S = 90.0                        # a B200 loads its firmware and FPGA image; an E310 claim can wait 30 s
 SESSION_WAIT_S = 30.0
-BRIDGE_READY_S = 15.0                        # each sdr bridge prints {"event":"radio",...} once its FIFOs are open
+BRIDGE_READY_S = 15.0                        # each sdr bridge prints {"event":"start",...} once its FIFOs are open
 SETTLE_S = 2.0                               # radios streaming before the handshake (F10 runs 8 Nov: a handshake
                                              # started on the helper's first event lost its first message: 5.1 s)
 
@@ -133,9 +133,9 @@ def run_live(lab, hw: Hardware, duration_key: str = "duration_s") -> None:
             lab.log("helpers_rt", **{p.name: [e for e in p.events() if e.get("event") in ("rt", "rt_refused")]
                                      for p in procs if p.name.startswith("helper")})
             # The handshake limit times session setup over a running link (bench: 0.04-0.05 s with the radios
-            # streaming), not radio start-up: wait for both bridges, then let the streams settle.
+            # streaming), not radio start-up: wait for both bridges' start event, then let the streams settle.
             bridges = [p for p in procs if p.name.startswith("bridge")]
-            ready = wait_until(lambda: all(any(e.get("event") == "radio" for e in b.events()) for b in bridges),
+            ready = wait_until(lambda: all(any(e.get("event") == "start" for e in b.events()) for b in bridges),
                                BRIDGE_READY_S)
             time.sleep(SETTLE_S)
             dead = [p.name for p in procs if not p.alive()]

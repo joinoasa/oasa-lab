@@ -97,6 +97,22 @@ channel = 1                   # 0 is RX2-A, 1 is RX2-B
 # max_rx_rate = 1e6
 # tx_subdev = "A:0"           # TX from side A, TRX-A (the default)
 # max_tx_gain = 40
+# max_tx_seconds = 90000      # l2-sdr-live-link streams for the whole run (owner, 2026-11-07: 25 h on the cabled
+                              # bench). Give both radios the same value; the default (60 s) refuses a long run.
+
+# --- The live link (l2-sdr-live-link) -----------------------------------------------------------------
+# The radio helper links UHD (GPL-3.0), so it is in no OASA repo: the owner installs a build and pins it here.
+# Every other key has a default, the settings that met every bench target (oasa_lab/livelink.py DEFAULTS).
+# [sdr_live]
+# helper = "/usr/local/libexec/oasa-lab/oasa-uhd-stream"
+# helper_sha256 = "<64 hex digits: sha256sum of the installed helper>"
+# duration_s = 3000           # traffic time; a counted job runs at most an hour
+# b200_cpus = "3"             # taskset lists: each radio's helper and bridge on their own CPU
+# e310_cpus = "2"
+# bridge_rt_prio = 30         # SCHED_FIFO for the bridges; 0 = off. The job unit must allow it
+# b200_tx_gain = 40
+# e310_tx_gain = 28
+# sdr_log = false             # the bridges' per-frame logs (about 80 MB per hour each)
 
 # --- Cabling ------------------------------------------------------------------------------------------
 # A suite that transmits names one of these in suite.toml. `loss_db` is the nominal loss of everything

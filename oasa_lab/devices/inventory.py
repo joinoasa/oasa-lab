@@ -81,6 +81,7 @@ class Inventory:
     devices: dict[str, dict[str, Any]] = field(default_factory=dict)
     wiring: dict[str, dict[str, Any]] = field(default_factory=dict)
     source: str = "built-in"
+    sdr_live: dict[str, Any] = field(default_factory=dict)   # [sdr_live]: the live link's helper and settings
 
     def backend_of(self, dev_id: str) -> str:
         return str(self.devices[dev_id].get("backend", self.backend))
@@ -126,10 +127,13 @@ class Inventory:
                 raise InventoryError(f"{source}: wiring.{wname}.antennas must be a list of DEVICE:PORT names")
             if w["rf_setup"] == "antenna" and not ants:
                 raise InventoryError(f"{source}: wiring.{wname} is rf_setup = \"antenna\" but lists no antennas")
+        sdr_live = data.get("sdr_live") or {}
+        if not isinstance(sdr_live, dict):
+            raise InventoryError(f"{source}: [sdr_live] must be a table")
         hub = data.get("hub")
         if hub and force_sim:
             hub = {**hub, "backend": "sim"}
-        return cls(str(lab.get("name", "lab")), backend, hub, devices, wiring, source)
+        return cls(str(lab.get("name", "lab")), backend, hub, devices, wiring, source, dict(sdr_live))
 
     @classmethod
     def load(cls, path: str | Path | None = None, sim: bool | None = None) -> "Inventory":

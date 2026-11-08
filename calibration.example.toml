@@ -7,7 +7,10 @@ version = 1
 date = "2026-01-15"                  # the day the measurements were taken
 operator = "example"
 vna = { model = "example VNA", cal_kit = "example SOLT kit", cal_date = "2026-01-15" }
-power_sensor = { model = "example power sensor", serial_hash = "sha256:0000000000", cal_cert_date = "2025-09-01" }
+# The level reference. kind = "tinysa" (about 2 dB; cal_cert_date optional) or "power_sensor" (needs a
+# cal_cert_date at most 12 months before `date`). accuracy_db is its absolute accuracy: suites widen limits by it.
+reference = { kind = "tinysa", model = "tinySA Ultra+", serial_hash = "sha256:0000000000", accuracy_db = 2.0 }
+# reference = { kind = "power_sensor", model = "...", serial_hash = "...", cal_cert_date = "2025-09-01", accuracy_db = 0.5 }
 
 # One table per route the tests use. Loss in dB (positive) at each listed frequency.
 # 60 dB or more between transmitters; a route to a receive-only device says receive_only = true (40 dB or more).
@@ -24,8 +27,8 @@ freq_mhz  = [915, 920, 2400, 2450, 5800]
 loss_db   = [60.5, 60.5, 61.1, 61.2, 62.4]
 phase_deg = [11.0, 9.5, -79.0, -94.0, 31.0]
 
-[paths.b200_to_sensor]
-route = ["b200.tx", "cable.c5", "att.30c", "att.10c", "sensor"]
+[paths.b200_to_reference]
+route = ["b200.tx", "cable.c5", "att.30c", "att.10c", "reference"]
 receive_only = true
 freq_mhz  = [915, 920]
 loss_db   = [40.3, 40.3]
@@ -37,7 +40,7 @@ freq_mhz = [915, 920]
 gain_db  = [0, 10, 20, 30, 40, 50, 60, 70, 80, 89.75]
 dbm_out  = [[-60.0, -50.1, -40.2, -30.3, -20.5, -10.8, -1.2, 7.5, 12.0, 13.5],
             [-60.1, -50.2, -40.3, -30.4, -20.6, -10.9, -1.3, 7.4, 11.9, 13.4]]
-spread_db_max = 0.15
+spread_db_max = 0.15                 # repeatability of the readings, not the reference's accuracy
 
 # RX scale: dBm_in = dBFS + dbfs_to_dbm; floor_dbfs is the terminated noise floor.
 [radios.b200.rx]

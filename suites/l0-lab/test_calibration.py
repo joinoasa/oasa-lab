@@ -27,7 +27,37 @@ def test_the_example_file_is_valid():
     assert cal.validate(good()) == []
     c = cal.load(EXAMPLE)
     assert c.date == "2026-01-15" and len(c.sha256) == 64
-    assert c.manifest_entry() == {"sha256": c.sha256, "date": "2026-01-15", "version": 1, "valid": True, "used": False}
+    assert c.manifest_entry() == {"sha256": c.sha256, "date": "2026-01-15", "version": 1, "valid": True, "used": False,
+                                  "reference": {"kind": "tinysa", "accuracy_db": 2.0}}
+    assert c.reference["model"] == "tinySA Ultra+" and c.accuracy_db == 2.0
+
+
+SENSOR = {"kind": "power_sensor", "model": "example sensor", "serial_hash": "sha256:00", "cal_cert_date": "2025-09-01",
+          "accuracy_db": 0.5}
+
+
+def test_a_power_sensor_reference_with_a_current_cert_is_valid():
+    assert problems(_set(["reference"], dict(SENSOR))) == []
+
+
+def test_the_older_power_sensor_table_still_loads():
+    def legacy(d):
+        del d["reference"]
+        d["power_sensor"] = {"model": "example sensor", "serial_hash": "sha256:00", "cal_cert_date": "2025-09-01"}
+    assert problems(legacy) == []
+    d = good()
+    legacy(d)
+    c = cal.Calibration(d, b"")
+    assert c.reference["kind"] == "power_sensor" and c.accuracy_db is None
+
+
+def test_a_tinysa_needs_no_cert():
+    assert problems(_set(["reference", "cal_cert_date"], "2020-01-01")) == []   # old, but not a power sensor
+
+
+def _legacy_without_cert(d):
+    del d["reference"]
+    d["power_sensor"] = {"model": "example sensor"}
 
 
 def _set(path, value):
@@ -52,10 +82,18 @@ def _del(path):
 BAD = [
     ("version", _set(["version"], 2), "version must be 1"),
     ("date", _set(["date"], "15/01/2026"), "date must be YYYY-MM-DD"),
-    ("cert date", _set(["power_sensor", "cal_cert_date"], "soon"), "cal_cert_date must be YYYY-MM-DD"),
-    ("old cert", _set(["power_sensor", "cal_cert_date"], "2024-12-01"), "older than 12 months"),
-    ("serial in clear", _set(["power_sensor", "serial"], "MY12345678"), "serial in clear"),
-    ("serial-like field", _set(["power_sensor", "label"], "ABCDEF1234"), "look like serials"),
+    ("cert date", _set(["reference"], {**SENSOR, "cal_cert_date": "soon"}), "reference.cal_cert_date must be YYYY-MM-DD"),
+    ("cert missing", _set(["reference"], {k: v for k, v in SENSOR.items() if k != "cal_cert_date"}),
+     "reference.cal_cert_date must be YYYY-MM-DD"),
+    ("old cert", _set(["reference"], {**SENSOR, "cal_cert_date": "2024-12-01"}), "older than 12 months"),
+    ("legacy cert missing", _legacy_without_cert, "power_sensor.cal_cert_date must be YYYY-MM-DD"),
+    ("tinysa cert not a date", _set(["reference", "cal_cert_date"], "soon"), "(or left out)"),
+    ("no reference", _del(["reference"]), "no [power_sensor] or reference"),
+    ("reference kind", _set(["reference", "kind"], "multimeter"), "reference.kind must be one of"),
+    ("accuracy missing", _del(["reference", "accuracy_db"]), "accuracy_db must be a number above 0"),
+    ("accuracy zero", _set(["reference", "accuracy_db"], 0), "accuracy_db must be a number above 0"),
+    ("serial in clear", _set(["reference", "serial"], "MY12345678"), "reference.serial in clear"),
+    ("serial-like field", _set(["reference", "label"], "ABCDEF1234"), "look like serials"),
     ("vna serial", _set(["vna", "serial"], "X1"), "vna.serial in clear"),
     ("no paths", _set(["paths"], {}), "no [paths.*] tables"),
     ("loss length", _set(["paths", "b200_to_e310", "loss_db"], [60.4, 60.4]), "loss_db has 2 values for 5 frequencies"),
@@ -63,8 +101,8 @@ BAD = [
     ("loss not positive", _set(["paths", "b200_to_e310", "loss_db"], [60.4, 60.4, 0.0, 61.1, 62.3]), "is not positive"),
     ("under 60 dB", _set(["paths", "e310_to_b200", "loss_db"], [60.5, 59.9, 61.1, 61.2, 62.4]),
      "under the 60 dB minimum between transmitters"),
-    ("under 40 dB rx-only", _set(["paths", "b200_to_sensor", "loss_db"], [40.3, 39.0]), "under 40 dB toward a receive-only"),
-    ("rx-only flag off", _del(["paths", "b200_to_sensor", "receive_only"]), "under the 60 dB minimum"),
+    ("under 40 dB rx-only", _set(["paths", "b200_to_reference", "loss_db"], [40.3, 39.0]), "under 40 dB toward a receive-only"),
+    ("rx-only flag off", _del(["paths", "b200_to_reference", "receive_only"]), "under the 60 dB minimum"),
     ("empty route", _set(["paths", "b200_to_e310", "route"], []), "route is empty"),
     ("tx rows", _set(["radios", "b200", "tx", "dbm_out"], [[0.0] * 10]), "dbm_out must be 2 rows x 10 gains"),
     ("tx columns", _set(["radios", "b200", "tx", "dbm_out"], [[0.0] * 10, [0.0] * 9]), "dbm_out must be 2 rows x 10"),
@@ -198,5 +236,5 @@ def test_manifest_entry_of_a_configured_file(tmp_path):
 
 def test_the_example_holds_no_device_serials():
     d = good()
-    assert "serial" not in d["power_sensor"] and "serial" not in d["vna"]
+    assert "serial" not in d["reference"] and "serial" not in d["vna"]
     assert Path(EXAMPLE).read_text().count("PLACEHOLDER") >= 1

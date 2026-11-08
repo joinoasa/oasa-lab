@@ -14,7 +14,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310", "power_sensor", "hub")
+KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310", "power_sensor", "tinysa", "hub")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded", "antenna")   # "antenna": radios on antennas, for suites that radiate
 
@@ -36,6 +36,8 @@ DEFAULT_SIM: dict[str, Any] = {
                    "sim": {"on": True, "vset": 6.0, "iset": 3.0}},
         "psens0": {"kind": "power_sensor", "model": "keysight-u2004a", "transport": "usbtmc", "port": "sim:psens",
                    "serial": "SIM-PSENS-0001", "sim": {"level_dbm": -30.0, "noise_db": 0.02}},
+        "tinysa0": {"kind": "tinysa", "model": "tinySA Ultra+", "port": "sim:tinysa", "serial": "SIM-TINYSA-0001",
+                    "input_pad_db": 30.0, "sim": {"tone_hz": 915e6, "tone_dbm": -40.0}},
         "b2000": {"kind": "b200", "serial": "SIM-B200-0001"},
         "e3100": {"kind": "e310", "addr": "sim", "serial": "SIM-E310-0001", "channel": 1, "subdev": "A:0 A:1",
                   "sim": {"xo_ppm": 2.4}},

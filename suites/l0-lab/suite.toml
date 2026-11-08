@@ -33,6 +33,7 @@ expectations = [
   "test_tampered_calibration_copy_is_caught",
   "test_bad_calibration_fields_are_caught",
   "test_sensor_refuses_a_reading_near_its_maximum_input",
+  "test_tinysa_refuses_a_level_near_its_maximum_input",
 ]
 
 [captures]

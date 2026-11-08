@@ -253,6 +253,10 @@ def _calibration_errors(b: Bundle, m: dict) -> list[str]:
     for k in ("valid", "used"):
         if not isinstance(c.get(k), bool):
             errs.append(f"calibration.{k} must be true or false")
+    ref = c.get("reference")
+    if ref is not None and not (isinstance(ref, dict) and ref.get("kind") in ("tinysa", "power_sensor")
+                                and (ref.get("accuracy_db") is None or (_num(ref["accuracy_db"]) and ref["accuracy_db"] > 0))):
+        errs.append("calibration.reference must name kind tinysa or power_sensor and an accuracy_db above 0 (or null)")
     if errs:
         return errs
     copy = b.root / CALIBRATION_FILE
@@ -750,7 +754,7 @@ def check_expectations(b: Bundle) -> dict:
 
 
 # --- check 7: radio evidence ----------------------------------------------------------------
-DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310", "power_sensor")
+DEVICE_KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310", "power_sensor", "tinysa")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded")
 RF_ANTENNA = "antenna"      # radios on antennas: only for a suite that declares radiates = true

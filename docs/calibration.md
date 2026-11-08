@@ -28,7 +28,8 @@ version = 1
 date = "2026-01-15"            # the day the measurements were taken
 operator = "example"
 vna = { model = "...", cal_kit = "...", cal_date = "2026-01-15" }
-power_sensor = { model = "...", serial_hash = "sha256 prefix only", cal_cert_date = "2025-09-01" }
+# the level reference: kind "tinysa" (about 2 dB) or "power_sensor" (needs cal_cert_date; about 0.5 dB)
+reference = { kind = "tinysa", model = "tinySA Ultra+", serial_hash = "sha256 prefix only", accuracy_db = 2.0 }
 
 [paths.b200_to_e310]           # one table per route the tests use
 route = ["b200.tx", "cable.c1", "att.30a", "att.20a", "att.10a", "cable.c2", "e310.rx2b"]
@@ -52,12 +53,16 @@ floor_dbfs  = [[...], [...]]   # terminated noise floor
 
 ## Rules (the loader refuses a file that breaks one)
 
-- `version = 1`; `date` and `power_sensor.cal_cert_date` are `YYYY-MM-DD`.
+- `version = 1`; `date` is `YYYY-MM-DD`.
+- `reference` names the level reference: `kind` is `"tinysa"` or `"power_sensor"`, and `accuracy_db` (its
+  absolute accuracy, above 0) is required. An older file with a `power_sensor = {...}` table instead still loads
+  (as kind `power_sensor`, accuracy unknown).
 - **Safety minimums:** every route has 60 dB or more at every listed frequency (between transmitters), or
   40 dB or more if it says `receive_only = true`. Losses are positive.
 - Every list has the length of its axis; tables are rows (frequencies) by columns (gains). Axes rise.
 - TX: `spread_db_max` at most 0.2 dB, and `dbm_out` does not fall (by more than 0.5 dB) as gain rises.
-- The power sensor's certificate is at most 12 months old on `date`.
+- A power sensor reference has a `cal_cert_date` at most 12 months before `date`. A tinySA needs none (if it
+  has one, it must be a date).
 - **No serial numbers in clear.** Use `serial_hash` (a sha256 prefix). The file is copied into evidence
   bundles, which may be public.
 - Not older than `recabled` in lab.toml.
@@ -80,6 +85,7 @@ def test_absolute_level(lab):
 | `cal.tx_dbm(radio, gain_db, freq_mhz)` | Power out of the radio's TX port (dBm) |
 | `cal.rx_dbm(radio, dbfs, gain_db, freq_mhz)` | Level at the RX port (dBm) from a measured dBFS; `cal.rx_offset_db(...)` is the offset alone |
 | `cal.rx_floor_dbfs(radio, gain_db, freq_mhz)` | Measured noise floor (dBFS) |
+| `cal.accuracy_db`, `cal.reference` | The reference's absolute accuracy (dB; widen absolute limits by it) and its kind and model |
 | `cal.date`, `cal.sha256` | What the manifest records |
 
 Values between measured points are interpolated linearly (dB against MHz, and against gain dB). Nothing is
@@ -93,12 +99,29 @@ needs_calibration = true      # every test is skipped without a calibration, and
 
 ## In the evidence
 
-The manifest's `calibration` is `null`, or `{sha256, date, version, valid, used}`. `used` is true once a
+The manifest's `calibration` is `null`, or `{sha256, date, version, valid, used}`, plus `reference: {kind,
+accuracy_db}` when a test read the file. `used` is true once a
 test read the file; the bundle then keeps a copy as `calibration.toml`. A file that is configured but not
 read is recorded by hash and date only (`valid` says whether it would load). The checker checks the field
 and that the copy matches (see [checker.md](checker.md)). Older bundles without the field still pass.
 
-## The power sensor
+## The reference instruments
+
+Both only read; neither has a transmit path, so neither asks the TX gate. Keep 40 dB or more between any
+transmitter and either one.
+
+### tinySA (the reference for now, about 2 dB)
+
+`kind = "tinysa"` in lab.toml: the tinySA Ultra / Ultra+ USB serial console (pyserial). `scan` returns
+frequency and level per point; `read_peak_dbm(center_hz, span_hz)` gives the strongest point; `read_marker_dbm()`
+puts marker 1 on the peak. `input_pad_db` (the always-fitted 30 dB pad) is added to every reading in software,
+and a level within 3 dB of `max_input_dbm` at the tinySA's input stops with an error. The console commands
+(`version`, `scan START STOP POINTS 3`, `marker 1 peak`, `marker 1`) follow the tinySA USB interface notes and
+are to be confirmed against the firmware in use; the manifest records `commands_confirmed: false` until then.
+The console does not report a serial number, so put the USB serial (from `/dev/serial/by-id`) in lab.toml. The
+simulated backend gives a noise floor and one tone.
+
+### RF power sensor (later, about 0.5 dB)
 
 `kind = "power_sensor"` in lab.toml (see `lab.example.toml`): SCPI over usbtmc (`/dev/usbtmc*`), a serial port
 or a raw socket. It only reads: identify, zero (with no signal at its input), set the frequency correction,

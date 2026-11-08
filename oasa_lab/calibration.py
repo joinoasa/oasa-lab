@@ -30,6 +30,7 @@ MIN_PATH_DB = 60.0          # between transmitters (AGENTS.md)
 MIN_RX_ONLY_DB = 40.0       # toward a receive-only device
 TX_SPREAD_MAX = 0.2         # dB, spread of repeated TX power readings
 CERT_MAX_DAYS = 365         # power sensor calibration certificate age on the measurement date
+REFERENCE_KINDS = ("tinysa", "power_sensor")   # F15: tinySA, about 2 dB; F15b: a certified power sensor, 0.5 dB
 BUNDLE_NAME = "calibration.toml"   # where a run that used the file keeps a copy
 
 
@@ -74,16 +75,31 @@ def validate(d: Any) -> list[str]:
     day = _day(d.get("date"))
     if day is None:
         bad.append("date must be YYYY-MM-DD")
-    ps = d.get("power_sensor", {})
-    if not isinstance(ps, dict):
-        bad.append("power_sensor must be a table")
-        ps = {}
-    cert = _day(ps.get("cal_cert_date"))
-    if cert is None:
-        bad.append("power_sensor.cal_cert_date must be YYYY-MM-DD")
-    elif day and (day - cert).days > CERT_MAX_DAYS:
-        bad.append(f"power sensor cert {cert} is older than 12 months on {day}")
-    for tname in ("power_sensor", "vna"):
+    # The level reference: `reference = {kind, model, accuracy_db, cal_cert_date}` (kind "tinysa" or
+    # "power_sensor"), or the older `power_sensor = {...}` table. Only a power sensor needs a dated certificate.
+    rname, ref = ("reference", d.get("reference")) if "reference" in d else ("power_sensor", d.get("power_sensor"))
+    if not ref:
+        bad.append("no [power_sensor] or reference = {...} table")
+        ref = {}
+    elif not isinstance(ref, dict):
+        bad.append(f"{rname} must be a table")
+        ref = {}
+    kind = ref.get("kind", "power_sensor") if rname == "reference" else "power_sensor"
+    if rname == "reference":
+        if kind not in REFERENCE_KINDS:
+            bad.append(f"reference.kind must be one of {REFERENCE_KINDS}")
+        acc = ref.get("accuracy_db")
+        if not (_num(acc) and acc > 0):
+            bad.append("reference.accuracy_db must be a number above 0 (the reference's absolute accuracy)")
+    cert = _day(ref.get("cal_cert_date")) if ref.get("cal_cert_date") is not None else None
+    if kind == "power_sensor":
+        if cert is None:
+            bad.append(f"{rname}.cal_cert_date must be YYYY-MM-DD")
+        elif day and (day - cert).days > CERT_MAX_DAYS:
+            bad.append(f"power sensor cert {cert} is older than 12 months on {day}")
+    elif ref.get("cal_cert_date") is not None and cert is None:
+        bad.append(f"{rname}.cal_cert_date must be YYYY-MM-DD (or left out)")
+    for tname in (rname, "vna"):
         t = d.get(tname, {})
         if not isinstance(t, dict):
             continue
@@ -208,6 +224,21 @@ class Calibration:
     def radios(self) -> dict[str, dict[str, Any]]:
         return dict(self.data.get("radios", {}))
 
+    @property
+    def reference(self) -> dict[str, Any]:
+        """The level reference: kind ("tinysa" or "power_sensor"), model, accuracy_db (None if the file has none)."""
+        if "reference" in self.data:
+            r = self.data["reference"]
+            return {"kind": r.get("kind", "power_sensor"), "model": r.get("model"), "accuracy_db": r.get("accuracy_db")}
+        r = self.data.get("power_sensor", {})
+        return {"kind": "power_sensor", "model": r.get("model"), "accuracy_db": r.get("accuracy_db")}
+
+    @property
+    def accuracy_db(self) -> float | None:
+        """How far an absolute level from this file can be off (the reference's accuracy). Widen limits by it."""
+        acc = self.reference["accuracy_db"]
+        return float(acc) if _num(acc) else None
+
     def _path(self, name: str) -> dict[str, Any]:
         p = self.data.get("paths", {}).get(name)
         if p is None:
@@ -245,7 +276,8 @@ class Calibration:
         return interp2(t["freq_mhz"], t["gain_db"], t["floor_dbfs"], freq_mhz, gain_db, f"radios.{radio}.rx floor")
 
     def manifest_entry(self) -> dict[str, Any]:
-        return {"sha256": self.sha256, "date": self.date, "version": VERSION, "valid": True, "used": self.used}
+        return {"sha256": self.sha256, "date": self.date, "version": VERSION, "valid": True, "used": self.used,
+                "reference": {"kind": self.reference["kind"], "accuracy_db": self.accuracy_db}}
 
 
 def parse(raw: bytes, source: str = "calibration.toml", recabled: str | None = None) -> Calibration:

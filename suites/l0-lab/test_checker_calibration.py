@@ -79,7 +79,8 @@ def test_an_old_manifest_without_the_field_still_passes(plain, tmp_path):
 
 def test_a_run_that_used_the_calibration_records_it_and_keeps_a_copy(used):
     c = manifest(used)["calibration"]
-    assert c == {"sha256": cal.load(EXAMPLE).sha256, "date": "2026-01-15", "version": 1, "valid": True, "used": True}
+    assert c == {"sha256": cal.load(EXAMPLE).sha256, "date": "2026-01-15", "version": 1, "valid": True, "used": True,
+                 "reference": {"kind": "tinysa", "accuracy_db": 2.0}}
     assert (used / "calibration.toml").read_bytes() == EXAMPLE.read_bytes()
     assert check_bundle(used, suites_dir())["ok"]
     assert "Bench calibration of 2026-01-15" in (used / "summary.md").read_text()
@@ -124,6 +125,8 @@ def test_tampered_calibration_copy_is_caught(used, tmp_path):
     ("bad date", lambda m: m["calibration"].update(date="15 Jan"), "date must be YYYY-MM-DD"),
     ("impossible date", lambda m: m["calibration"].update(date="2026-02-30"), "date must be YYYY-MM-DD"),
     ("not bool", lambda m: m["calibration"].update(used="yes"), "used must be true or false"),
+    ("bad reference", lambda m: m["calibration"].update(reference={"kind": "guess", "accuracy_db": 2}), "reference must name"),
+    ("bad accuracy", lambda m: m["calibration"]["reference"].update(accuracy_db=-1), "reference must name"),
     ("used invalid", lambda m: m["calibration"].update(valid=False), "only use a valid"),
     ("not object", lambda m: m.update(calibration="calibration.toml"), "must be null or an object"),
     ("hidden copy", lambda m: m.update(calibration=None), "manifest records no calibration"),

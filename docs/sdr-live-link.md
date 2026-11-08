@@ -58,4 +58,16 @@ The delay limits are `optional` only so the simulated bench can leave them unmea
 
 - **The E310 over the network.** In 2026-11-06 runs the E310 stopped transmitting after minutes; its internal Ethernet driver was patched (lab notes) and its helper reopens the radio. The patched module and the E310's IRQ placement (internal link on CPU1) are E310 settings the owner applies; they are not part of this repo.
 - **Real-time priority.** The job unit sets `RestrictRealtime=yes`; without an owner drop-in (`RestrictRealtime=no`, `LimitRTPRIO`) the bridges and helpers run without SCHED_FIFO, which the bench showed costs late packets. The run records `bridge_rt_prio` and the helpers' `rt` / `rt_refused` events.
-- **Longer runs.** A 24-hour soak needs `lab.job_timeout_seconds` (now at most 3600, `oasa_lab/policy.py`) and the job unit's `RuntimeMaxSec` raised: an owner change to the interlock, not made here.
+- **Memory over a day.** `ping` keeps fixed tables (four 8-byte numbers per message: 276 MB for 24 h at 100/s) and builds its report from them without per-message Python lists; the job unit's `MemoryMax` is 4 GB.
+
+## 6. The 24-hour soak: `l2-sdr-live-soak` (F11)
+
+The same run as `l2-sdr-live-link` (one code path, `oasa_lab/livelink_run.py`), for `[sdr_live] soak_duration_s` (86400 s by default), with the same radios, cables, settings, interlocks and limits. The limits hold over the whole day: loss and percentiles over every message, the worst case as the largest 10-minute maximum. The report adds an event `live_hours`: per hour, messages sent and back, loss, and each direction's median, p99.9 and worst, so a drift over the day (temperature, a slow leak, a clock running away) shows even when the day as a whole passes. On the simulated bench it runs the same 30-second check as `l2-sdr-live-link`, so CI stays fast.
+
+**How a job may run 24 hours (owner, 2026-11-07).** Every suite keeps the one-hour cap (`lab.job_timeout_seconds`, at most 3600 s). A suite may run longer only when both hold:
+
+1. it is in `LONG_JOB_SUITES` in `oasa_lab/policy.py` (code, reviewed in a PR; today only `l2-sdr-live-soak`), and
+2. the owner's root-owned lab policy gives it a time in `[lab] long_jobs` (at most 90000 s = 25 h), e.g. `long_jobs = { "l2-sdr-live-soak" = 90000 }`.
+
+The service then stops that job at its own limit, and `job-run` cuts it 30 s after that itself; every other job is still stopped within the hour. The job unit's `RuntimeMaxSec` (the last backstop, if `job-run` itself got stuck) is 90300 s so it can cover the long job; `deploy/selftest.sh` checks it. The radios' own `max_tx_seconds` in lab.toml (90000 for the two cabled USRPs, owner 2026-11-07) still caps the transmit time of every run: a 24-hour soak needs both, and the helpers' `--max-seconds` is the run plus 120 s.
+

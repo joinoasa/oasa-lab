@@ -128,6 +128,7 @@ class Config:
     repo: str = "https://github.com/joinoasa/oasa-lab"
     branch: str = "main"
     job_timeout_seconds: float = 1800
+    long_jobs: dict[str, float] = field(default_factory=dict)  # suite -> its own time limit (lab policy only)
     stop_grace_seconds: float = 10
     max_queued: int = 20
     max_active_per_user: int = DEFAULT_MAX_ACTIVE_PER_USER  # queued + running jobs one user may have
@@ -138,6 +139,10 @@ class Config:
     min_commit: str = ""                  # REST callers may not pick a commit older than this
     keep_jobs: int = 100                  # finished jobs whose evidence is kept; older ones are deleted
     min_free_mb: int = 2000               # a job does not start with less free disk than this
+
+    def timeout_for(self, suite: str) -> float:
+        """A job's time limit: the policy's [lab] long_jobs entry for its suite, else job_timeout_seconds."""
+        return self.long_jobs.get(suite, self.job_timeout_seconds)
     max_bundle_mb: int = 500              # the largest evidence bundle the service accepts from a job
     local_pause_file: str = ""            # an owner-only pause the API cannot clear (default: state_dir/LOCAL_PAUSE)
     sandbox: Sandbox = field(default_factory=Sandbox)
@@ -279,6 +284,7 @@ def parse_config(data: dict[str, Any], base: Path | None = None, env: dict[str, 
         cfg.rf_setup, cfg.confirm_wiring, cfg.devices_file = pol.rf_setup, dict(pol.confirm_wiring), pol.devices_file
         cfg.antenna_caps = dict(pol.antenna_caps)
         cfg.min_commit, cfg.branch, cfg.job_timeout_seconds = pol.min_commit, pol.branch, pol.job_timeout_seconds
+        cfg.long_jobs = dict(pol.long_jobs)
         cfg.stop_grace_seconds, cfg.local_pause_file = pol.stop_grace_seconds, pol.pause_file
         backend_in = str(data.get("inventory", {}).get("backend", "simulated"))
         _need((backend_in == "simulated") == pol.simulated,

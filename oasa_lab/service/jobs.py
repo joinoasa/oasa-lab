@@ -412,9 +412,9 @@ class JobManager:
                 try:
                     if job.id in self._stop_requests:  # stop arrived before the process existed
                         await self._kill()
-                    await asyncio.wait_for(asyncio.shield(self._proc.wait()), self.cfg.job_timeout_seconds)
+                    await asyncio.wait_for(asyncio.shield(self._proc.wait()), self.cfg.timeout_for(job.suite))
                 except asyncio.TimeoutError:
-                    self._stop_requests.setdefault(job.id, f"timed out after {self.cfg.job_timeout_seconds:g} s")
+                    self._stop_requests.setdefault(job.id, f"timed out after {self.cfg.timeout_for(job.suite):g} s")
                     await self._kill()
                 except asyncio.CancelledError:
                     self._stop_requests.setdefault(job.id, "service shutting down")

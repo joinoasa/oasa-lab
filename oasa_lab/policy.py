@@ -33,6 +33,11 @@ MIRROR_UNIT = "oasa-lab-mirror.service"
 
 RF_SAFE = ("cabled", "shielded")  # the only setups where a transmitting suite on cable may run
 MAX_ANTENNA_TX_GAIN_DB = 90.0     # the most an [antenna] cap may say (the USRPs' own range)
+MAX_JOB_SECONDS = 3600            # lab.job_timeout_seconds: the cap for every suite not in LONG_JOB_SUITES
+MAX_LONG_JOB_SECONDS = 90000      # [lab] long_jobs: 25 h; the job unit's RuntimeMaxSec (90300) sits above it
+# Suites built to run for a day (owner, 2026-11-07: the F11 soak). Only these may get a [lab] long_jobs time, so a
+# policy typo cannot give some other suite (or any radiating suite) a 25-hour job.
+LONG_JOB_SUITES = frozenset({"l2-sdr-live-soak"})
 RF_SETUPS = ("unset", "cabled", "shielded", "open")
 
 DEFAULT_POLICY = "/etc/oasa-lab/lab-policy.toml"
@@ -55,6 +60,7 @@ class Policy:
     branch: str = "main"
     min_commit: str = ""                    # the oldest commit a job may run (full id); "" = any commit on the branch
     job_timeout_seconds: float = 1800.0     # the service stops a job at this limit; job-run itself cuts it 30 s later
+    long_jobs: dict[str, float] = field(default_factory=dict)   # suite -> its own time limit (LONG_JOB_SUITES only)
     stop_grace_seconds: float = 10.0        # SIGTERM to SIGKILL
     sec_bin_dir: str = ""                   # fixed folders of the oasa-sec / oasa-radio programs; never from a caller
     radio_bin_dir: str = ""
@@ -67,9 +73,14 @@ class Policy:
     git_config: str = DEFAULT_GIT_CONFIG    # root-owned git config that only trusts the mirror (safe.directory)
     pause_file: str = DEFAULT_PAUSE         # the owner's pause switch: while anything exists here no job starts
 
+    def timeout_for(self, suite: str) -> float:
+        """The time limit of a job running `suite`: its [lab] long_jobs entry, else lab.job_timeout_seconds."""
+        return self.long_jobs.get(suite, self.job_timeout_seconds)
+
 
 _SECTIONS = {
-    "lab": {"rf_setup", "simulated", "devices_file", "branch", "min_commit", "job_timeout_seconds", "stop_grace_seconds"},
+    "lab": {"rf_setup", "simulated", "devices_file", "branch", "min_commit", "job_timeout_seconds", "stop_grace_seconds",
+            "long_jobs"},
     "bins": {"sec", "radio"},
     "confirm_wiring": None,   # free keys: suite names
     "antenna": {"max_tx_gain_db"},
@@ -130,8 +141,18 @@ def parse_policy(data: dict) -> Policy:
     _need(isinstance(floor, str) and (not floor or bool(SHA_RE.match(floor))),
           "lab.min_commit must be a full 40-character commit id")
     timeout = lab.get("job_timeout_seconds", p.job_timeout_seconds)
-    _need(isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and 1 <= timeout <= 3600,
-          "lab.job_timeout_seconds must be 1 to 3600 (the job unit's RuntimeMaxSec is 3900)")
+    _need(isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and 1 <= timeout <= MAX_JOB_SECONDS,
+          f"lab.job_timeout_seconds must be 1 to {MAX_JOB_SECONDS} (longer jobs: [lab] long_jobs, for "
+          f"{', '.join(sorted(LONG_JOB_SUITES))} only)")
+    raw_long = lab.get("long_jobs", {})
+    _need(isinstance(raw_long, dict), "lab.long_jobs must be a table: suite = seconds")
+    long_jobs: dict[str, float] = {}
+    for suite, secs in raw_long.items():
+        _need(suite in LONG_JOB_SUITES,
+              f"lab.long_jobs: {suite!r} may not run long (only {', '.join(sorted(LONG_JOB_SUITES))})")
+        _need(isinstance(secs, (int, float)) and not isinstance(secs, bool) and 1 <= secs <= MAX_LONG_JOB_SECONDS,
+              f"lab.long_jobs: {suite} = {secs!r} must be 1 to {MAX_LONG_JOB_SECONDS} seconds")
+        long_jobs[suite] = float(secs)
     grace = lab.get("stop_grace_seconds", p.stop_grace_seconds)
     _need(isinstance(grace, (int, float)) and not isinstance(grace, bool) and 0.1 <= grace <= 60,
           "lab.stop_grace_seconds must be 0.1 to 60")
@@ -151,6 +172,7 @@ def parse_policy(data: dict) -> Policy:
     return Policy(
         rf_setup=rf, simulated=sim, devices_file=_abs(lab.get("devices_file", ""), "lab.devices_file"),
         branch=branch, min_commit=floor, job_timeout_seconds=float(timeout), stop_grace_seconds=float(grace),
+        long_jobs=long_jobs,
         sec_bin_dir=_abs(bins.get("sec", ""), "bins.sec"), radio_bin_dir=_abs(bins.get("radio", ""), "bins.radio"),
         confirm_wiring=wiring, antenna_caps=caps,
         spool_dir=_abs(paths.get("spool", DEFAULT_SPOOL), "paths.spool", False),

@@ -361,6 +361,14 @@ def test_the_policy_must_be_a_plain_file_owned_by_root_and_closed(bench, spy, tm
     ('[lab]\nmin_commit = "abc"\n', "min_commit"),
     ('[lab]\nbranch = "-x"\n', "branch"),
     ('[lab]\njob_timeout_seconds = 99999\n', "job_timeout_seconds"),
+    ('[lab]\njob_timeout_seconds = 3601\n', "job_timeout_seconds"),
+    ('[lab]\nlong_jobs = { "l2-sdr-live-link" = 7200 }\n', "may not run long"),
+    ('[lab]\nlong_jobs = { "t-quick" = 7200 }\n', "may not run long"),
+    ('[lab]\nlong_jobs = { "l2-sdr-live-soak" = 90001 }\n', "1 to 90000"),
+    ('[lab]\nlong_jobs = { "l2-sdr-live-soak" = 0 }\n', "1 to 90000"),
+    ('[lab]\nlong_jobs = { "l2-sdr-live-soak" = true }\n', "1 to 90000"),
+    ('[lab]\nlong_jobs = { "l2-sdr-live-soak" = "24h" }\n', "1 to 90000"),
+    ('[lab]\nlong_jobs = 90000\n', "must be a table"),
     ('[lab]\nsimulated = "yes"\n', "simulated"),
     ('[bins]\nsec = "relative/bin"\n', "absolute"),
     ('[bins]\nsec = "/opt/../etc"\n', "absolute"),
@@ -373,6 +381,42 @@ def test_a_policy_with_a_typo_or_a_bad_value_is_an_error_not_a_default(text, why
 
     with pytest.raises(PolicyError, match=why):
         parse_policy(tomllib.loads(text))
+
+
+def test_only_the_soak_gets_a_long_time_limit_and_every_other_suite_keeps_the_hour():
+    import tomllib
+
+    pol = parse_policy(tomllib.loads('[lab]\njob_timeout_seconds = 3600\nlong_jobs = { "l2-sdr-live-soak" = 90000 }\n'))
+    assert pol.timeout_for("l2-sdr-live-soak") == 90000
+    for other in ("l2-sdr-live-link", "l2-usrp-loopback", "t-quick"):
+        assert pol.timeout_for(other) == 3600
+    assert parse_policy({}).timeout_for("l2-sdr-live-soak") == 1800, "no long_jobs entry: the normal limit"
+
+
+def test_job_run_gives_a_listed_suite_its_long_limit_and_others_the_normal_one(bench, spy, monkeypatch):
+    from oasa_lab import policy as policy_mod
+
+    # The bench repo has no soak suite; let one of its test suites stand in for it.
+    monkeypatch.setattr(policy_mod, "LONG_JOB_SUITES", frozenset({"t-quick"}))
+    bench.write_policy(job_timeout=120, long_jobs={"t-quick": 86500})
+    bench.request(ID, suite="t-quick")
+    assert job(bench) == 0
+    other = "fedcba9876543210fedcba9876543210"
+    bench.write_policy(job_timeout=120)
+    bench.request(other, suite="t-quick")
+    assert job(bench, job_id=other) == 0
+    assert [c["timeout"] for c in spy] == [86500 + jobrunner.BACKSTOP, 120 + jobrunner.BACKSTOP]
+
+
+def test_the_job_units_last_backstop_covers_the_longest_job_the_policy_allows():
+    import re
+    from pathlib import Path
+
+    from oasa_lab.policy import MAX_JOB_SECONDS, MAX_LONG_JOB_SECONDS
+
+    unit = (Path(__file__).resolve().parents[2] / "deploy" / "systemd" / "oasa-lab-job@.service").read_text()
+    (secs,) = re.findall(r"^RuntimeMaxSec=(\d+)$", unit, re.M)
+    assert int(secs) >= MAX_LONG_JOB_SECONDS + jobrunner.BACKSTOP + 60 > MAX_JOB_SECONDS
 
 
 def test_the_policy_example_in_deploy_is_valid():

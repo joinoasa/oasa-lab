@@ -87,7 +87,9 @@ Semtech AN1200.13 (the LoRa modem designer's guide) was not opened; the formula 
 | Throughput check | 250-byte packets: 60.4 kbps air-limited, 46 kbps with the serial port | ArduPilot: "about 90%" of the air rate one way, with ECC off | Consistent. The serial port is the limit at 57600 baud |
 | Half-duplex | both radios share one frequency | SiK TDM: transmit window, silence, receive window | Confirmed |
 | TDM windows, silence periods, `MAX_WINDOW`, frequency hopping | not modeled | | The shared medium with turns is a simplification: real SiK waits for its window, so latency is higher |
-| MAVLink framing (`MAVLINK` 0, 1, 2) | not modeled | ArduPilot page | The radio aligns packets to MAVLink frames; our packets are whatever the test sends |
+| MAVLink framing (`MAVLINK` 0, 1, 2) | not modeled | ArduPilot page | The radio aligns packets to MAVLink frames; our packets are whatever the test sends. The bridge needs 0 (`packet.c`: "simple framing" sends serial bytes as they come) |
+
+The SiK suites (`l2-sik-link`, `l2-sik-oasa-link`) time a packet as serial in + this airtime + serial out, both serial ports at SERIAL_SPEED (10 bits a byte), and the simulated SiK radios on the bench clock both ports. Their limits and reasons are in each `suite.toml` and in [hardware-suites.md](hardware-suites.md).
 
 ### mLRS (`mlrs-19hz`, `mlrs-31hz`, `mlrs-50hz`)
 

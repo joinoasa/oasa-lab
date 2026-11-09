@@ -24,7 +24,7 @@ Optional. The simulated bench and CI need none of these. Rule: a hardware driver
 
 | Package | Version | License | How used | Flag |
 |---|---|---|---|---|
-| [pyserial](https://github.com/pyserial/pyserial) | 3.5 (`>=3.5,<4`) | BSD-3-Clause | Serial port to the LoRa modems, the KORAD supply, the tinySA console and a power sensor on `transport = "serial"` (a sensor on usbtmc or a socket needs only the standard library) | |
+| [pyserial](https://github.com/pyserial/pyserial) | 3.5 (`>=3.5,<4`) | BSD-3-Clause | Serial port to the LoRa modems, the SiK radios, the KORAD supply, the tinySA console and a power sensor on `transport = "serial"` (a sensor on usbtmc or a socket needs only the standard library) | |
 | [pyadi-iio](https://github.com/analogdevicesinc/pyadi-iio) | 0.0.21 (`>=0.0.20,<0.1`) | "ADI BSD" (BSD-3 plus extra clauses) | Drives the Pluto+ (`adi.ad9361`) | **Not OSI-permissive.** One clause says use must be with an Analog Devices component. We only run it against a Pluto (AD9363) in the lab; nothing is shipped. Check before using it elsewhere |
 | [pylibiio](https://github.com/analogdevicesinc/libiio) | 1.0 | LGPL-2.1-or-later | Dependency of pyadi-iio | **LGPL.** Not modified, not shipped |
 | libiio | 1.0 | LGPL-2.1 | C library under pylibiio | **LGPL.** System library, not shipped |
@@ -104,7 +104,7 @@ These are tools the owner installs and the tests may call. (For the service test
 
 ## Read, not used
 
-The radio profiles ([profiles.md](profiles.md)) take numbers and equations from the Semtech SX126x driver, ArduPilot SiK, mLRS and WFB-ng sources and docs. No code from them is copied or linked. If a profile ever needs one of them as a dependency, it goes in this table first.
+The radio profiles ([profiles.md](profiles.md)) take numbers and equations from the Semtech SX126x driver, ArduPilot SiK, mLRS and WFB-ng sources and docs. The SiK driver and its simulated radios (`devices/sikat.py`, `devices/simsik.py`) follow the SiK AT protocol as described in ArduPilot's SiK page and firmware (`at.c`, `serial.c`, `parameters.c`, `tdm.c`; BSD-2-Clause); no SiK code is copied. No code from them is copied or linked. If a profile ever needs one of them as a dependency, it goes in this table first.
 
 ## Standard library only
 

@@ -134,8 +134,8 @@ jobs:
           path: runs/
           if-no-files-found: error
 
-  # The encrypted link over simulated LoRa modems: oasa-link and oasa-radio bridges, both from main,
-  # on the simulated bench. The real-hardware run of this suite happens on the lab PC.
+  # The encrypted link over simulated LoRa modems and SiK radios: oasa-link and oasa-radio bridges, both from
+  # main, on the simulated bench. The real-hardware run of this suite happens on the lab PC.
   lora-link:
     name: l2-lora-link, simulated bench (oasa-sec and oasa-radio main)
     runs-on: ubuntu-latest
@@ -171,6 +171,17 @@ jobs:
           OASA_SEC_BIN_DIR="$GITHUB_WORKSPACE/oasa-sec/target/debug" \
           OASA_RADIO_BIN_DIR="$GITHUB_WORKSPACE/oasa-radio/target/debug" \
             oasa-lab run l2-lora-link --out runs | tee "$RUNNER_TEMP/run.txt"
+      # Needs oasa-radio main with --sik-expect (oasa-radio sik-settings-check merges first; until then these skip
+      # and the checker fails them).
+      - name: Run l2-sik-link and l2-sik-oasa-link on the simulated bench (needs oasa-radio with --sik-expect)
+        run: |
+          set -euo pipefail
+          for s in l2-sik-link l2-sik-oasa-link; do
+            OASA_LAB_SIM=1 \
+            OASA_SEC_BIN_DIR="$GITHUB_WORKSPACE/oasa-sec/target/debug" \
+            OASA_RADIO_BIN_DIR="$GITHUB_WORKSPACE/oasa-radio/target/debug" \
+              oasa-lab run "$s" --out runs | tee -a "$RUNNER_TEMP/run.txt"
+          done
       - name: Run l2-sdr-link, l2-sdr-control, l2-sdr-live-link and l2-sdr-live-soak on the simulated bench
         run: |
           set -euo pipefail

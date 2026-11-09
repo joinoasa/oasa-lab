@@ -34,7 +34,7 @@ Follow the [OASA software standard](https://joinoasa.org/docs/software-standard/
 | `tail -f runs/*/log.jsonl` | Watch a run live |
 | `pytest -p oasa_lab.pytest_plugin suites/l0-lab` | A suite without a bundle (quick local loop) |
 
-Run `l0-lab`, `l1-channel`, `l1-plaintext-control`, `l1-profiles`, and with `OASA_LAB_SIM=1` `l2-pluto-acceptance`, `l2-rf-control`, `l2-rx-noise` and `l2-usrp-loopback` before every pull request; CI does the same (it also runs `l1-oasa-link`, `l2-lora-link`, `l1-waveform-w0`, `l2-waveform-w1`, `l2-e310-two-channel`, `l2-sdr-link`, `l2-sdr-control`, `l2-sdr-live-link` and `l2-sdr-live-soak` with the oasa-sec and oasa-radio binaries). Details: [README](README.md), [checker](docs/checker.md), [software used](docs/software-used.md).
+Run `l0-lab`, `l1-channel`, `l1-plaintext-control`, `l1-profiles`, and with `OASA_LAB_SIM=1` `l2-pluto-acceptance`, `l2-rf-control`, `l2-rx-noise` and `l2-usrp-loopback` before every pull request; CI does the same (it also runs `l1-oasa-link`, `l2-lora-link`, `l2-sik-link`, `l2-sik-oasa-link`, `l1-waveform-w0`, `l2-waveform-w1`, `l2-e310-two-channel`, `l2-sdr-link`, `l2-sdr-control`, `l2-sdr-live-link` and `l2-sdr-live-soak` with the oasa-sec and oasa-radio binaries). Details: [README](README.md), [checker](docs/checker.md), [software used](docs/software-used.md).
 
 ## Adding a suite or test
 

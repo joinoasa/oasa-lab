@@ -65,6 +65,57 @@ profile = "lora-sf7-bw125"
 freq_mhz = 915.0
 tx_power_dbm = 10
 
+# --- Holybro SiK Telemetry Radio V3 pair, 915 MHz (SiK firmware) --------------------------------------
+# Set each radio first with oasa-radio (same values on both; a NETID of your own, MAVLINK framing off):
+#   oasa-radio sik set --device PORT --netid N --mavlink 0 --air-speed 64 --ecc 0 --txpower 20
+# The driver reads the settings (ATI, ATI5) when it opens the radio and records them; it never changes them.
+# The [devices.ID.sik] table is what the radio must report: the suites refuse a radio that differs, and pass
+# it to oasa-radio bridge --sik-expect. The radios use RP-SMA connectors: use RP-SMA to SMA adapters.
+[devices.sik_a]
+kind = "sik"
+model = "Holybro SiK Telemetry Radio V3 915 MHz"
+port = "/dev/serial/by-id/usb-FTDI_FT230X_Basic_UART_AAAAAAAA-if00-port0"   # check `ls /dev/serial/by-id/`
+usb_serial = "AAAAAAAA"       # the radio's USB serial; the suite refuses a port that belongs to another radio
+serial = "AAAAAAAA"           # the label on the radio, or the USB serial
+baud = 57600                  # the radio's SERIAL_SPEED (57)
+mtu = 242                     # oasa-radio bridge --mtu: framed it is 249 bytes, one SiK packet (250)
+# hub_port = 5                # a free port of a switchable hub, to power-cycle the radio
+[devices.sik_a.radio]
+profile = "sik-64k"           # airtime model: see `oasa-lab profiles`
+[devices.sik_a.sik]           # SiK names, lower case
+netid = 4242                  # yours: one random number per pair (shuf -i 1-65535 -n 1). Not security
+air_speed = 64
+ecc = 0
+mavlink = 0
+serial_speed = 57
+txpower = 20
+min_freq = 915000
+max_freq = 928000
+num_channels = 50
+max_window = 131
+
+[devices.sik_b]
+kind = "sik"
+model = "Holybro SiK Telemetry Radio V3 915 MHz"
+port = "/dev/serial/by-id/usb-FTDI_FT230X_Basic_UART_BBBBBBBB-if00-port0"
+usb_serial = "BBBBBBBB"
+serial = "BBBBBBBB"
+baud = 57600
+mtu = 242
+[devices.sik_b.radio]
+profile = "sik-64k"
+[devices.sik_b.sik]
+netid = 4242
+air_speed = 64
+ecc = 0
+mavlink = 0
+serial_speed = 57
+txpower = 20
+min_freq = 915000
+max_freq = 928000
+num_channels = 50
+max_window = 131
+
 # --- KORAD KA3005P bench supply ---------------------------------------------------------------------
 # Never more than 6 V, 3 A: that limit is in the driver. max_v and max_a here can only lower it.
 # The output is off at open and close. If this supply feeds a radio, set hold_output = true: the driver then
@@ -221,3 +272,17 @@ from = "heltec_b"
 to = "rtl0"
 loss_db = 66.0
 receiver_transmits = false
+
+[wiring.sik]
+rf_setup = "cabled"
+description = "SiK A (RP-SMA to SMA) -30 dB- -30 dB- SiK B (SMA to RP-SMA). Radios powered over USB from the lab PC"
+[[wiring.sik.paths]]
+name = "a-to-b"
+from = "sik_a"
+to = "sik_b"
+loss_db = 60.0                  # 30 + 30 (plus a little for adapters and cable, left out: the safe side)
+[[wiring.sik.paths]]
+name = "b-to-a"
+from = "sik_b"
+to = "sik_a"
+loss_db = 60.0

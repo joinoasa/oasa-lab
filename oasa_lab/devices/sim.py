@@ -28,6 +28,7 @@ class SimWorld:
         self.rng = random.Random(seed)
         self.paths: list[dict[str, Any]] = [p for w in (wiring or {}).values() for p in w.get("paths", [])]
         self.air: SimAir | None = None
+        self.sik_air: Any = None   # simsik.SimSikAir, made on first use
         self.tones: dict[str, dict[str, Any]] = {}      # "pluto0:tx1" -> {"rf_hz", "dbm", "ppm"}
         self.extra_loss_db: dict[str, float] = {}       # fault injection: "pluto0:rx2" -> dB
         self._lock = threading.Lock()
@@ -44,9 +45,19 @@ class SimWorld:
                 self.air = SimAir(radio_airtime_settings(radio), seed=self.seed)
             return self.air
 
+    def get_sik_air(self, profile: str = "sik-64k", loss: float = 0.0) -> Any:
+        """The simulated air of the SiK radios (one per world; the first radio's profile sets it)."""
+        from .simsik import SimSikAir
+        with self._lock:
+            if self.sik_air is None:
+                self.sik_air = SimSikAir(profile_settings(profile), seed=self.seed, loss=loss)
+            return self.sik_air
+
     def close(self) -> None:
         if self.air is not None:
             self.air.stop()
+        if self.sik_air is not None:
+            self.sik_air.stop()
 
 
 def radio_airtime_settings(radio: dict[str, Any]) -> dict[str, Any]:

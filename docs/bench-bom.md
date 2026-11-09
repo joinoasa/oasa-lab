@@ -52,4 +52,4 @@ Wiring: [hardware-suites.md](hardware-suites.md) (`usrp`). Measured on this benc
 
 ## Adding next
 
-For direction finding ([oasa-radio#7](https://github.com/joinoasa/oasa-radio/issues/7)): a 2-way SMA splitter, matched RG-316 cables of known lengths, 50 Ω terminators; later three matched 915 MHz antennas. For R-COM1: one off-the-shelf telemetry pair (Holybro SiK V3, $58.99).
+For direction finding ([oasa-radio#7](https://github.com/joinoasa/oasa-radio/issues/7)): a 2-way SMA splitter, matched RG-316 cables of known lengths, 50 Ω terminators; later three matched 915 MHz antennas. For R-COM1: one off-the-shelf telemetry pair (Holybro SiK V3 915 MHz, $58.99), two RP-SMA (male) to SMA (female) adapters and two more 30 dB attenuators (or reuse the LoRa pair's), for `wiring.sik` in [hardware-suites.md](hardware-suites.md). The suites `l2-sik-link` and `l2-sik-oasa-link` are ready on the simulated bench.

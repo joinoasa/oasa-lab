@@ -76,10 +76,11 @@ def test_framing_round_trip_and_bad_frames():
 def test_example_inventory_is_valid_and_matches_the_built_in_sim_bench():
     inv = Inventory.load(ROOT / "lab.example.toml", sim=False)
     assert inv.backend == "hardware" and set(inv.devices) == set(DEFAULT_SIM["devices"])
-    assert {"pluto", "lora"} <= set(inv.wiring)
+    assert {"pluto", "lora", "sik"} <= set(inv.wiring)
+    assert inv.has("sik:2") and not inv.has("sik:3")
     assert inv.has("serial-radio:2") and inv.has("hub") and not inv.has("serial-radio:3")
     assert Inventory.load(ROOT / "lab.example.toml", sim=True).backend_of("pluto0") == "sim"
-    for suite in ("l2-pluto-acceptance", "l2-lora-link", "l2-rf-control"):
+    for suite in ("l2-pluto-acceptance", "l2-lora-link", "l2-rf-control", "l2-sik-link", "l2-sik-oasa-link"):
         s = load_suite(suites_dir() / suite)
         assert s.transmits and s.wiring in inv.wiring and not inv.missing(s.requires), suite
 

@@ -34,6 +34,23 @@ class PortLike(Protocol):
     def close(self) -> None: ...
 
 
+def check_usb_serial(dev_id: str, path: str, want: Any) -> None:
+    """If lab.toml gives a USB serial number, the port must belong to that device."""
+    if not want:
+        return
+    try:
+        from serial.tools import list_ports  # type: ignore
+    except ImportError:
+        raise Unavailable("pyserial is not installed (pip install 'oasa-lab[hw]')") from None
+    real = os.path.realpath(path)
+    for p in list_ports.comports():
+        if os.path.realpath(p.device) == real:
+            if str(p.serial_number) != str(want):
+                raise DeviceError(f"{dev_id}: {path} is USB serial {p.serial_number}, lab.toml says {want}")
+            return
+    raise DeviceError(f"{dev_id}: {path} not found among the serial ports")
+
+
 class SerialPort:
     """pyserial (BSD-3-Clause), imported only when a real modem is opened."""
 
@@ -200,27 +217,10 @@ class SerialRadio(Device):
             path = str(self.cfg.get("port", ""))
             if not path:
                 raise DeviceError(f"{self.id}: 'port' is missing in lab.toml")
-            self._check_usb_serial(path)
+            check_usb_serial(self.id, path, self.cfg.get("usb_serial"))
             self.port = SerialPort(path, int(self.cfg.get("baud", 115200)),
                                    bool(self.cfg.get("dtr", True)), bool(self.cfg.get("rts", False)))
         self.link = ModemLink(self.id, self.port, self.mtu, gate=self.require_tx)
-
-    def _check_usb_serial(self, path: str) -> None:
-        """If lab.toml gives a USB serial number, the port must belong to that board."""
-        want = self.cfg.get("usb_serial")
-        if not want:
-            return
-        try:
-            from serial.tools import list_ports  # type: ignore
-        except ImportError:
-            raise Unavailable("pyserial is not installed (pip install 'oasa-lab[hw]')") from None
-        real = os.path.realpath(path)
-        for p in list_ports.comports():
-            if os.path.realpath(p.device) == real:
-                if str(p.serial_number) != str(want):
-                    raise DeviceError(f"{self.id}: {path} is USB serial {p.serial_number}, lab.toml says {want}")
-                return
-        raise DeviceError(f"{self.id}: {path} not found among the serial ports")
 
     def _close(self) -> None:
         if self.link:

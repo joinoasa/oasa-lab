@@ -14,9 +14,13 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-KINDS = ("pluto", "rtlsdr", "serial-radio", "korad", "b200", "e310", "power_sensor", "tinysa", "hub")
+KINDS = ("pluto", "rtlsdr", "serial-radio", "sik", "korad", "b200", "e310", "power_sensor", "tinysa", "hub")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded", "antenna")   # "antenna": radios on antennas, for suites that radiate
+
+# The settings both simulated SiK radios start with and are expected to report (lab.toml [devices.ID.sik]).
+SIM_SIK = {"netid": 4242, "air_speed": 64, "ecc": 0, "mavlink": 0, "serial_speed": 57, "txpower": 20,
+           "min_freq": 915000, "max_freq": 928000, "num_channels": 50, "max_window": 131}
 
 # What `OASA_LAB_SIM=1` uses when there is no lab.toml. Same shape as lab.example.toml.
 DEFAULT_SIM: dict[str, Any] = {
@@ -32,6 +36,12 @@ DEFAULT_SIM: dict[str, Any] = {
         "heltec_b": {"kind": "serial-radio", "model": "Heltec WiFi LoRa 32 V3", "port": "sim:b",
                      "serial": "SIM-HELTEC-B", "hub_port": 4, "firmware": "sim-modem 0.1",
                      "radio": {"profile": "lora-sf7-bw125", "freq_mhz": 915.0, "tx_power_dbm": 10}},
+        "sik_a": {"kind": "sik", "model": "Holybro SiK Telemetry Radio V3 915 MHz", "port": "sim:sik-a",
+                  "serial": "SIM-SIK-A", "baud": 57600, "mtu": 242, "radio": {"profile": "sik-64k"},
+                  "sik": SIM_SIK},
+        "sik_b": {"kind": "sik", "model": "Holybro SiK Telemetry Radio V3 915 MHz", "port": "sim:sik-b",
+                  "serial": "SIM-SIK-B", "baud": 57600, "mtu": 242, "radio": {"profile": "sik-64k"},
+                  "sik": SIM_SIK},
         "korad0": {"kind": "korad", "port": "sim:korad", "serial": "SIM-KORAD-0001", "hold_output": True,
                    "sim": {"on": True, "vset": 6.0, "iset": 3.0}},
         "psens0": {"kind": "power_sensor", "model": "keysight-u2004a", "transport": "usbtmc", "port": "sim:psens",
@@ -58,6 +68,14 @@ DEFAULT_SIM: dict[str, Any] = {
             "paths": [
                 {"name": "b200-e310", "from": "b2000:tx/rx", "to": "e3100:rx2-b", "loss_db": 60.0},
                 {"name": "e310-b200", "from": "e3100:trx-a", "to": "b2000:rx2", "loss_db": 60.0},
+            ],
+        },
+        "sik": {
+            "rf_setup": "cabled",
+            "description": "SiK A -30 dB- -30 dB- SiK B (two fixed attenuators in line)",
+            "paths": [
+                {"name": "a-to-b", "from": "sik_a", "to": "sik_b", "loss_db": 60.0},
+                {"name": "b-to-a", "from": "sik_b", "to": "sik_a", "loss_db": 60.0},
             ],
         },
         "lora": {

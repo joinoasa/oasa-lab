@@ -38,9 +38,9 @@ Rules for every node:
 |---|---|---|
 | Build | `cargo build --locked`, CI green; `oasa-radio bridge` with the serial adapter | ✅ |
 | Docs | README, [serial framing](https://github.com/joinoasa/oasa-radio/blob/main/docs/serial-framing.md) | ✅ |
-| BOM | One radio pair the guide uses, with its cables and attenuators | ⬜ needs a radio pair (SiK telemetry, about $59, is the cheapest) |
-| Test results | A counted lab run of an off-the-shelf pair on cable: bytes both ways, loss and latency against its profile | ⬜ blocked on the radio pair |
-| Security review | Short: the adapter moves bytes only and never parses or logs them; a radio's own encryption never counts | ⬜ internal review written: [security-review-r-com1.md](https://github.com/joinoasa/oasa-radio/blob/main/docs/security-review-r-com1.md); the adapter is sound. H1 is the SiK radio itself (any radio on the same NETID can change its settings remotely): fix and test with the pair (unique NETID, the bridge checks `ATI5` before starting) |
+| BOM | One radio pair the guide uses, with its cables and attenuators | ⬜ Holybro SiK V3 915 MHz pair ordered; parts listed in [bench-bom.md](bench-bom.md) (RP-SMA adapters, 2 × 30 dB) |
+| Test results | A counted lab run of an off-the-shelf pair on cable: bytes both ways, loss and latency against its profile | ⬜ suite `l2-sik-link` ready and passing on the simulated bench ([hardware-suites.md](hardware-suites.md#the-sik-pair-on-day-one)); a counted run waits for the pair |
+| Security review | Short: the adapter moves bytes only and never parses or logs them; a radio's own encryption never counts | ⬜ internal review written: [security-review-r-com1.md](https://github.com/joinoasa/oasa-radio/blob/main/docs/security-review-r-com1.md); the adapter is sound. H1 is the SiK radio itself (any radio on the same NETID can change its settings remotely): fixed in code (oasa-radio `sik show/set`, `bridge --sik-expect`, [sik.md](https://github.com/joinoasa/oasa-radio/blob/main/docs/sik.md)); `l2-sik-link` tests it (`test_remote_change_is_caught`) and confirms it on the pair |
 | Training guide | Wire two radios, run the bridge both ends, send packets | ⬜ |
 
 ## R-COM2: Encrypted link, OASA-SEC v0 (oasa-sec, oasa-radio)
@@ -52,7 +52,7 @@ Needs R-COM1 and R-SEC1 done first.
 | Build | `oasa-link` builds and CI is green | ✅ |
 | Docs | [Link spec v0](https://github.com/joinoasa/oasa-sec/blob/main/docs/oasa-sec-v0-link.md) | ✅ |
 | BOM | The radios the results used | ⬜ SDR bench: [bench-bom.md](bench-bom.md); the R-COM1 radio pair to add |
-| Test results | `l1-oasa-link` counted (loss, reorder, replay, attacker, rekey); the link over at least one real radio counted with ciphertext-only air: `l2-sdr-link` on the SDR bench ([sdr-link.md](sdr-link.md)) and over the R-COM1 radio | ⬜ L1 in CI; **SDR bench counted** ([l2-sdr-link](results/l2-sdr-link-0e21d0f8787f.md)); the R-COM1 radio still to do |
+| Test results | `l1-oasa-link` counted (loss, reorder, replay, attacker, rekey); the link over at least one real radio counted with ciphertext-only air: `l2-sdr-link` on the SDR bench ([sdr-link.md](sdr-link.md)) and over the R-COM1 radio | ⬜ L1 in CI; **SDR bench counted** ([l2-sdr-link](results/l2-sdr-link-0e21d0f8787f.md)); the R-COM1 radio: `l2-sik-oasa-link` ready on the simulated bench, waits for the pair |
 | Security review | Of the link protocol and implementation, in oasa-sec | ✅ internal: [security-review-r-com2.md](https://github.com/joinoasa/oasa-sec/blob/main/docs/security-review-r-com2.md); no high; M1 (crossed sessions never rekeyed) fixed in [oasa-sec#25](https://github.com/joinoasa/oasa-sec/pull/25), I5 in [#24](https://github.com/joinoasa/oasa-sec/pull/24) |
 | Training guide | Encrypted MAVLink (or any UDP) between two machines over a radio | ✅ [training-r-com2.md](https://github.com/joinoasa/oasa-sec/blob/main/docs/training-r-com2.md) (SiK steps not yet run on hardware) |
 

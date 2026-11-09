@@ -113,7 +113,8 @@ def test_job_env_has_no_service_secrets(svc):
 
 
 def test_a_real_suite_end_to_end(svc):
-    done = svc.wait(svc.submit("l0-lab")["id"], timeout=150)
+    # l0-lab takes 2 to 3 minutes on a CI runner since the SiK tests; the fixture's job limit is 300 s.
+    done = svc.wait(svc.submit("l0-lab")["id"], timeout=330)
     assert done["status"] == "passed" and done["check_ok"] is True
 
 

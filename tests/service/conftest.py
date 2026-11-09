@@ -232,7 +232,7 @@ def service_data(repo: Path, state: Path, port: int, extra: dict | None = None) 
         token_rows.append({"name": f"{u['name']}-token", "user": u["name"], "sha256": h, "expires": TOMORROW})
     data = {
         "service": {"port": port, "public_url": f"http://127.0.0.1:{port}", "state_dir": str(state), "repo": str(repo),
-                    "stop_grace_seconds": 1, "job_timeout_seconds": 120, "min_free_mb": 100},
+                    "stop_grace_seconds": 1, "job_timeout_seconds": 300, "min_free_mb": 100},
         "sandbox": {"mode": "none"},  # the unit tests run jobs as the test user; test_sandbox.py covers the real sandbox's plumbing
         "lab": {"rf_setup": "unset"},
         "inventory": {"backend": "simulated", "devices": [

@@ -24,7 +24,7 @@ Optional. The simulated bench and CI need none of these. Rule: a hardware driver
 
 | Package | Version | License | How used | Flag |
 |---|---|---|---|---|
-| [pyserial](https://github.com/pyserial/pyserial) | 3.5 (`>=3.5,<4`) | BSD-3-Clause | Serial port to the LoRa modems, the SiK radios and the KORAD supply | |
+| [pyserial](https://github.com/pyserial/pyserial) | 3.5 (`>=3.5,<4`) | BSD-3-Clause | Serial port to the LoRa modems, the SiK radios, the KORAD supply, the tinySA console and a power sensor on `transport = "serial"` (a sensor on usbtmc or a socket needs only the standard library) | |
 | [pyadi-iio](https://github.com/analogdevicesinc/pyadi-iio) | 0.0.21 (`>=0.0.20,<0.1`) | "ADI BSD" (BSD-3 plus extra clauses) | Drives the Pluto+ (`adi.ad9361`) | **Not OSI-permissive.** One clause says use must be with an Analog Devices component. We only run it against a Pluto (AD9363) in the lab; nothing is shipped. Check before using it elsewhere |
 | [pylibiio](https://github.com/analogdevicesinc/libiio) | 1.0 | LGPL-2.1-or-later | Dependency of pyadi-iio | **LGPL.** Not modified, not shipped |
 | libiio | 1.0 | LGPL-2.1 | C library under pylibiio | **LGPL.** System library, not shipped |
@@ -36,6 +36,7 @@ Tools run as **separate processes** (never imported, never shipped):
 |---|---|---|---|
 | [rtl-sdr-blog](https://github.com/rtlsdrblog/rtl-sdr-blog) `rtl_sdr`, `rtl_test` | GPL-2.0 | Records raw IQ from the RTL-SDR Blog V4 (the V4 needs this fork) | **GPL.** Subprocess only |
 | [UHD](https://github.com/EttusResearch/uhd) `uhd_usrp_probe`, `uhd_config_info`, `rx_samples_to_file`, `rx_samples_c`, `tx_waveforms`, `tx_samples_from_file` | GPL-3.0 | Identifies the B200mini and E310, records raw IQ, sends a test tone or a test waveform from a file | **GPL.** Separate processes only. Never imported, linked or shipped |
+| OASA radio helper `oasa-uhd-stream` (lab-only, in no OASA repo) | GPL-3.0 (links UHD) | `l2-sdr-live-link`, `l2-sdr-live-soak`: moves samples between one radio and two FIFOs, timed TX; installed on the lab host by the owner, pinned by sha256 in `lab.toml` `[sdr_live]` | **GPL.** Separate process only. Owner decision 2026-11-07: its source stays private to the lab; never imported, linked or shipped |
 | [uhubctl](https://github.com/mvp/uhubctl) | GPL-2.0 | Per-port USB power (one of two hub options) | **GPL.** Optional subprocess |
 | [ykushcmd](https://github.com/Yepkit/ykush) | Apache-2.0 | Per-port USB power for the YKUSH3 | |
 

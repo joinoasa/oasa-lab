@@ -34,13 +34,14 @@ Follow the [OASA software standard](https://joinoasa.org/docs/software-standard/
 | `tail -f runs/*/log.jsonl` | Watch a run live |
 | `pytest -p oasa_lab.pytest_plugin suites/l0-lab` | A suite without a bundle (quick local loop) |
 
-Run `l0-lab`, `l1-channel`, `l1-plaintext-control`, `l1-profiles`, and with `OASA_LAB_SIM=1` `l2-pluto-acceptance`, `l2-rf-control`, `l2-rx-noise` and `l2-usrp-loopback` before every pull request; CI does the same (it also runs `l1-oasa-link`, `l2-lora-link`, `l2-sik-link`, `l2-sik-oasa-link`, `l1-waveform-w0`, `l2-waveform-w1`, `l2-e310-two-channel`, `l2-sdr-link` and `l2-sdr-control` with the oasa-sec and oasa-radio binaries). Details: [README](README.md), [checker](docs/checker.md), [software used](docs/software-used.md).
+Run `l0-lab`, `l1-channel`, `l1-plaintext-control`, `l1-profiles`, and with `OASA_LAB_SIM=1` `l2-pluto-acceptance`, `l2-rf-control`, `l2-rx-noise` and `l2-usrp-loopback` before every pull request; CI does the same (it also runs `l1-oasa-link`, `l2-lora-link`, `l2-sik-link`, `l2-sik-oasa-link`, `l1-waveform-w0`, `l2-waveform-w1`, `l2-e310-two-channel`, `l2-sdr-link`, `l2-sdr-control`, `l2-sdr-live-link` and `l2-sdr-live-soak` with the oasa-sec and oasa-radio binaries). Details: [README](README.md), [checker](docs/checker.md), [software used](docs/software-used.md).
 
 ## Adding a suite or test
 
 - A suite is `suites/<name>/` with a `suite.toml` (description, `expectations`, `[captures]` flags) and pytest files. Use the `lab` fixture: `lab.channel(...)`, `lab.marker()`, `lab.file()`, `lab.binary()`.
 - List known-bad cases (attacker, wrong key, replay) in `expectations`. The checker fails the run if one is missing or skipped.
 - A hardware suite adds to `suite.toml`: `transmits = true` if it radiates, `requires = ["pluto", ...]` (missing hardware skips it), `wiring = "NAME"`, and `[limits.METRIC]` with `min`/`max` (`optional = true` if it may stay unmeasured). Take numbers with `lab.measure(...)` so the checker can re-apply the limits; get devices from the `hw` fixture; save IQ with `lab.sigmf(...)`. A pure-simulation suite saves IQ the same way with `device="sim:NAME"` (marked simulated; `--require-hardware` rejects it). Every device needs a simulated backend so CI can run the suite.
+- Absolute levels come from the bench calibration: `lab.require_calibration()` (or `needs_calibration = true` in `suite.toml`) gives path loss, TX dBm and RX dBFS-to-dBm. See [calibration](docs/calibration.md).
 - Never transmit without at least 60 dB between transmitters (40 dB toward a receive-only device). Put the loss of every path in `lab.example.toml`; the checker fails a run below the limit.
 - A hardware driver's library must be permissive. LGPL or GPL tools are allowed as optional extras or separate processes only, never shipped, and flagged in [docs/software-used.md](docs/software-used.md).
 - Mark captures `encrypted = true` only if the traffic is ciphertext. Add a plaintext control for any new scanner rule.

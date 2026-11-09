@@ -9,7 +9,8 @@ import sys
 from importlib import metadata
 from pathlib import Path
 
-from . import __version__
+from . import __version__, calibration
+from .devices import Inventory, InventoryError
 from .channel import ChannelSettings
 from .context import RunContext, git_info, sha256_file
 from .jsonl import now_rfc3339
@@ -19,6 +20,19 @@ MANIFEST_SCHEMA = 1  # new fields since 0.1 (hardware, recordings, transmits, re
 # Optional job details the service passes in; recorded in the manifest as manifest["job"].
 _JOB_ENV = {"id": "OASA_LAB_JOB_ID", "profile": "OASA_LAB_PROFILE", "rf_setup": "OASA_LAB_RF_SETUP",
             "requested_by": "OASA_LAB_REQUESTED_BY", "wiring_confirmed": "OASA_LAB_WIRING_CONFIRMED"}
+
+
+def _calibration(ctx: RunContext) -> dict | None:
+    """The bench calibration this run used (a copy goes into the bundle), else the one lab.toml configures
+    (hash and date only), else None."""
+    cal = ctx.calibration
+    if cal is not None:
+        (ctx.run_dir / calibration.BUNDLE_NAME).write_bytes(cal.raw)
+        return cal.manifest_entry()
+    try:
+        return calibration.manifest_entry_for(Inventory.load())
+    except InventoryError:
+        return None
 
 
 def write_manifest(ctx: RunContext) -> dict:
@@ -51,6 +65,7 @@ def write_manifest(ctx: RunContext) -> dict:
         "recordings": list(ctx.recordings),
         "expectations": list(ctx.suite.expectations),
         "markers": list(ctx.markers),
+        "calibration": _calibration(ctx),
     }
     job = {k: os.environ[v] for k, v in _JOB_ENV.items() if os.environ.get(v)}
     if job:  # set by the job service (oasa_lab/service); absent in a plain run
@@ -66,6 +81,13 @@ def write_sums(run_dir: Path) -> None:
         if p.is_file() and p.name != "SHA256SUMS":
             lines.append(f"{sha256_file(p)}  {p.relative_to(run_dir).as_posix()}")
     (run_dir / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _calibration_line(c: dict | None) -> str:
+    if not c:
+        return "- Bench calibration: none configured"
+    state = "used (copy in calibration.toml)" if c["used"] else "configured, not used" + ("" if c["valid"] else ", INVALID")
+    return f"- Bench calibration of {c['date'] or 'unknown date'}, sha256 `{c['sha256'][:16]}...`: {state}"
 
 
 def write_summary(run_dir: Path) -> str:
@@ -88,6 +110,7 @@ def write_summary(run_dir: Path) -> str:
         f"- Seed {manifest['seed']}, run id `{manifest['run_id']}`",
         f"- oasa-lab {lab['version']} at `{lab['git_sha'][:12]}`{' (dirty)' if lab['git_dirty'] else ''}; "
         f"Python {manifest['python']['version']} on {manifest['os']['platform']}",
+        _calibration_line(manifest.get("calibration")),
         "- The independent checker's verdict is in `<this folder>.check.json`, beside this folder "
         "(it is not part of the hashed bundle).",
         "",

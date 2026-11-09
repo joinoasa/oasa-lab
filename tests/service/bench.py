@@ -95,6 +95,7 @@ devices_file = "{devices_file}"
 job_timeout_seconds = {job_timeout}
 stop_grace_seconds = {grace}
 min_commit = "{min_commit}"
+{long_jobs}
 [bins]
 {bins}
 [confirm_wiring]
@@ -133,10 +134,11 @@ class Bench:
                                                          "policy": str(self.policy_path), "python": sys.executable}))
 
     def write_policy(self, rf_setup="cabled", simulated=True, devices_file="", job_timeout=120, grace=1, min_commit="",
-                     bins=None, confirm=None) -> Path:
+                     bins=None, confirm=None, long_jobs=None) -> Path:
         self.policy_path.write_text(POLICY.format(
             rf_setup=rf_setup, simulated=str(simulated).lower(), devices_file=devices_file, job_timeout=job_timeout,
-            grace=grace, min_commit=min_commit, spool=self.spool, results=self.results, mirror=self.mirror, pause=self.root / "PAUSE",
+            grace=grace, min_commit=min_commit,
+            long_jobs=("long_jobs = { " + ", ".join(f'"{k}" = {v}' for k, v in long_jobs.items()) + " }") if long_jobs else "", spool=self.spool, results=self.results, mirror=self.mirror, pause=self.root / "PAUSE",
             bins="\n".join(f'{k} = "{v}"' for k, v in (bins or {}).items()),
             confirm="\n".join(f'{k} = "{v}"' for k, v in (confirm or {}).items())))
         self.policy_path.chmod(0o644)

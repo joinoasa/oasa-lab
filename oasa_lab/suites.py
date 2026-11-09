@@ -23,6 +23,9 @@ Hardware suites (L2) add:
     max = 1.05
     optional = true                     # may stay unmeasured (for example, needs a calibration); never loosens the limit
     reason = "why these numbers"
+
+Any suite may add:
+    needs_calibration = true            # reads the bench calibration (docs/calibration.md); skipped without one
 """
 
 from __future__ import annotations
@@ -56,6 +59,7 @@ class Suite:
     requires: list[str] = field(default_factory=list)
     wiring: str = ""
     limits: dict = field(default_factory=dict)
+    needs_calibration: bool = False    # skip without a bench calibration (lab.toml [calibration]); refuse a bad one
 
     def capture_flags(self, control: bool = False) -> dict:
         """Flags for a capture. With control=True: the suite's `[captures.control]` table."""
@@ -89,6 +93,7 @@ def parse_suite(name: str, text: str, path: Path | None = None) -> Suite:
         requires=[str(x) for x in data.get("requires", [])],
         wiring=str(data.get("wiring", "")),
         limits={str(k): dict(v) for k, v in (data.get("limits") or {}).items()},
+        needs_calibration=data.get("needs_calibration") is True,
     )
 
 

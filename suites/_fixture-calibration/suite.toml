@@ -1,0 +1,2 @@
+description = "Tiny suite that reads the bench calibration; the l0-lab tests run it with and without one. Hidden from the list."
+needs_calibration = true

@@ -360,7 +360,7 @@ def run_job(job_id: str, policy_path: str = DEFAULT_POLICY, *, policy_uid: int =
             env = run_env(policy, job_id, req["commit"], confirm, home, python)
             cmd = run_command(python, req["suite"], req["seed"], resdir, confirm)
             code, reason = execute(cmd, env, src, os.path.join(resdir, "stdout.log"),
-                                 policy.job_timeout_seconds + BACKSTOP, policy.stop_grace_seconds)
+                                 policy.timeout_for(req["suite"]) + BACKSTOP, policy.stop_grace_seconds)
             error = None
         except Refused as exc:
             code, reason, error = None, "refused", str(exc)

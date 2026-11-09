@@ -18,13 +18,17 @@ WorkingDirectory=/
 Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 UMask=0027
 
-# Limits. RuntimeMaxSec must stay above lab.job_timeout_seconds + 30 s (job-run's own backstop) + the grace.
+# Limits. RuntimeMaxSec is the last backstop, not the job's time limit: the service stops a job at its suite's limit
+# (lab.job_timeout_seconds, at most 3600 s, for every suite; a [lab] long_jobs entry, at most 90000 s, only for the
+# suites in oasa_lab/policy.py LONG_JOB_SUITES, today the 24-hour soak), and job-run cuts it 30 s after that itself.
+# So it must stay above 90000 s + 30 s (job-run's backstop) + the grace (at most 60 s): 90300 s. A normal suite is
+# still stopped after at most an hour by the service and job-run; only a stuck job-run would last this long.
 MemoryMax=4G
 MemorySwapMax=0
 TasksMax=512
 LimitNOFILE=4096
 LimitCORE=0
-RuntimeMaxSec=3900
+RuntimeMaxSec=90300
 KillMode=control-group
 KillSignal=SIGTERM
 SendSIGKILL=yes

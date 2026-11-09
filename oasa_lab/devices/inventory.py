@@ -10,10 +10,11 @@ from __future__ import annotations
 import os
 import tomllib
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-KINDS = ("pluto", "rtlsdr", "serial-radio", "sik", "korad", "b200", "e310", "hub")
+KINDS = ("pluto", "rtlsdr", "serial-radio", "sik", "korad", "b200", "e310", "power_sensor", "tinysa", "hub")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded", "antenna")   # "antenna": radios on antennas, for suites that radiate
 
@@ -43,6 +44,10 @@ DEFAULT_SIM: dict[str, Any] = {
                   "sik": SIM_SIK},
         "korad0": {"kind": "korad", "port": "sim:korad", "serial": "SIM-KORAD-0001", "hold_output": True,
                    "sim": {"on": True, "vset": 6.0, "iset": 3.0}},
+        "psens0": {"kind": "power_sensor", "model": "keysight-u2004a", "transport": "usbtmc", "port": "sim:psens",
+                   "serial": "SIM-PSENS-0001", "sim": {"level_dbm": -30.0, "noise_db": 0.02}},
+        "tinysa0": {"kind": "tinysa", "model": "tinySA Ultra+", "port": "sim:tinysa", "serial": "SIM-TINYSA-0001",
+                    "input_pad_db": 30.0, "sim": {"tone_hz": 915e6, "tone_dbm": -40.0}},
         "b2000": {"kind": "b200", "serial": "SIM-B200-0001"},
         "e3100": {"kind": "e310", "addr": "sim", "serial": "SIM-E310-0001", "channel": 1, "subdev": "A:0 A:1",
                   "sim": {"xo_ppm": 2.4}},
@@ -91,6 +96,30 @@ class InventoryError(Exception):
     pass
 
 
+def _calibration_cfg(cal: Any, source: str, base_dir: str | Path | None) -> dict[str, Any]:
+    """[calibration] path = "..." (relative to lab.toml), recabled = "YYYY-MM-DD" (optional). Absent: {}."""
+    if cal is None:
+        return {}
+    if not isinstance(cal, dict):
+        raise InventoryError(f"{source}: [calibration] must be a table")
+    unknown = set(cal) - {"path", "recabled"}
+    if unknown:
+        raise InventoryError(f"{source}: [calibration] has unknown keys {sorted(unknown)} (known: path, recabled)")
+    path = cal.get("path")
+    if not (isinstance(path, str) and path):
+        raise InventoryError(f"{source}: [calibration] path must be a file name")
+    full = Path(path)
+    if not full.is_absolute() and base_dir is not None:
+        full = Path(base_dir) / full
+    out: dict[str, Any] = {"path": str(full)}
+    if "recabled" in cal:
+        try:
+            out["recabled"] = date.fromisoformat(str(cal["recabled"])).isoformat()
+        except ValueError:
+            raise InventoryError(f"{source}: [calibration] recabled must be YYYY-MM-DD") from None
+    return out
+
+
 @dataclass
 class Inventory:
     name: str = "lab"
@@ -99,6 +128,8 @@ class Inventory:
     devices: dict[str, dict[str, Any]] = field(default_factory=dict)
     wiring: dict[str, dict[str, Any]] = field(default_factory=dict)
     source: str = "built-in"
+    sdr_live: dict[str, Any] = field(default_factory=dict)   # [sdr_live]: the live link's helper and settings
+    calibration: dict[str, Any] = field(default_factory=dict)  # [calibration]: path (resolved), recabled date
 
     def backend_of(self, dev_id: str) -> str:
         return str(self.devices[dev_id].get("backend", self.backend))
@@ -119,7 +150,8 @@ class Inventory:
         return [r for r in requires if not self.has(r)]
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], source: str, force_sim: bool = False) -> "Inventory":
+    def from_dict(cls, data: dict[str, Any], source: str, force_sim: bool = False,
+                  base_dir: str | Path | None = None) -> "Inventory":
         lab = data.get("lab", {})
         backend = "sim" if force_sim else str(lab.get("backend", "hardware"))
         if backend not in BACKENDS:
@@ -144,10 +176,14 @@ class Inventory:
                 raise InventoryError(f"{source}: wiring.{wname}.antennas must be a list of DEVICE:PORT names")
             if w["rf_setup"] == "antenna" and not ants:
                 raise InventoryError(f"{source}: wiring.{wname} is rf_setup = \"antenna\" but lists no antennas")
+        sdr_live = data.get("sdr_live") or {}
+        if not isinstance(sdr_live, dict):
+            raise InventoryError(f"{source}: [sdr_live] must be a table")
+        calibration = _calibration_cfg(data.get("calibration"), source, base_dir)
         hub = data.get("hub")
         if hub and force_sim:
             hub = {**hub, "backend": "sim"}
-        return cls(str(lab.get("name", "lab")), backend, hub, devices, wiring, source)
+        return cls(str(lab.get("name", "lab")), backend, hub, devices, wiring, source, dict(sdr_live), calibration)
 
     @classmethod
     def load(cls, path: str | Path | None = None, sim: bool | None = None) -> "Inventory":
@@ -157,7 +193,7 @@ class Inventory:
         file = Path(path) if path else Path(env) if env else Path("lab.toml")
         if file.is_file():
             try:
-                return cls.from_dict(tomllib.loads(file.read_text(encoding="utf-8")), str(file), sim)
+                return cls.from_dict(tomllib.loads(file.read_text(encoding="utf-8")), str(file), sim, file.parent)
             except tomllib.TOMLDecodeError as exc:
                 raise InventoryError(f"{file}: {exc}") from None
         if sim:

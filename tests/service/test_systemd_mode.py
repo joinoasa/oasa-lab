@@ -304,6 +304,15 @@ def test_systemd_mode_reads_the_lab_rules_from_the_policy_and_nowhere_else(lab, 
             parse_config(data, tmp_path, {}, policy_uid=os.getuid())
 
 
+def test_the_service_times_a_job_out_at_its_suites_limit_from_the_policy(lab, monkeypatch):
+    from oasa_lab import policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "LONG_JOB_SUITES", frozenset({"l2-sdr-live-soak", "t-quick"}))
+    svc = lab(job_timeout=77, long_jobs={"t-quick": 86500})
+    assert svc.cfg.long_jobs == {"t-quick": 86500}
+    assert svc.cfg.timeout_for("t-quick") == 86500 and svc.cfg.timeout_for("t-tx") == 77
+
+
 def test_systemd_mode_needs_a_good_policy_and_a_matching_inventory(lab, tmp_path):
     pol = lab().bench.policy_path
     ok = {**BASE, "sandbox": {"mode": "systemd", "policy": str(pol)}}

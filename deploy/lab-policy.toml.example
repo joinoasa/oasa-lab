@@ -17,6 +17,9 @@ branch = "main"                        # must match LAB_BRANCH in setup.env (the
 # nothing older than the installed service runs. Set an older one to allow re-running older commits on purpose.
 min_commit = ""
 job_timeout_seconds = 1800             # the service stops a job here; job-run cuts it off 30 s later. At most 3600.
+# Longer limits for the suites built to run for a day (oasa_lab/policy.py LONG_JOB_SUITES; today only the 24-hour soak
+# of the live link, F11). At most 90000 s. Every other suite keeps job_timeout_seconds. Leave it out to keep the hour.
+# long_jobs = { "l2-sdr-live-soak" = 90000 }
 stop_grace_seconds = 10                # SIGTERM, then SIGKILL after this long
 
 # Folders of the oasa-sec and oasa-radio programs that the link suites use. Fixed here, never from a caller.

@@ -1,4 +1,4 @@
-description = "OASA's own waveform, milestone W1: the oasa-radio W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK. The bit error rate at a measured Eb/N0 is within 1 dB of theory, noise alone gives no frames, and the wrong demodulator passes no CRC, frame format v1 is found without the length near 1 and 3 dB, and the light error-correction code's packet loss is within 1 dB of the simulation with a light frame read as uncoded passing no CRC (needs a B200mini, an E310 and OASA_RADIO_BIN_DIR with --code)"
+description = "OASA's own waveform, milestone W1: the oasa-radio W0 modem between a B200mini and an E310 over cable, both ways, BPSK and QPSK. The bit error rate at a measured Eb/N0 is within 1 dB of theory, noise alone gives no frames, and the wrong demodulator passes no CRC, frame format v1 is found without the length near 1 and 3 dB, and the light error-correction code's packet loss is within 1 dB of the simulation with a light frame read as uncoded passing no CRC; a recording with an outside signal stepping into the band is logged and taken again, at most twice a point (needs a B200mini, an E310 and OASA_RADIO_BIN_DIR with --code)"
 expectations = [
   "test_noise_only_gives_no_frames",
   "test_wrong_modulation_fails_the_crc",
@@ -97,3 +97,12 @@ min = 0.0
 max = 0.3
 reason = """Peak of each recording, as a fraction of full scale. First bench below 0.01. Above 0.3 the path has far
 less loss than 60 dB or the receiver is near clipping; the suite stops there."""
+
+[limits.captures_flagged]
+min = 0
+max = 1000
+reason = """For the record, not a pass mark: recordings in one test that w1test.find_interference flagged for an
+outside signal stepping into the band (a sustained one-sided rise of 5 dB or more in a sub-band near the IF). Each
+is logged as a `capture_flagged` event with the detector's numbers and taken again, at most MAX_RECAPTURES extra per
+point; when the retakes run out the last one is used and judged on its merits. The first bench runs that lost a
+point to such a signal (2026-11-11) are why this exists."""

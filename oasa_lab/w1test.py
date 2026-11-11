@@ -7,7 +7,10 @@ How a point is measured:
 1. `oasa-radio waveform iq` writes frames with known random payloads. They are joined with gaps of silence,
    shifted up by a digital IF (250 kHz) so the receiver's DC offset and LO leak fall outside the signal
    band, and scaled to a peak of 0.5 (DAC headroom). One radio sends this block on repeat.
-2. The other radio records it; the recording is shifted back down and `oasa-radio waveform decode` finds
+2. The other radio records it. Before anything is decoded, `find_interference` looks at the recording for an
+   outside signal stepping into the band; a flagged recording is taken again (at most MAX_RECAPTURES extra per
+   point) and logged, never dropped silently (`capture_checked`).
+   The recording is shifted back down and `oasa-radio waveform decode` finds
    the frames. Each found frame is compared with the payload nearest to it (random payloads differ by
    about half their bits, so this is unambiguous while a frame has well under 100 bit errors).
 3. Eb/N0 is measured from the recording in the modem's own convention (oasa-radio docs/waveform-w0.md):
@@ -38,7 +41,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .devices.usrp import Usrp
 from .iq import IQ, fft
@@ -61,6 +64,15 @@ BITS_PER_SYMBOL = {"bpsk": 1, "qpsk": 2}
 CODE_RATE = {"none": 1.0, "light": 0.5}   # information bits per coded bit (oasa-radio docs/fec-light.md)
 LIGHT_CAPTURES = 4          # a light point records this many captures of PERIODS repeats (16 repeats, >= 384 frames)
 SLOT_TOL = 64               # samples: a delivered frame belongs to the slot whose start is this close
+# Outside signals during a capture (find_interference). Thresholds tuned on synthetic captures, see the docstring.
+IFX_FFT = 64                # FFT length: 15.6 kHz bins at 1 MS/s, the IF on bin 16
+IFX_SEGMENTS = 32           # FFTs averaged per block: a block is 2048 samples, 2.05 ms
+IFX_BANDS = ((1, 3), (4, 6), (7, 9), (10, 12))   # sub-bands, in bins from the IF, each side: 16 to 203 kHz
+IFX_BASE_Q = 0.2            # a sub-band's normal level: this quantile of its blocks (the quieter part of the capture)
+IFX_STEP_DB = 5.0           # a block scores a sub-band's rise minus IFX_MIRROR x its mirror's rise (dB); this flags it
+IFX_MIRROR = 2.0            # our own signal raises a sub-band and its mirror within about 1.5x of each other (dB)
+IFX_RUN = 3                 # for this many blocks in a row (6.1 ms) flags the capture
+MAX_RECAPTURES = 2          # extra captures a point may take when one is flagged; the only place this is set
 
 
 class TooStrong(Exception):
@@ -153,6 +165,7 @@ class Point:
     delivered_sync5: int = 0                       # the same recordings decoded with --sync-max-errors 5
     report_sync5: dict[str, Any] = field(default_factory=dict)
     captures: int = 0
+    flagged: int = 0                               # captures find_interference flagged (taken again while allowed)
     # Eb/N0 accumulators (accumulate_point / finish_ebn0)
     sig_p: list[float] = field(default_factory=list, repr=False)
     gap_p: list[float] = field(default_factory=list, repr=False)
@@ -257,16 +270,147 @@ def finish_ebn0(pt: Point, block: Block) -> None:
         pt.ebn0_db = 10 * math.log10(ps * SPS / n0 / (BITS_PER_SYMBOL[block.mod] * CODE_RATE[block.code]))
 
 
+# --- outside signals during a capture ---------------------------------------------------------------------
+
+def find_interference(x: list[complex], sample_rate: float = SAMPLE_RATE) -> dict[str, Any]:
+    """Decide from one capture's raw samples (signal on the IF) whether an outside signal stepped into the band.
+
+    The capture is cut into blocks of IFX_SEGMENTS x IFX_FFT samples (2 ms). In each block the power is measured
+    in sub-bands on both sides of the IF (IFX_BANDS) and compared with that sub-band's normal level in this
+    capture (the IFX_BASE_Q quantile of its blocks, so a signal that is on for most of the capture still shows).
+    Our own signal is symmetric about the IF (PSK, root-raised-cosine), and so is the noise: whatever we change
+    (TX gain, the transmitter starting or ramping, frames and gaps, a noise floor that rises across the band)
+    raises a sub-band and its mirror about the IF together (within about 1.5x in dB, even with a 12 kHz offset
+    moving the skirts). A block scores, per sub-band, its rise minus IFX_MIRROR times its mirror's rise (dB), and
+    no more than its rise. A capture is flagged when IFX_RUN blocks in a row score IFX_STEP_DB or more: a
+    sustained, one-sided step, which a signal from outside makes and ours does not.
+
+    Not seen, by design: a signal centred on the IF with a symmetric spectrum, one on for most of the capture
+    (it is then the normal level), one that touches fewer than IFX_RUN blocks, or a rise across the whole band.
+
+    Tuned on synthetic captures made from real oasa-radio blocks (W0, v1 and light; BPSK and QPSK; Es/N0 -1 to
+    20 dB; offsets to +-12 kHz; with TX gain steps of +-3 to 10 dB, noise-floor rises of 3 to 10 dB, a TX ramp
+    with a frequency kick, the TX starting part way in, DC offsets): none of 1600 flagged; the highest score over
+    3 blocks 4.5 dB (a strong signal starting part way in with an offset over 3 kHz; 1.5 dB with offsets to 3 kHz).
+    A burst 15 to 120 kHz from the IF that raises the power in its 50 kHz band by 10 or 13 dB for 8 ms or more:
+    1200 of 1200 found; by 6 dB for 20 ms or more: 314 of 320 (43 of 80 when 15 kHz from the IF); by 3 dB: none.
+    """
+    nseg, nblk = IFX_FFT, IFX_FFT * IFX_SEGMENTS
+    if_bin = round(IF_HZ * nseg / sample_rate)
+    top = max(b for _, b in IFX_BANDS)
+    if if_bin - top < 1 or if_bin + top >= nseg // 2:
+        raise ValueError(f"the sub-bands do not fit at {sample_rate:g} S/s")
+    win = [0.5 - 0.5 * math.cos(2 * math.pi * k / nseg) for k in range(nseg)]
+    lo_bin, hi_bin = if_bin - top, if_bin + top
+    blocks: list[list[float]] = []        # per block: power in bins lo_bin..hi_bin
+    for b0 in range(0, len(x) - nblk + 1, nblk):
+        acc = [0.0] * (hi_bin - lo_bin + 1)
+        for s0 in range(b0, b0 + nblk, nseg):
+            spec = fft([v * w for v, w in zip(x[s0:s0 + nseg], win)])
+            for i, c in enumerate(spec[lo_bin:hi_bin + 1]):
+                acc[i] += c.real * c.real + c.imag * c.imag
+        blocks.append(acc)
+    out: dict[str, Any] = {"flagged": False, "blocks": len(blocks), "block_ms": round(nblk / sample_rate * 1e3, 3),
+                           "step_db": IFX_STEP_DB, "mirror": IFX_MIRROR, "run_blocks": IFX_RUN}
+    if len(blocks) < IFX_RUN:
+        return out
+    # sub-band j (lower side first, then upper) and its mirror about the IF
+    bands = [(if_bin - b, if_bin - a) for a, b in IFX_BANDS] + [(if_bin + a, if_bin + b) for a, b in IFX_BANDS]
+    nb = len(IFX_BANDS)
+    mirror = [j + nb if j < nb else j - nb for j in range(2 * nb)]
+    power = [[sum(acc[k - lo_bin] for k in range(a, b + 1)) for a, b in bands] for acc in blocks]
+    base = []
+    for j in range(len(bands)):
+        col = sorted(p[j] for p in power)
+        base.append(max(col[int(IFX_BASE_Q * (len(col) - 1))], 1e-30))
+    rise = [[10 * math.log10(max(p[j], 1e-30) / base[j]) for j in range(len(bands))] for p in power]
+    scores = []                            # per block: (score dB, sub-band)
+    for r in rise:
+        s = [min(r[j], r[j] - IFX_MIRROR * max(r[mirror[j]], 0.0)) for j in range(len(bands))]
+        j = max(range(len(s)), key=s.__getitem__)
+        scores.append((s[j], j))
+    # the longest run of blocks at or above the step; the best IFX_RUN-block stretch says how close a clean one came
+    best_run, run_at, cur = 0, 0, 0
+    for i, (s, _) in enumerate(scores):
+        cur = cur + 1 if s >= IFX_STEP_DB else 0
+        if cur > best_run:
+            best_run, run_at = cur, i - cur + 1
+    out["score_db"] = round(max(min(s for s, _ in scores[i:i + IFX_RUN]) for i in range(len(scores) - IFX_RUN + 1)), 2)
+    out["longest_run_blocks"] = best_run
+    if best_run < IFX_RUN:
+        return out
+    run = range(run_at, run_at + best_run)
+    j = max(set(scores[i][1] for i in run), key=lambda jj: sum(scores[i][1] == jj for i in run))
+    a, b = bands[j]
+    bin_hz = sample_rate / nseg
+    total = [sum(p) for p in power]
+    normal = sorted(total)[len(total) // 2]
+    out.update({
+        "flagged": True,
+        "start_ms": round(run_at * out["block_ms"], 1),
+        "end_ms": round((run_at + best_run) * out["block_ms"], 1),
+        "band_hz": [round((a - 0.5) * bin_hz), round((b + 0.5) * bin_hz)],   # from the capture's centre
+        "band_rise_db": round(sorted(rise[i][j] for i in run)[best_run // 2], 2),
+        "mirror_rise_db": round(sorted(rise[i][mirror[j]] for i in run)[best_run // 2], 2),
+        "in_band_power_x": round(sum(total[i] for i in run) / best_run / normal, 2) if normal > 0 else None,
+    })
+    return out
+
+
+OnFlag = Callable[[dict[str, Any], IQ], None]
+
+
+def capture_checked(capture: Callable[[], IQ], max_extra: int = MAX_RECAPTURES, on_flag: OnFlag | None = None
+                    ) -> tuple[IQ, list[complex], list[dict[str, Any]]]:
+    """Take a capture; if find_interference flags it, take it again, at most `max_extra` more times. Returns
+    the capture used, its samples and one entry per flagged capture: the detector's numbers, `attempt` (from 0)
+    and `retaken` (False on the last one when the retakes ran out: that capture is used and judged on its
+    merits). `on_flag(entry, capture)` is called as each flagged capture comes in.
+
+    The decision to take a capture again rests on the detector's verdict on the samples alone, before anything
+    is decoded: no BER, frame count or loss exists yet, and none can be passed in. A retake chosen by the
+    result would let a point be captured until it passes. One chosen by the samples cannot favour a pass: a
+    clean capture that measures badly is kept, the retakes are bounded, and every flagged capture is logged.
+    """
+    flags: list[dict[str, Any]] = []
+    for attempt in range(max_extra + 1):
+        iq = capture()
+        raw = iq.samples()
+        found = find_interference(raw, iq.sample_rate)
+        if not found["flagged"]:
+            break
+        flags.append({"attempt": attempt, "retaken": attempt < max_extra,
+                      "peak": round(max(abs(v) for v in raw), 5), **found})
+        if on_flag is not None:
+            on_flag(flags[-1], iq)
+    return iq, raw, flags
+
+
+def _capture(rx: Usrp, rf_hz: float, n: int, on_flag: OnFlag | None, context: dict[str, Any],
+             max_extra: int = MAX_RECAPTURES) -> tuple[IQ, list[complex], list[dict[str, Any]]]:
+    """One recording for a point. With `on_flag` it is checked for outside signals (capture_checked) and each
+    flagged capture goes to `on_flag` with `context` added; without it, one capture as before."""
+    take = lambda: rx.capture(rf_hz, SAMPLE_RATE, n, gain_db=RX_GAIN_DB)   # noqa: E731
+    if on_flag is None:
+        iq = take()
+        return iq, iq.samples(), []
+    return capture_checked(take, max_extra, lambda ev, rec: on_flag({**context, **ev}, rec))
+
+
 def run_point(radio: Path, tx: Usrp, rx: Usrp, block: Block, rf_hz: float, gain_db: float, work: Path,
-              direction: str, known_len: bool = True) -> Point:
+              direction: str, known_len: bool = True, on_flag: OnFlag | None = None) -> Point:
+    """One point: a recording of PERIODS repeats, decoded. With `on_flag`, a recording that find_interference
+    flags is taken again (capture_checked) and `on_flag(event, recording)` is called for each flagged one."""
     pt = Point(direction, block.mod, gain_db, rx_id=rx.id)
     n = PERIODS * len(block.samples)
     try:
         tx.tx_file(block.samples, rf_hz, gain_db, SAMPLE_RATE)
-        iq = rx.capture(rf_hz, SAMPLE_RATE, n, gain_db=RX_GAIN_DB)
+        iq, raw, flags = _capture(rx, rf_hz, n, on_flag, {"direction": direction, "mod": block.mod,
+                                                          "frame": block.frame, "code": block.code,
+                                                          "tx_gain_db": gain_db, "rx_id": rx.id})
     finally:
         tx.tx_off()
-    raw = iq.samples()
+    pt.flagged = len(flags)
     pt.peak = max(abs(v) for v in raw)
     if pt.peak > MAX_PROBE_PEAK:
         raise TooStrong(f"{direction} at TX gain {gain_db:g} dB peaks at {pt.peak:.2f} of full scale; "
@@ -282,12 +426,14 @@ def run_point(radio: Path, tx: Usrp, rx: Usrp, block: Block, rf_hz: float, gain_
 
 
 def probe_gain(radio: Path, tx: Usrp, rx: Usrp, block: Block, rf_hz: float, work: Path, direction: str,
-               start_db: float = 20.0, step_db: float = 6.0, want_db: float = 6.0) -> tuple[float, Point]:
+               start_db: float = 20.0, step_db: float = 6.0, want_db: float = 6.0,
+               on_flag: OnFlag | None = None) -> tuple[float, Point]:
     """Raise the TX gain from a low start until the frames are clearly there; return (gain, point).
-    The level follows the gain 1 dB per dB (l2-usrp-loopback), so other points are set from this one."""
+    The level follows the gain 1 dB per dB (l2-usrp-loopback), so other points are set from this one.
+    `on_flag`: as in run_point."""
     g = min(start_db, tx.max_tx_gain)
     while True:
-        pt = run_point(radio, tx, rx, block, rf_hz, g, work, direction)
+        pt = run_point(radio, tx, rx, block, rf_hz, g, work, direction, on_flag=on_flag)
         if (pt.ebn0_db is not None and pt.ebn0_db >= want_db) or g >= tx.max_tx_gain:
             return g, pt
         g = min(g + step_db, tx.max_tx_gain)
@@ -340,19 +486,28 @@ def count_slots(block: Block, frames: list[dict[str, Any]], n: int) -> tuple[int
 
 
 def run_light_point(radio: Path, tx: Usrp, rx: Usrp, block: Block, rf_hz: float, gain_db: float, work: Path,
-                    direction: str, captures: int = LIGHT_CAPTURES) -> Point:
+                    direction: str, captures: int = LIGHT_CAPTURES, on_flag: OnFlag | None = None) -> Point:
     """One point of light-coded frames: `captures` recordings of PERIODS repeats plus an eighth (so each holds at
     least 96 whole frames), all taken while the block is sent, then decoded without the length (default sync
-    check, and again with --sync-max-errors 5). Eb/N0 counts information bits."""
+    check, and again with --sync-max-errors 5). Eb/N0 counts information bits. `on_flag`: as in run_point, per
+    recording."""
     pt = Point(direction, block.mod, gain_db, rx_id=rx.id)
     L = len(block.samples)
     n = PERIODS * L + L // 8
     recs: list[IQ] = []
+    flags: list[dict[str, Any]] = []
     try:
         tx.tx_file(block.samples, rf_hz, gain_db, SAMPLE_RATE)
-        for _ in range(captures):
-            iq = rx.capture(rf_hz, SAMPLE_RATE, n, gain_db=RX_GAIN_DB)
-            peak = max(abs(v) for v in iq.samples())
+        for c in range(captures):
+            # the point's retakes are shared by its captures: at most MAX_RECAPTURES extra in all
+            used = sum(f["retaken"] for f in flags)
+            iq, raw, got = _capture(rx, rf_hz, n, on_flag, {"direction": direction, "mod": block.mod,
+                                                            "frame": block.frame, "code": block.code,
+                                                            "tx_gain_db": gain_db, "capture": c, "rx_id": rx.id},
+                                    max_extra=MAX_RECAPTURES - used)
+            flags += got
+            pt.flagged = len(flags)
+            peak = max(abs(v) for v in raw)
             pt.peak = max(pt.peak, peak)
             if peak > MAX_PROBE_PEAK:
                 raise TooStrong(f"{direction} at TX gain {gain_db:g} dB peaks at {peak:.2f} of full scale; "

@@ -285,6 +285,26 @@ error in the unprotected W0 header does not lose a frame. For each direction and
 until the frames are clear, then set for about 1, 3, 5 and 7 dB. A point counts with 20 or more bit errors; its loss is the measured Eb/N0 minus the Eb/N0 at which theory gives
 the measured BER, and it must be within 1 dB. Code: `oasa_lab/w1test.py`.
 
+**Outside signals.** The cable bench is not sealed from the air, and on 2026-11-11 two runs each lost one point to
+a narrowband signal that came on part way through a recording: +13 dB in 150 to 200 kHz and +7 dB in 200 to 250 kHz
+above the centre for the last 160 ms of a 1.09 s recording, nothing else changed, and the 18 frames under it were
+lost. So every recording is checked before it is decoded (`find_interference`): power in 2 ms blocks, in sub-bands
+16 to 203 kHz either side of the IF, against each sub-band's normal level in that recording. Our own signal and
+the noise are symmetric about the IF, so anything we change (TX gain, the transmitter starting, frames and gaps)
+raises a sub-band and its mirror together; three blocks in a row where one side rises 5 dB or more beyond twice
+its mirror's rise flag the recording. A flagged recording is logged as a `capture_flagged` event (where, how much,
+when, and whether it was taken again), the first of the run is saved as `w1-flagged` with the span annotated,
+and the recording is taken again, at most 2 extra per point (`MAX_RECAPTURES`, the only place this is set; a
+light point's 4 recordings share them). When the retakes run out, the last recording is used and the point
+passes or fails on its merits. The decision rests on the samples alone, before anything is decoded, so a point
+cannot be taken again until it passes: a clean recording that measures badly is kept. Each test logs its count
+as `captures_flagged` (for the record, no pass mark), the `w1_point`, `w1_v1_point` and `w1_light_point` lines carry
+`captures_flagged`, and the run's `summary.md` gives the total. Not seen, by design: a signal centred on the IF
+with a symmetric spectrum, one on for most of the recording, one shorter than about 3 blocks, or a rise across the
+whole band. On synthetic recordings (real oasa-radio blocks, Es/N0 -1 to 20 dB, offsets to 12 kHz, gain steps,
+noise-floor rises, a ramping or late transmitter) none of 1600 clean ones was flagged; a 10 dB rise for 8 ms or
+more was found in 1200 of 1200, a 6 dB rise for 20 ms or more in 314 of 320, a 3 dB rise never.
+
 What the first bench showed (2026-11-04): at 200 kS/s nothing decoded although the frames were there (the E310
 has no DSP for low rates); at zero IF the BER was about 5 dB off theory (the receiver's DC offset sits on the
 signal); with the IF at 1 MS/s every point was within 0.9 dB, both ways, BPSK and QPSK. Frames missed below about

@@ -97,10 +97,16 @@ def write_summary(run_dir: Path) -> str:
     s = ctrf["results"]["summary"]
     tests = ctrf["results"]["tests"]
     stats = {}
+    flagged: list[dict] = []
+    flag_counted = False
     for line in (run_dir / "log.jsonl").read_text().splitlines():
         rec = json.loads(line)
         if rec["event"] == "channel_stats" and rec.get("final"):
             stats[rec["channel"]] = rec
+        elif rec["event"] == "capture_flagged":
+            flagged.append(rec)
+        elif rec["event"] == "measurement" and rec.get("metric") == "captures_flagged":
+            flag_counted = True
     lab = manifest["lab"]
     out = [
         f"# Run {manifest['suite']}",
@@ -122,6 +128,11 @@ def write_summary(run_dir: Path) -> str:
     for t in tests:
         note = (t.get("message") or "").replace("\n", " ").replace("|", "/")[:120]
         out.append(f"| `{t['name']}` | {t['status']} | {note} |")
+    if flagged or flag_counted:
+        retaken = sum(bool(r.get("retaken")) for r in flagged)
+        out += ["", "## Captures flagged for an outside signal", "",
+                f"{len(flagged)} recording(s) flagged: {retaken} taken again, {len(flagged) - retaken} used because "
+                "the retakes ran out. Each is a `capture_flagged` line in `log.jsonl` with the detector's numbers."]
     if manifest["channels"]:
         out += ["", "## Channels", "",
                 "| Channel | Test | Settings | A to B (sent / dropped / forwarded) | B to A |", "|---|---|---|---|---|"]

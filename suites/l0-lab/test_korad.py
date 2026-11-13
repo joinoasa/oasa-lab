@@ -174,7 +174,7 @@ def test_real_serial_path_against_a_pseudo_terminal():
             info = dev.info()
             assert info["vout"] == 6.0 and info["output"] is True and info["serial"] == "T-1"
             with pytest.raises(DeviceError, match="refused"):
-                dev.set(7, 1)
+                dev.set(13, 1)
             dev.set(5.5, 2.0)
             assert (fake.vset, fake.iset) == (5.5, 2.0)
     finally:

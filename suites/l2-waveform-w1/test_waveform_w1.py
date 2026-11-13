@@ -7,6 +7,8 @@ For each direction and modulation the TX gain is first raised from a low value u
 the points are then set from there for Eb/N0 of about 1, 3, 5 and 7 dB (the level follows the gain 1 dB per dB).
 Every recording is checked for an outside signal stepping into the band (w1test.find_interference); a flagged
 one is logged as a `capture_flagged` event and taken again, at most w1test.MAX_RECAPTURES extra per point.
+A point outside a limit has its recording saved as `w1-fail-...` (w1test.KeepFailing, at most w1test.MAX_KEPT a
+run), and so do the points around the window when a test has too few in it.
 Needs `oasa-radio` in $OASA_RADIO_BIN_DIR; without it the suite is SKIPPED. The light-code tests need an
 oasa-radio with `--code` (oasa-radio docs/fec-light.md); without it they are SKIPPED and the checker fails the
 run (a known-bad case and required limits are missing), so the oasa-radio change must be merged first.
@@ -23,10 +25,10 @@ import pytest
 from oasa_lab.devices import Unavailable
 from oasa_lab.hw import Hardware, WiringRefused
 from oasa_lab.iq import IQ
-from oasa_lab.w1test import (CODE_RATE, RX_GAIN_DB, SAMPLE_RATE, Block, Point, TooStrong, baseband, decode,
-                             decode_report, ebn0_for_ber, ebn0_for_loss, make_block, measure_point, per_reference_result,
-                             probe_gain, run_light_point, run_point, start_per_reference, supports_code, theory_ber,
-                             write_sigmf)
+from oasa_lab.w1test import (CODE_RATE, RX_GAIN_DB, SAMPLE_RATE, Block, KeepFailing, Point, TooStrong, around_window,
+                             baseband, decode, decode_report, ebn0_for_ber, ebn0_for_loss, make_block, measure_point,
+                             per_reference_result, probe_gain, run_light_point, run_point, start_per_reference,
+                             supports_code, theory_ber, write_sigmf)
 
 RF_HZ = 915e6
 TARGETS_DB = (1.0, 3.0, 5.0, 7.0)
@@ -83,6 +85,13 @@ def bench(lab, hw: Hardware, radio, tmp_path):
     return {"b200": b200, "e310": e310, "radio": radio, "work": tmp_path}
 
 
+def keeper() -> KeepFailing:
+    """The run's one KeepFailing: saves the recordings of failing points, at most w1test.MAX_KEPT a run."""
+    if "keep" not in STATE:
+        STATE["keep"] = KeepFailing(RF_HZ)
+    return STATE["keep"]
+
+
 class Flagged:
     """Receives the captures that w1test.find_interference flags in one test. Each is logged as it comes
     (`capture_flagged`, with the detector's numbers and whether it was taken again); the first of the run is
@@ -136,7 +145,8 @@ def sweep(lab, bench, direction: str, mod: str, flagged: Flagged) -> list[Point]
 
 
 def judge(lab, direction: str, mod: str, points: list[Point]) -> None:
-    failures, measured = [], 0
+    failures, measured, sides = [], 0, []
+    keep = keeper()
     for pt in points:
         e = pt.ebn0_db
         lab.log("w1_point", direction=direction, mod=mod, tx_gain_db=pt.tx_gain_db, frames=pt.frames,
@@ -144,16 +154,21 @@ def judge(lab, direction: str, mod: str, points: list[Point]) -> None:
                 ber=pt.ber, ebn0_db=None if e is None else round(e, 2),
                 theory=None if e is None else theory_ber(mod, e), peak=round(pt.peak, 5), decoder=pt.report,
                 captures_flagged=pt.flagged)
-        if not lab.measure("rx_peak_fs", f"peak {direction} {mod} TX {pt.tx_gain_db:g}", round(pt.peak, 5)):
+        if not keep.measure(lab, pt, "peak", "rx_peak_fs", f"peak {direction} {mod} TX {pt.tx_gain_db:g}",
+                            round(pt.peak, 5)):
             failures.append(f"peak {pt.peak:.3f} at TX {pt.tx_gain_db:g}")
         if e is None or pt.errors < MIN_ERRORS:
+            sides.append((pt, -1 if e is None else 1))   # no Eb/N0: below the window; too few errors: above
             continue
+        sides.append((pt, 0))
         loss = e - ebn0_for_ber(mod, pt.ber)
         measured += 1
-        if not lab.measure("ber_loss_db", f"loss {direction} {mod} at {e:.2f} dB", round(loss, 3), "dB"):
+        if not keep.measure(lab, pt, "ber", "ber_loss_db", f"loss {direction} {mod} at {e:.2f} dB", round(loss, 3), "dB"):
             failures.append(f"{e:.2f} dB: BER {pt.ber:.2e} is {loss:+.2f} dB from theory")
     if not lab.measure("points_measured", f"points {direction} {mod}", measured):
         failures.append(f"only {measured} point(s) with {MIN_ERRORS}+ errors")
+        for pt in around_window(sides):
+            keep.keep(lab, pt, "window", "points_measured", measured, note=f"{measured} point(s) with {MIN_ERRORS}+ errors")
     best = max(points, key=lambda p: p.tx_gain_db, default=None)
     if best is not None and best.recording is not None:
         iq: IQ = best.recording
@@ -194,7 +209,7 @@ def test_v1_header_finds_frames(lab, bench, direction, mod):
                                                       seed=21 if mod == "bpsk" else 22, frame="v1")
     w0_block: Block = STATE[f"block-{mod}"]
     failures, judged = [], 0
-    flagged = Flagged(lab)
+    flagged, keep = Flagged(lab), keeper()
     for target in V1_TARGETS_DB:
         w0 = min(w0_points, key=lambda p: abs((p.ebn0_db if p.ebn0_db is not None else 99) - target))
         try:
@@ -220,14 +235,16 @@ def test_v1_header_finds_frames(lab, bench, direction, mod):
                 w0_header={"ebn0_db": None if w0.ebn0_db is None else round(w0.ebn0_db, 2), "frames": w0h.frames,
                            "frames_sent_about": w0h.frames_sent, "crc_ok": w0h.crc_ok, "decoder": w0h.report},
                 peak=round(v1.peak, 5), captures_flagged=v1.flagged)
-        if not lab.measure("rx_peak_fs", f"peak v1 {direction} {mod} TX {v1.tx_gain_db:g}", round(v1.peak, 5)):
+        if not keep.measure(lab, v1, "v1-peak", "rx_peak_fs", f"peak v1 {direction} {mod} TX {v1.tx_gain_db:g}",
+                            round(v1.peak, 5)):
             failures.append(f"peak {v1.peak:.3f} at TX {v1.tx_gain_db:g}")
         lab.measure("w0_header_found_fraction", f"W0 read by header {direction} {mod} at {w0.ebn0_db:.2f} dB",
                     round(w0_frac, 4))
         if v1.ebn0_db is None or v1.ebn0_db < V1_MIN_EBN0_DB:
             continue
         judged += 1
-        if not lab.measure("v1_found_fraction", f"v1 found {direction} {mod} at {v1.ebn0_db:.2f} dB", round(v1_frac, 4)):
+        if not keep.measure(lab, v1, "v1-found", "v1_found_fraction", f"v1 found {direction} {mod} at {v1.ebn0_db:.2f} dB",
+                            round(v1_frac, 4)):
             failures.append(f"v1 at {v1.ebn0_db:.2f} dB: {v1.frames} of about {v1.frames_sent} found")
         if target == V1_TARGETS_DB[0] and v1.recording is not None and direction == "e310-b200":
             iq: IQ = v1.recording
@@ -263,8 +280,8 @@ def test_light_code_packet_loss(lab, bench, light, direction, mod):
         if f"light-ref-{m}" not in STATE and f"light-ref-proc-{m}" not in STATE:
             STATE[f"light-ref-proc-{m}"] = start_per_reference(bench["radio"], m, LIGHT_REF_DB)
     coded_offset = 10 * math.log10(1 / CODE_RATE["light"])      # 3.0 dB
-    failures, measured, points, judged = [], 0, [], []
-    flagged = Flagged(lab)
+    failures, measured, points, judged, sides = [], 0, [], [], []
+    flagged, keep = Flagged(lab), keeper()
     for t in LIGHT_TARGETS_DB[mod]:
         g = round(g0 + (t - coded_offset - e0), 1)
         if not 0 <= g <= tx.max_tx_gain:
@@ -285,16 +302,19 @@ def test_light_code_packet_loss(lab, bench, light, direction, mod):
                 sync5={"delivered": pt.delivered_sync5, "loss": loss5, "decoder": pt.report_sync5},
                 bits=pt.bits, errors=pt.errors, peak=round(pt.peak, 5), decoder=pt.report,
                 captures_flagged=pt.flagged)
-        if not lab.measure("rx_peak_fs", f"peak light {direction} {mod} TX {g:g}", round(pt.peak, 5)):
+        if not keep.measure(lab, pt, "light-peak", "rx_peak_fs", f"peak light {direction} {mod} TX {g:g}",
+                            round(pt.peak, 5)):
             failures.append(f"peak {pt.peak:.3f} at TX {g:g}")
         if e is None or loss is None:
             continue
+        # where the point sits against the loss window: more loss is below it (lower Eb/N0), less is above
+        sides.append((pt, -1 if loss > LIGHT_LOSS_RANGE[1] else 1 if loss < LIGHT_LOSS_RANGE[0] else 0))
         if LIGHT_LOSS_RANGE[0] <= loss <= LIGHT_LOSS_RANGE[1]:
             judged.append((pt, loss))
         if e >= LIGHT_FULL_DB:
             frac = pt.delivered / pt.frames_sent
-            if not lab.measure("light_delivered_fraction", f"light delivered {direction} {mod} at {e:.2f} dB",
-                               round(frac, 4)):
+            if not keep.measure(lab, pt, "light-delivered", "light_delivered_fraction",
+                                f"light delivered {direction} {mod} at {e:.2f} dB", round(frac, 4)):
                 failures.append(f"{e:.2f} dB: {pt.delivered} of {pt.frames_sent} delivered")
     ref = STATE.get(f"light-ref-{mod}")
     if ref is None:
@@ -307,13 +327,19 @@ def test_light_code_packet_loss(lab, bench, light, direction, mod):
                 loss=loss, sim_ebn0_db_at_loss=None if e_sim is None else round(e_sim, 2))
         if e_sim is None:
             failures.append(f"{e:.2f} dB: loss {loss:.3f} is outside the simulated curve")
+            keep.keep(lab, pt, "light-loss", "light_loss_db", None, note=f"loss {loss:.3f} is outside the simulated curve")
             continue
         measured += 1
-        if not lab.measure("light_loss_db", f"light loss {direction} {mod} at {e:.2f} dB", round(e - e_sim, 3), "dB"):
+        if not keep.measure(lab, pt, "light-loss", "light_loss_db", f"light loss {direction} {mod} at {e:.2f} dB",
+                            round(e - e_sim, 3), "dB"):
             failures.append(f"{e:.2f} dB: loss {loss:.3f}, which the simulation gives at {e_sim:.2f} dB")
     flagged.measure(f"light {direction} {mod}")
     if not lab.measure("light_points_measured", f"light points {direction} {mod}", measured):
         failures.append(f"only {measured} point(s) with a loss of {LIGHT_LOSS_RANGE[0]:.0%} to {LIGHT_LOSS_RANGE[1]:.0%}")
+        for pt in around_window(sides):
+            keep.keep(lab, pt, "light-window", "light_points_measured", measured,
+                      note=f"loss {1 - pt.delivered / pt.frames_sent:.3f}, window "
+                           f"{LIGHT_LOSS_RANGE[0]:.0%} to {LIGHT_LOSS_RANGE[1]:.0%}")
     best = max(points, key=lambda p: p.tx_gain_db, default=None)
     if best is not None and best.recording is not None:
         STATE[f"light-best-{direction}-{mod}"] = best

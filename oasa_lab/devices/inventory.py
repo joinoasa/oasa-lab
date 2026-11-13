@@ -43,7 +43,7 @@ DEFAULT_SIM: dict[str, Any] = {
                   "serial": "SIM-SIK-B", "baud": 57600, "mtu": 242, "radio": {"profile": "sik-64k"},
                   "sik": SIM_SIK},
         "korad0": {"kind": "korad", "port": "sim:korad", "serial": "SIM-KORAD-0001", "hold_output": True,
-                   "sim": {"on": True, "vset": 6.0, "iset": 3.0}},
+                   "sim": {"on": True, "vset": 12.0, "iset": 3.0}},
         "psens0": {"kind": "power_sensor", "model": "keysight-u2004a", "transport": "usbtmc", "port": "sim:psens",
                    "serial": "SIM-PSENS-0001", "sim": {"level_dbm": -30.0, "noise_db": 0.02}},
         "tinysa0": {"kind": "tinysa", "model": "tinySA Ultra+", "port": "sim:tinysa", "serial": "SIM-TINYSA-0001",

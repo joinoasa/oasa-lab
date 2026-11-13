@@ -117,7 +117,7 @@ num_channels = 50
 max_window = 131
 
 # --- KORAD KA3005P bench supply ---------------------------------------------------------------------
-# Never more than 6 V, 3 A: that limit is in the driver. max_v and max_a here can only lower it.
+# Never more than 12 V, 3 A: that limit is in the driver. max_v and max_a here can only lower it.
 # The output is off at open and close. If this supply feeds a radio, set hold_output = true: the driver then
 # leaves the output alone. Without it, `oasa-lab devices` turns the output off.
 [devices.korad0]

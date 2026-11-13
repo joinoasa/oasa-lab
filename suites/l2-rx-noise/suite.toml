@@ -24,7 +24,8 @@ reason = """Volts times amps from the supply with the E310 idle. First bench: 6.
 at all. Above 6 W (1 A) something draws far more than an idle E310 should."""
 
 [limits.e310_supply_v]
-min = 5.9
-max = 6.05
-reason = """The E310 runs from 6 V here. The driver will not set more than 6 V; 6.05 V leaves room for the supply's
-own reading. Below 5.9 V the supply is current limiting or the output is sagging."""
+min = 11.9
+max = 12.05
+reason = """The E310 runs from 12 V here (owner, 2026-11-13). The driver will not set more
+than 12 V; 12.05 V leaves room for the supply's own reading. Below 11.9 V the supply is current limiting or the
+output is sagging."""

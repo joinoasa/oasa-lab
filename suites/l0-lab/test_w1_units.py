@@ -31,7 +31,8 @@ def _recording(code: str, es_n0_db: float, seed: int = 5) -> tuple[Block, list[c
     w = -2 * math.pi * IF_HZ / SAMPLE_RATE
     s = 1 / math.sqrt(2)
     x = [v + complex(rng.gauss(0, s), rng.gauss(0, s)) + 0.3 * cmath.exp(1j * w * k) for k, v in enumerate(x)]
-    return Block("bpsk", [], payloads, {}, "v1", code), x, frames
+    # one repeat of a block: these frames are its layout (Block.spans), and the recording is that repeat
+    return Block("bpsk", [0j] * len(x), payloads, {}, "v1", code, [(f["start"], f["end"]) for f in frames]), x, frames
 
 
 def test_ebn0_counts_information_bits():

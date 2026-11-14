@@ -139,7 +139,12 @@ def judge(lab, direction: str, mod: str, points: list[Point]) -> None:
     failures, measured = [], 0
     for pt in points:
         e = pt.ebn0_db
+        # frames found away from every sent frame's place are not counted (w1test.place_frames); their number is
+        # kept in sight here, per point
+        if not lab.measure("frames_off_layout", f"off layout {direction} {mod} TX {pt.tx_gain_db:g}", pt.off_layout):
+            failures.append(f"{pt.off_layout} frames off the layout at TX {pt.tx_gain_db:g}")
         lab.log("w1_point", direction=direction, mod=mod, tx_gain_db=pt.tx_gain_db, frames=pt.frames,
+                frames_off_layout=pt.off_layout,
                 frames_sent_about=pt.frames_sent, crc_ok=pt.crc_ok, bits=pt.bits, errors=pt.errors,
                 ber=pt.ber, ebn0_db=None if e is None else round(e, 2),
                 theory=None if e is None else theory_ber(mod, e), peak=round(pt.peak, 5), decoder=pt.report,
@@ -215,9 +220,11 @@ def test_v1_header_finds_frames(lab, bench, direction, mod):
         w0_frac = w0h.frames / w0h.frames_sent if w0h.frames_sent else 0.0
         lab.log("w1_v1_point", direction=direction, mod=mod, tx_gain_db=w0.tx_gain_db,
                 v1={"ebn0_db": None if v1.ebn0_db is None else round(v1.ebn0_db, 2), "frames": v1.frames,
+                    "frames_off_layout": v1.off_layout,
                     "frames_sent_about": v1.frames_sent, "crc_ok": v1.crc_ok, "bits": v1.bits, "errors": v1.errors,
                     "ber": v1.ber, "decoder": v1.report},
                 w0_header={"ebn0_db": None if w0.ebn0_db is None else round(w0.ebn0_db, 2), "frames": w0h.frames,
+                           "frames_off_layout": w0h.off_layout,
                            "frames_sent_about": w0h.frames_sent, "crc_ok": w0h.crc_ok, "decoder": w0h.report},
                 peak=round(v1.peak, 5), captures_flagged=v1.flagged)
         if not lab.measure("rx_peak_fs", f"peak v1 {direction} {mod} TX {v1.tx_gain_db:g}", round(v1.peak, 5)):

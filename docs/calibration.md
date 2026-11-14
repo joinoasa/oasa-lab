@@ -114,10 +114,12 @@ transmitter and either one.
 
 `kind = "tinysa"` in lab.toml: the tinySA Ultra / Ultra+ USB serial console (pyserial). `scan` returns
 frequency and level per point; `read_peak_dbm(center_hz, span_hz)` gives the strongest point; `read_marker_dbm()`
-puts marker 1 on the peak. `input_pad_db` (the always-fitted 30 dB pad) is added to every reading in software,
+puts marker 1 on the peak of the sweep on the tinySA's own screen (on firmware v1.4-217 that is not the last
+`scan`, so it is not for a level at a known frequency). `input_pad_db` (the always-fitted 30 dB pad) is added to every reading in software,
 and a level within 3 dB of `max_input_dbm` at the tinySA's input stops with an error. The console commands
-(`version`, `scan START STOP POINTS 3`, `marker 1 peak`, `marker 1`) follow the tinySA USB interface notes and
-are to be confirmed against the firmware in use; the manifest records `commands_confirmed: false` until then.
+(`version`, `scan START STOP POINTS 3`, `marker 1 peak`, `marker 1`) follow the tinySA USB interface notes.
+`version` and `scan` were tried on an Ultra+ ZS407 with firmware v1.4-217 (2026-11-14) and answer as the driver
+expects; the manifest records `commands_confirmed: false` until every command is confirmed.
 The console does not report a serial number, so put the USB serial (from `/dev/serial/by-id`) in lab.toml. The
 simulated backend gives a noise floor and one tone.
 

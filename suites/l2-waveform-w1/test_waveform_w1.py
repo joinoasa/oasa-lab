@@ -151,7 +151,8 @@ def judge(lab, direction: str, mod: str, points: list[Point]) -> None:
         e = pt.ebn0_db
         # frames found away from every sent frame's place are not counted (w1test.place_frames); their number is
         # kept in sight here, per point
-        if not lab.measure("frames_off_layout", f"off layout {direction} {mod} TX {pt.tx_gain_db:g}", pt.off_layout):
+        if not keep.measure(lab, pt, "off-layout", "frames_off_layout",
+                            f"off layout {direction} {mod} TX {pt.tx_gain_db:g}", pt.off_layout):
             failures.append(f"{pt.off_layout} frames off the layout at TX {pt.tx_gain_db:g}")
         lab.log("w1_point", direction=direction, mod=mod, tx_gain_db=pt.tx_gain_db, frames=pt.frames,
                 frames_off_layout=pt.off_layout,

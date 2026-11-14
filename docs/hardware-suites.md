@@ -285,6 +285,19 @@ error in the unprotected W0 header does not lose a frame. For each direction and
 until the frames are clear, then set for about 1, 3, 5 and 7 dB. A point counts with 20 or more bit errors; its loss is the measured Eb/N0 minus the Eb/N0 at which theory gives
 the measured BER, and it must be within 1 dB. Code: `oasa_lab/w1test.py`.
 
+**Counting by position.** A recording starts anywhere in the block, so the frame it cuts has its data inside the
+recording but not its preamble. The decoder sometimes takes a stretch of that data for a preamble, the 16-bit sync
+check passes by chance, and with the length known it reads 64 bytes of random data: about 235 bit errors, and a
+noise window "after" that frame that lies inside the next real one. On the bench this happened in 3 to 8 % of
+recordings and moved a 7 dB point by +1.2 to +2.2 dB. So the frames of a W0 or v1 point are placed on the block's
+layout (`place_frames`): where the block starts in the recording is the median offset of the frames that carry a
+sent payload, and a frame counts only if it starts within 64 samples (`SLOT_TOL`, 8 symbols) of a sent frame
+wholly inside the recording; it is compared with that frame's own payload. The frame starts on the bench sit
+within 4 samples of the layout. Position is the only test: a frame at its place counts however many errors it
+has, and a frame elsewhere is not counted however clean. N0 and the gap power come from the layout's silent gaps
+(50 to 350 samples after each sent frame), found or not. Frames off the layout are measured per point as
+`frames_off_layout` (at most 8) and logged in `w1_point` and `w1_v1_point`. The light code keeps its own slot count.
+
 **Outside signals.** The cable bench is not sealed from the air, and on 2026-11-11 two runs each lost one point to
 a narrowband signal that came on part way through a recording: +13 dB in 150 to 200 kHz and +7 dB in 200 to 250 kHz
 above the centre for the last 160 ms of a 1.09 s recording, nothing else changed, and the 18 frames under it were

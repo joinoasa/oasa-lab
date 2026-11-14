@@ -11,12 +11,16 @@ How a point is measured:
    outside signal stepping into the band; a flagged recording is taken again (at most MAX_RECAPTURES extra per
    point) and logged, never dropped silently (`capture_checked`).
    The recording is shifted back down and `oasa-radio waveform decode` finds
-   the frames. Each found frame is compared with the payload nearest to it (random payloads differ by
-   about half their bits, so this is unambiguous while a frame has well under 100 bit errors).
+   the frames. They are counted by position (`place_frames`): the block's layout says where every sent frame
+   sits, and only a frame that starts at a sent frame's place is counted, against that frame's own payload. A
+   recording starts anywhere in the block, so the frame it cuts has its data inside the recording but not its
+   preamble; the decoder can take some of that data for a preamble, and with the length known it reads 64
+   bytes of random data (about 235 bit errors). Such a frame is off the layout: it is logged, not counted.
 3. Eb/N0 is measured from the recording in the modem's own convention (oasa-radio docs/waveform-w0.md):
    Es = the energy of one symbol = signal power per sample x samples per symbol, from the power on the
    frames minus the power in the gaps; N0 = noise variance per sample, from the noise spectrum of the gaps
-   inside the signal band (what the matched filter sees), away from the DC spike.
+   inside the signal band (what the matched filter sees), away from the DC spike. The gaps are the layout's
+   silent spans, so a false or missing frame cannot put a noise window inside a real frame.
 
 Bench findings this follows (owner's bench, 2026-11-04): at 200 kS/s nothing decoded (the E310 has no
 DSP); at zero IF the BER was about 5 dB off theory; at 1 MS/s with the IF it is on theory. At RX gain 40 the
@@ -64,6 +68,7 @@ BITS_PER_SYMBOL = {"bpsk": 1, "qpsk": 2}
 CODE_RATE = {"none": 1.0, "light": 0.5}   # information bits per coded bit (oasa-radio docs/fec-light.md)
 LIGHT_CAPTURES = 4          # a light point records this many captures of PERIODS repeats (16 repeats, >= 384 frames)
 SLOT_TOL = 64               # samples: a delivered frame belongs to the slot whose start is this close
+PHASE_MAX_ERRORS = 8 * PAYLOAD_LEN // 4   # bits: a frame this close to a sent payload places the block (block_phase)
 # Outside signals during a capture (find_interference). Thresholds tuned on synthetic captures, see the docstring.
 IFX_FFT = 64                # FFT length: 15.6 kHz bins at 1 MS/s, the IF on bin 16
 IFX_SEGMENTS = 32           # FFTs averaged per block: a block is 2048 samples, 2.05 ms
@@ -173,6 +178,7 @@ class Point:
     gap_p: list[float] = field(default_factory=list, repr=False)
     noise_acc: list[float] = field(default_factory=list, repr=False)
     noise_n: int = 0
+    off_layout: int = 0                            # frames found away from every sent frame's place (place_frames)
 
     @property
     def ber(self) -> float | None:
@@ -224,14 +230,113 @@ def baseband(iq: IQ) -> list[complex]:
 
 
 def measure_point(pt: Point, block: Block, x: list[complex], frames: list[dict[str, Any]]) -> None:
+    """A W0 or v1 point from one recording, counted by position (accumulate_slots)."""
     pt.decoded, pt.frames = frames, len(frames)
-    accumulate_point(pt, block, x, frames)
+    accumulate_slots(pt, block, x, frames)
     finish_ebn0(pt, block)
+
+
+def bit_errors(a: bytes, b: bytes) -> int:
+    return sum(bin(u ^ v).count("1") for u, v in zip(a, b))
+
+
+def block_phase(block: Block, placed: list[tuple[int, int]]) -> int | None:
+    """Where the block starts in a recording (0 to L-1 samples), from (start, payload index) of frames known to
+    carry a sent payload: the median of their offsets from the layout, taken around the first so the wrap at L
+    makes no seam, so one stray frame cannot move it. None without any, or without a layout."""
+    if not placed or len(block.spans) != len(block.payloads):
+        return None
+    L = len(block.samples)
+    offs = [(s - block.spans[i][0]) % L for s, i in placed]
+    ref = offs[0]
+    rel = sorted(((o - ref + L // 2) % L) - L // 2 for o in offs)   # wrapped around the first: no seam
+    return (ref + rel[len(rel) // 2]) % L
+
+
+def whole_slots(block: Block, phase: int, n: int) -> list[tuple[int, int, int]]:
+    """(payload index, start, end) of every sent frame wholly inside a recording of `n` samples of `block` on
+    repeat, with a repeat of the block starting at sample `phase` (block_phase)."""
+    L = len(block.samples)
+    out = []
+    for r in range(-1, n // L + 2):
+        for i, (a, b) in enumerate(block.spans):
+            start, end = phase + r * L + a, phase + r * L + b
+            if start >= 0 and end <= n:
+                out.append((i, start, end))
+    return out
+
+
+def place_frames(block: Block, frames: list[dict[str, Any]], n: int
+                 ) -> tuple[list[tuple[dict[str, Any], int]], list[dict[str, Any]], list[tuple[int, int, int]]]:
+    """Put the frames found in one recording of `n` samples on the block's layout. Returns (counted, off, slots):
+    `slots` = (payload index, start, end) of every sent frame wholly inside the recording; `counted` = (frame,
+    payload index) for each frame that starts within SLOT_TOL samples of such a slot (one a slot, the closest);
+    `off` = every other frame found.
+
+    Where the block starts in the recording is one number (block_phase), the median over the frames that carry
+    a sent payload (PHASE_MAX_ERRORS or fewer bits off; random data is about half its bits off). Which frames count
+    is then decided by their start alone, never by their bit errors: a real frame at its place counts however
+    many errors it has, and it is compared with that place's payload, not the nearest one. A frame elsewhere (a
+    false preamble in the data of the frame the recording's start cut, read as 64 bytes of random data) is off.
+    With no frame carrying a sent payload the block cannot be placed: nothing counts and every frame is off."""
+    if len(block.spans) != len(block.payloads):
+        raise ValueError("the block has no layout (Block.spans; make_block gives it)")
+    placed = []
+    for f in frames:
+        got = bytes.fromhex(f["payload_hex"]) if f.get("payload_hex") else b""
+        if len(got) == PAYLOAD_LEN:
+            d, i = min((bit_errors(got, p), i) for i, p in enumerate(block.payloads))
+            if d <= PHASE_MAX_ERRORS:
+                placed.append((int(f["start"]), i))
+    phase = block_phase(block, placed)
+    if phase is None:
+        return [], list(frames), []
+    slots = whole_slots(block, phase, n)
+    best: dict[int, tuple[int, int]] = {}            # slot -> (distance, frame)
+    for k, f in enumerate(frames):
+        s = int(f["start"])
+        for j, (_, start, _) in enumerate(slots):
+            d = abs(s - start)
+            if d <= SLOT_TOL and (j not in best or d < best[j][0]):
+                best[j] = (d, k)
+    taken = {k for _, k in best.values()}
+    counted = [(frames[k], slots[j][0]) for j, (_, k) in sorted(best.items())]
+    return counted, [f for k, f in enumerate(frames) if k not in taken], slots
+
+
+def accumulate_slots(pt: Point, block: Block, x: list[complex], frames: list[dict[str, Any]]) -> None:
+    """Bit errors, signal power and noise spectrum from one recording, by position (place_frames). Each counted
+    frame is compared with its own slot's payload; frames off the layout only add to `pt.off_layout`. Noise is
+    measured after every sent frame wholly inside the recording, from 50 to GAP-50 samples past its end on the
+    layout (the span the frame's own end gave before), whether that frame was found or not."""
+    win = [0.5 - 0.5 * math.cos(2 * math.pi * k / NOISE_FFT) for k in range(NOISE_FFT)]
+    if not pt.noise_acc:
+        pt.noise_acc = [0.0] * NOISE_FFT
+    counted, off, slots = place_frames(block, frames, len(x))
+    pt.off_layout += len(off)
+    for f, i in counted:
+        got = bytes.fromhex(f["payload_hex"]) if f.get("payload_hex") else b""
+        if len(got) != PAYLOAD_LEN:
+            continue
+        pt.errors += bit_errors(got, block.payloads[i])
+        pt.bits += 8 * PAYLOAD_LEN
+        pt.crc_ok += bool(f.get("crc_ok"))
+        seg = x[f["start"]:f["end"]]
+        if len(seg) > 100:
+            pt.sig_p.append(sum(abs(v) ** 2 for v in seg) / len(seg))
+    for _, _, end in slots:
+        gap = x[end + 50:end + GAP - 50]
+        if len(gap) >= NOISE_FFT:
+            pt.gap_p.append(sum(abs(v) ** 2 for v in gap) / len(gap))
+            for k, c in enumerate(fft([a * b for a, b in zip(gap[:NOISE_FFT], win)])):
+                pt.noise_acc[k] += abs(c) ** 2
+            pt.noise_n += 1
 
 
 def accumulate_point(pt: Point, block: Block, x: list[complex], frames: list[dict[str, Any]]) -> None:
     """Bit errors, and the power and noise spectrum around each found frame, from one recording. Call once
-    per recording of a point, then finish_ebn0."""
+    per recording of a point, then finish_ebn0. Used for the light code, whose frames are decoded without the
+    length; W0 and v1 points use accumulate_slots."""
     win = [0.5 - 0.5 * math.cos(2 * math.pi * k / NOISE_FFT) for k in range(NOISE_FFT)]
     if not pt.noise_acc:
         pt.noise_acc = [0.0] * NOISE_FFT
@@ -255,7 +360,7 @@ def accumulate_point(pt: Point, block: Block, x: list[complex], frames: list[dic
 def finish_ebn0(pt: Point, block: Block) -> None:
     """Eb/N0 per information bit: Es/N0 / (bits per symbol x code rate). The code rate is 1 uncoded, so W0 and
     uncoded v1 read as before; the light code's rate 1/2 puts Eb 3 dB above Es per coded BPSK symbol."""
-    if not pt.noise_n:
+    if not pt.noise_n or not pt.sig_p:
         return
     # N0 per sample: the gaps' averaged noise spectrum inside the signal band, away from the DC spike (which
     # sits at -IF after the shift back). For white noise each Hann-windowed bin averages to the per-sample
@@ -531,24 +636,15 @@ def count_slots(block: Block, frames: list[dict[str, Any]], n: int) -> tuple[int
             i = index.get(bytes.fromhex(hx))
             if i is not None:
                 good.append((int(f["start"]), i))
-    if not good or len(block.spans) != len(block.payloads):
+    phase = block_phase(block, good)
+    if phase is None:
         return N_FRAMES * (n // L), 0
-    offs = [(s - block.spans[i][0]) % L for s, i in good]
-    ref = offs[0]
-    rel = sorted(((o - ref + L // 2) % L) - L // 2 for o in offs)   # wrapped around the first: no seam
-    phase = (ref + rel[len(rel) // 2]) % L
     starts: dict[int, list[int]] = {}
     for s, i in good:
         starts.setdefault(i, []).append(s)
-    slots = delivered = 0
-    for r in range(-1, n // L + 2):
-        for i, (a, b) in enumerate(block.spans):
-            start, end = phase + r * L + a, phase + r * L + b
-            if start < 0 or end > n:
-                continue
-            slots += 1
-            delivered += any(abs(s - start) <= SLOT_TOL for s in starts.get(i, ()))
-    return slots, delivered
+    slots = whole_slots(block, phase, n)
+    delivered = sum(any(abs(s - start) <= SLOT_TOL for s in starts.get(i, ())) for i, start, _ in slots)
+    return len(slots), delivered
 
 
 def run_light_point(radio: Path, tx: Usrp, rx: Usrp, block: Block, rf_hz: float, gain_db: float, work: Path,

@@ -26,6 +26,18 @@ min = 2
 max = 100
 reason = "Each modulation and direction needs at least 2 points with 20 or more bit errors, or the curve is not shown."
 
+[limits.frames_off_layout]
+min = 0
+max = 8
+reason = """Frames found in a W0 point's recording that do not start within 64 samples of a sent frame wholly inside it
+(w1test.place_frames); they are not counted in the BER or the noise. A recording starts anywhere in the block, so
+the frame it cuts has its data inside but not its preamble, and the decoder sometimes takes that data for one: with
+the length known it reads 64 bytes of random data (about 235 bit errors). On 8 bench recordings cut at 1000 random
+starts each, 5.5 % of starts gave such a frame, at most 4 in one (a chain: each false frame hides the next real
+preamble). More than 8 means something else (a block timing slip of over 64 samples, a wrong layout, a decoder
+fault), and the frames counted would no longer be the recording. Generous on purpose: the count is here to stay in
+sight, and it cannot favour a pass, since a frame is placed by its start alone."""
+
 [limits.noise_only_frames]
 min = 0
 max = 0

@@ -7,12 +7,18 @@ always fitted, and set `max_input_dbm` from its datasheet. A level within `margi
 error.
 
 The console takes a command line ending in a carriage return, echoes it, prints its answer and ends with the
-prompt `ch> `. The command strings below follow the tinySA USB interface notes (tinysa.org) and are TO BE
-CONFIRMED against the firmware in use (`COMMANDS`; `info()` records `commands_confirmed: false`):
+prompt `ch> `. The command strings below follow the tinySA USB interface notes (tinysa.org). `CONFIRMED` lists
+the ones tried on a real unit (tinySA Ultra+ ZS407, firmware tinySA4_v1.4-217, 2026-11-14); `info()` records
+`commands_confirmed: false` until every one is:
 
-    version                                   firmware string
-    scan START STOP POINTS 3                  one line per point: "FREQ_HZ LEVEL_DBM" (outmask 1 freq + 2 level)
-    marker 1 peak, then marker 1              "1 INDEX FREQ_HZ LEVEL_DBM"
+    version                                   firmware string                                    confirmed
+    scan START STOP POINTS 3                  one line per point: "FREQ_HZ LEVEL_DBM 0.0"        confirmed
+                                              (outmask 1 freq + 2 level; a third field follows, ignored)
+    marker 1 peak, then marker 1              "1 INDEX FREQ_HZ LEVEL_DBM"                        NOT for use after scan
+
+On that firmware the marker follows the sweep on the tinySA's own screen, not the last `scan`: after a scan of
+914 to 916 MHz it answered with a peak at 1002.8 MHz. So `read_marker_dbm` reads the screen's sweep, whatever
+that is set to; use `read_peak_dbm` (the scan's own points) for a level at a known frequency.
 
 `scanraw` (binary samples) is not used. `input_pad_db` (the fitted pad, e.g. 30) is added to every reading in
 software; leave the tinySA's own external gain setting at 0 so it is not counted twice.
@@ -31,13 +37,13 @@ from .modem import PortLike, SerialPort
 
 PROMPT = b"ch> "
 BAUD = 115200   # CDC ignores it
-COMMANDS: dict[str, str] = {        # all TO BE CONFIRMED against the firmware's USB command list
+COMMANDS: dict[str, str] = {        # see CONFIRMED and the notes above
     "version": "version",
     "scan": "scan {start:.0f} {stop:.0f} {points:d} 3",
     "marker_peak": "marker 1 peak",
     "marker": "marker 1",
 }
-CONFIRMED: tuple[str, ...] = ()
+CONFIRMED: tuple[str, ...] = ("version", "scan")
 DEFAULT_MAX_INPUT_DBM = 10.0
 DEFAULT_MARGIN_DB = 3.0
 MAX_POINTS = 450
@@ -175,7 +181,8 @@ class TinySA(Device):
         return f, self._checked(lv)
 
     def read_marker_dbm(self) -> tuple[float, float]:
-        """Marker 1 moved to the peak of the last sweep: (frequency Hz, level dBm with the pad added)."""
+        """Marker 1 moved to the peak of the sweep on the tinySA's own screen: (frequency Hz, level dBm with the pad
+        added). Not the last `scan` (see the module notes); for a level at a known frequency use `read_peak_dbm`."""
         self.command(COMMANDS["marker_peak"])
         lines = self.command(COMMANDS["marker"])
         mm = re.match(r"\s*1\s+\d+\s+(\S+)\s+(\S+)", lines[0]) if lines else None

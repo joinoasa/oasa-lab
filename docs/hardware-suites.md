@@ -305,6 +305,18 @@ whole band. On synthetic recordings (real oasa-radio blocks, Es/N0 -1 to 20 dB, 
 noise-floor rises, a ramping or late transmitter) none of 1600 clean ones was flagged; a 10 dB rise for 8 ms or
 more was found in 1200 of 1200, a 6 dB rise for 20 ms or more in 314 of 320, a 3 dB rise never.
 
+**Recordings.** Each test saves one recording (`w1-DIRECTION-MOD`, `w1-v1-...`, `w1-light-...`: its strongest
+or first point), which is rarely the one that failed. So a point outside a limit (`ber_loss_db`, `light_loss_db`,
+`light_delivered_fraction`, `v1_found_fraction`, `rx_peak_fs`, or a loss outside the simulated curve) also saves
+its own recording as `w1-fail-TAG-DIRECTION-MOD-txGAIN` (for example `w1-fail-ber-e310-b200-bpsk-tx23p5`). Its
+description and one annotation over the whole recording give the direction, modulation, TX gain, measured Eb/N0,
+the metric, its value and limit (`oasa:metric`, `oasa:value`, `oasa:min`, `oasa:max`, ...); a light point saves
+its first of 4 captures. When a test has too few points in its window (`points_measured`,
+`light_points_measured`), the points inside and the nearest one on each side are saved (tag `window`,
+`light-window`). At most 4 a run, first come first kept (`MAX_KEPT`, `w1test.KeepFailing`); one past that is
+logged as `w1_recording_dropped`. They are ordinary recordings: hashed, in the manifest and `summary.md`, and
+checked. A run that passes saves none. Nothing here changes a limit or a verdict.
+
 What the first bench showed (2026-11-04): at 200 kS/s nothing decoded although the frames were there (the E310
 has no DSP for low rates); at zero IF the BER was about 5 dB off theory (the receiver's DC offset sits on the
 signal); with the IF at 1 MS/s every point was within 0.9 dB, both ways, BPSK and QPSK. Frames missed below about

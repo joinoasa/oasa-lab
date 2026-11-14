@@ -73,6 +73,7 @@ IFX_STEP_DB = 5.0           # a block scores a sub-band's rise minus IFX_MIRROR 
 IFX_MIRROR = 2.0            # our own signal raises a sub-band and its mirror within about 1.5x of each other (dB)
 IFX_RUN = 3                 # for this many blocks in a row (6.1 ms) flags the capture
 MAX_RECAPTURES = 2          # extra captures a point may take when one is flagged; the only place this is set
+MAX_KEPT = 4                # recordings of failing points one run may add (KeepFailing); first come, first kept
 
 
 class TooStrong(Exception):
@@ -166,6 +167,7 @@ class Point:
     report_sync5: dict[str, Any] = field(default_factory=dict)
     captures: int = 0
     flagged: int = 0                               # captures find_interference flagged (taken again while allowed)
+    kept: bool = False                             # KeepFailing has saved (or dropped) this point's recording
     # Eb/N0 accumulators (accumulate_point / finish_ebn0)
     sig_p: list[float] = field(default_factory=list, repr=False)
     gap_p: list[float] = field(default_factory=list, repr=False)
@@ -437,6 +439,70 @@ def probe_gain(radio: Path, tx: Usrp, rx: Usrp, block: Block, rf_hz: float, work
         if (pt.ebn0_db is not None and pt.ebn0_db >= want_db) or g >= tx.max_tx_gain:
             return g, pt
         g = min(g + step_db, tx.max_tx_gain)
+
+
+# --- recordings of failing points -------------------------------------------------------------------------
+
+class KeepFailing:
+    """Saves the recording of a point that fails, so it can be studied after the run. One per run (the suite keeps
+    it in its STATE). Through `lab.sigmf`, so the recording is hashed, listed and checked like any other; named
+    `w1-fail-TAG-DIRECTION-MOD-txGAIN`, with the point's numbers in the description and in one annotation over the
+    whole recording. At most `cap` per run, first come first kept; each one past the cap is logged as
+    `w1_recording_dropped`. A point is saved once. Decides nothing: the caller's limits and verdicts stay as they are.
+    A light point keeps only its first capture (Point.recording), so that is the one saved."""
+
+    def __init__(self, center_hz: float, cap: int = MAX_KEPT):
+        self.center_hz, self.cap = center_hz, cap
+        self.kept = 0
+
+    def measure(self, lab: Any, pt: Point, tag: str, metric: str, name: str, value: float, unit: str = "") -> bool:
+        """lab.measure, unchanged; if the value is outside its limit, the point's recording is kept too."""
+        ok = lab.measure(metric, name, value, unit)
+        if not ok:
+            self.keep(lab, pt, tag, metric, value, unit)
+        return ok
+
+    def keep(self, lab: Any, pt: Point, tag: str, metric: str, value: float | None, unit: str = "",
+             note: str = "") -> bool:
+        """Save `pt`'s recording, which failed `metric` (False if it has none, was saved already or the cap is
+        reached). The limit shown is the suite's."""
+        if pt.recording is None or pt.kept:
+            return False
+        pt.kept = True
+        where = f"{pt.direction} {pt.mod} TX {pt.tx_gain_db:g} dB"
+        if self.kept >= self.cap:
+            lab.log("w1_recording_dropped", metric=metric, direction=pt.direction, mod=pt.mod,
+                    tx_gain_db=pt.tx_gain_db, cap=self.cap, text=f"{where}: {self.cap} failing recordings kept already")
+            return False
+        self.kept += 1
+        lim = lab.ctx.suite.limits.get(metric, {})
+        lo, hi = lim.get("min"), lim.get("max")
+        e = None if pt.ebn0_db is None else round(pt.ebn0_db, 2)
+        got = "none" if value is None else f"{value:g}{(' ' + unit) if unit else ''}"
+        limit = f"{'' if lo is None else f'{lo:g}'}..{'' if hi is None else f'{hi:g}'}"
+        counts = (f"{pt.delivered} of {pt.frames_sent} delivered in {pt.captures} captures (this is the first)"
+                  if pt.captures else f"{pt.errors} errors in {pt.bits} bits, {pt.frames} frames")
+        text = f"{where}, Eb/N0 {e} dB: {metric} {got}, limit {limit}; {counts}" + (f"; {note}" if note else "")
+        iq = pt.recording
+        name = f"w1-fail-{tag}-{pt.direction}-{pt.mod}-tx{pt.tx_gain_db:g}".replace(".", "p")
+        lab.sigmf(name, iq.data, datatype=iq.datatype, sample_rate=iq.sample_rate, center_hz=self.center_hz,
+                  start_time=getattr(iq, "start_time", 0.0), device=pt.rx_id,
+                  purpose=f"W1 failing point: {metric} {got} ({limit}), {where}", description=text,
+                  annotations=[{"core:sample_start": 0, "core:sample_count": iq.n, "core:label": "failing point",
+                                "core:description": text, "oasa:metric": metric, "oasa:value": value,
+                                "oasa:min": lo, "oasa:max": hi, "oasa:direction": pt.direction, "oasa:mod": pt.mod,
+                                "oasa:tx_gain_db": pt.tx_gain_db, "oasa:ebn0_db": e}])
+        return True
+
+
+def around_window(sides: list[tuple[Point, int | None]]) -> list[Point]:
+    """For a test with too few points in its window: the points inside (side 0) and the nearest one below (-1,
+    the highest TX gain there) and above (+1, the lowest). Side None: not placed (nothing measured)."""
+    inside = [p for p, s in sides if s == 0]
+    below = [p for p, s in sides if s == -1]
+    above = [p for p, s in sides if s == 1]
+    return (inside + ([max(below, key=lambda p: p.tx_gain_db)] if below else [])
+            + ([min(above, key=lambda p: p.tx_gain_db)] if above else []))
 
 
 # --- light error correction (oasa-radio docs/fec-light.md) ------------------------------------------------

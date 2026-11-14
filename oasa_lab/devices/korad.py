@@ -21,7 +21,7 @@ from typing import Any
 from .base import Device, DeviceError
 from .modem import PortLike, SerialPort
 
-HARD_MAX_V = 6.0
+HARD_MAX_V = 12.0  # the bench E310 runs from 12 V (owner, 2026-11-13); was 6.0
 HARD_MAX_A = 3.0
 BAUD = 9600
 TOLERANCE_V = 0.005

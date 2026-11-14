@@ -1,4 +1,4 @@
-"""The KORAD driver: the 6 V, 3 A limit, who may touch the output, and the real serial path against a pty."""
+"""The KORAD driver: the 12 V, 3 A limit, who may touch the output, and the real serial path against a pty."""
 
 import os
 import threading
@@ -33,7 +33,7 @@ def test_it_opens_on_the_built_in_sim_bench():
     assert info["model"] == "KORAD KA3005P" and info["firmware"] == "V1.5"
 
 
-@pytest.mark.parametrize("volts,amps", [(6.01, 1), (1, 3.001), (100, 1), (1, 100), (-1, 1), (1, -1)])
+@pytest.mark.parametrize("volts,amps", [(12.01, 1), (1, 3.001), (100, 1), (1, 100), (-1, 1), (1, -1)])
 def test_over_the_limit_never_reaches_the_port(volts, amps):
     with supply() as dev:
         before = list(dev.port.written)
@@ -57,7 +57,7 @@ def test_the_config_can_lower_the_limit():
             dev.set(1, 2.01)
 
 
-@pytest.mark.parametrize("cfg", [{"max_v": 6.01}, {"max_a": 3.01}, {"max_v": 48}, {"max_v": 0}, {"max_a": -1}])
+@pytest.mark.parametrize("cfg", [{"max_v": 12.01}, {"max_a": 3.01}, {"max_v": 48}, {"max_v": 0}, {"max_a": -1}])
 def test_the_config_cannot_raise_the_limit(cfg):
     with pytest.raises(DeviceError, match="must be above 0"):
         supply(**cfg).open()
@@ -94,14 +94,14 @@ def test_hold_output_never_changes_the_output_by_itself():
 def test_hold_output_still_obeys_the_limit_and_an_explicit_call():
     with supply(hold_output=True, sim={"on": True, "vset": 6.0}) as dev:
         with pytest.raises(DeviceError, match="refused"):
-            dev.set(6.5, 1)
+            dev.set(12.5, 1)
         dev.output(False)
         assert dev.port.on is False
 
 
 def test_settings_from_the_front_panel_are_not_trusted():
     with pytest.raises(DeviceError, match="front panel"):
-        supply(sim={"vset": 12.0}).open()
+        supply(sim={"vset": 12.5}).open()
     with pytest.raises(DeviceError, match="front panel"):
         supply(hold_output=True, sim={"vset": 5.0, "iset": 5.0}).open()
 
@@ -174,7 +174,7 @@ def test_real_serial_path_against_a_pseudo_terminal():
             info = dev.info()
             assert info["vout"] == 6.0 and info["output"] is True and info["serial"] == "T-1"
             with pytest.raises(DeviceError, match="refused"):
-                dev.set(7, 1)
+                dev.set(13, 1)
             dev.set(5.5, 2.0)
             assert (fake.vset, fake.iset) == (5.5, 2.0)
     finally:

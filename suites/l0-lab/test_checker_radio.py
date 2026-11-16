@@ -18,10 +18,10 @@ from oasa_lab.pcap import PcapWriter, read_pcap
 from oasa_lab.suites import suites_dir
 
 
-def make_bundle(tmp_path_factory, suite):
+def make_bundle(tmp_path_factory, suite, **env):
     out = tmp_path_factory.mktemp(f"bundle-{suite}")
     r = subprocess.run([sys.executable, "-m", "oasa_lab", "run", suite, "--out", str(out)], capture_output=True,
-                       text=True, timeout=180, env={**os.environ, "OASA_LAB_SIM": "1"})
+                       text=True, timeout=180, env={**os.environ, "OASA_LAB_SIM": "1", **env})
     assert r.returncode == 0, r.stdout + r.stderr
     return next(p for p in out.iterdir() if p.is_dir())
 
@@ -29,6 +29,13 @@ def make_bundle(tmp_path_factory, suite):
 @pytest.fixture(scope="module")
 def good_control(tmp_path_factory):
     return make_bundle(tmp_path_factory, "l2-rf-control")
+
+
+@pytest.fixture(scope="module")
+def good_usrp_control(tmp_path_factory):
+    """l2-rf-control with a B200mini as the recorder (no RTL-SDR)."""
+    inv = os.path.join(os.path.dirname(suites_dir()), "tests", "sim", "lora-usrp-recorder.toml")
+    return make_bundle(tmp_path_factory, "l2-rf-control", OASA_LAB_INVENTORY=inv)
 
 
 @pytest.fixture(scope="module")
@@ -365,3 +372,35 @@ def test_an_optional_limit_may_stay_unmeasured(good_pluto, tmp_path):
     edit_log(b, lambda rows: rows.__setitem__(slice(None), [r for r in rows
                                                             if not (r["event"] == "measurement" and r["metric"] == "rx_level_vs_expected_db")]))
     assert failed(b) == []
+
+
+# --- a B200mini as the LoRa suites' recorder -----------------------------------------------------------
+def b200_paths(m):
+    return [p for p in m["hardware"]["rf"]["paths"] if p["to"].startswith("b2000")]
+
+
+def test_a_usrp_recorder_bundle_passes(good_usrp_control):
+    checks, res = verdict(good_usrp_control)
+    assert res["ok"], checks
+    m = json.loads((good_usrp_control / "manifest.json").read_text())
+    assert m["recordings"][0]["device"] == "b2000" and "rtlsdr|b200" in m["requires"]
+    assert len(b200_paths(m)) == 2 and all(p["receiver_transmits"] for p in b200_paths(m))
+
+
+def test_a_usrp_recorder_needs_60_db_not_40(good_usrp_control, tmp_path):
+    b = copy_of(good_usrp_control, tmp_path / "loss")
+    edit_json(b / "manifest.json", lambda m: b200_paths(m)[0].update({"loss_db": 50.0}))
+    write_sums(b)
+    assert failed(b) == [7] and "below the 60 dB" in reason7(b)
+    b = copy_of(good_usrp_control, tmp_path / "rxonly")   # claiming it is receive-only does not lower the limit
+    edit_json(b / "manifest.json", lambda m: b200_paths(m)[0].update({"receiver_transmits": False}))
+    write_sums(b)
+    assert failed(b) == [7] and "b200 can transmit" in reason7(b)
+
+
+def test_a_run_with_neither_recorder_is_caught(good_usrp_control, tmp_path):
+    b = copy_of(good_usrp_control, tmp_path)
+    edit_json(b / "manifest.json",
+              lambda m: next(d for d in m["hardware"]["devices"] if d["id"] == "b2000").update({"kind": "e310"}))
+    write_sums(b)
+    assert 7 in failed(b) and "requires rtlsdr|b200 but the manifest lists 0 rtlsdr, 0 b200" in reason7(b)

@@ -5,8 +5,8 @@ The first suites that use real radios on cables. They are written and tested on 
 | Suite | What it proves | Needs |
 |---|---|---|
 | `l2-pluto-acceptance` | A Pluto+ clone is what it claims: identity, tuning range, crystal error, all four RF ports | Pluto+, RTL-SDR |
-| `l2-lora-link` | The encrypted link works over two LoRa modems on coax, matches the airtime model, and the air shows only ciphertext | 2 Heltec modems, RTL-SDR, `oasa-sec`, `oasa-radio` |
-| `l2-rf-control` | Negative control: a plaintext LoRa packet **is** found by the same air check | 2 Heltec modems, RTL-SDR |
+| `l2-lora-link` | The encrypted link works over two LoRa modems on coax, matches the airtime model, and the air shows only ciphertext | 2 Heltec modems, RTL-SDR or B200mini (receive only), `oasa-sec`, `oasa-radio` |
+| `l2-rf-control` | Negative control: a plaintext LoRa packet **is** found by the same air check | 2 Heltec modems, RTL-SDR or B200mini (receive only) |
 | `l2-sik-link` | R-COM1 on an off-the-shelf pair: both radios report the declared settings, bytes cross both bridges both ways unchanged, delivery and latency match the `sik-64k` model, the MTU holds; the bridge refuses a radio whose settings differ, also after the other radio changed them with `RT` (H1) | 2 SiK radios, `oasa-radio` with `--sik-expect` |
 | `l2-sik-oasa-link` | R-COM2 over the R-COM1 radio: the encrypted link over the SiK pair, both ways, handshake and goodput against `sik-64k`, ciphertext only in what the radios delivered | 2 SiK radios, `oasa-sec`, `oasa-radio` with `--sik-expect` |
 | `l2-rx-noise` | Receive only: each radio is alive and its input is quiet, and the E310 draws normal power. Transmits nothing and only reads the supply | B200mini, E310, KORAD |
@@ -18,7 +18,7 @@ The first suites that use real radios on cables. They are written and tested on 
 | `l2-sdr-live-soak` | F11: the same live link for 24 hours (`[sdr_live] soak_duration_s`), the same limits over the whole day, plus a per-hour report so a drift shows; the only suite the policy may give a job longer than an hour (`[lab] long_jobs`) ([sdr-live-link.md](sdr-live-link.md) section 6) | as `l2-sdr-live-link` |
 | `l2-usrp-loopback` | A tone each way between a B200mini and an E310 over cable: the level follows the TX gain, the crystal offset is in spec and mirrors between directions, and the tone stops when the transmitter does | B200mini, E310 |
 
-> **Safety. Never connect two transmitters, or a transmitter and a receiver, by coax without at least 60 dB of attenuation between them.** Receive-only gear (the RTL-SDR) needs 40 dB. Fixed attenuators first, then cables. Check the wiring against the diagrams below before every transmitting run. The lab refuses to transmit on real hardware until you type the wiring name: `--confirm-wiring NAME`. The checker fails any bundle whose declared paths are below the limits. Radiating over the air only in suites with `radiates = true` (see *Over the air* below).
+> **Safety. Never connect two transmitters, or a transmitter and a receiver, by coax without at least 60 dB of attenuation between them.** Receive-only gear (the RTL-SDR) needs 40 dB. A USRP used only to receive still needs 60 dB: it can transmit. Fixed attenuators first, then cables. Check the wiring against the diagrams below before every transmitting run. The lab refuses to transmit on real hardware until you type the wiring name: `--confirm-wiring NAME`. The checker fails any bundle whose declared paths are below the limits. Radiating over the air only in suites with `radiates = true` (see *Over the air* below).
 
 ## The simulated bench
 
@@ -29,6 +29,7 @@ OASA_LAB_SIM=1 oasa-lab devices
 OASA_LAB_SIM=1 oasa-lab run l2-pluto-acceptance
 OASA_LAB_SIM=1 oasa-lab run l2-rf-control
 OASA_LAB_SIM=1 OASA_SEC_BIN_DIR=... OASA_RADIO_BIN_DIR=... oasa-lab run l2-lora-link
+OASA_LAB_SIM=1 OASA_LAB_INVENTORY=tests/sim/lora-usrp-recorder.toml oasa-lab run l2-rf-control   # B200mini recorder
 ```
 
 The simulation is real-time: a LoRa packet takes its real airtime on a shared half-duplex medium, the Pluto and the RTL-SDR agree on tones through the cable losses, and the RTL-SDR "records" noise with a burst wherever a packet was on the air. So the checks have something real to check. CI runs these suites this way.
@@ -108,6 +109,8 @@ The Pluto+ puts out about +7 dBm at most. Sixty dB leaves -53 dBm at a receiver 
 ```
 
 Set the modems to 10 dBm. At 72 dB B hears A at about -62 dBm (LoRa SF7 needs -123). The RTL-SDR sees about -56 dBm, 20 dB or more over its noise at a low gain.
+
+**No RTL-SDR?** Put the B200mini's RX2 on the same splitter leg instead (the commented paths under `[wiring.lora]` in `lab.example.toml`). The suites say `requires = ["serial-radio:2", "rtlsdr|b200"]`: either recorder will do. The recorder is the RTL-SDR or B200mini the `lora` wiring leads to (the RTL-SDR if it leads to both). The B200mini only receives here: the suites close its transmit gate, so `tx_tone` and `tx_file` raise `TxRefused`. It can transmit, so its leg needs 60 dB, not 40: 66 dB is enough. A path toward a USRP may not say `receiver_transmits = false`; the run refuses that wiring and the checker fails it. It records at twice the LoRa bandwidth (250 kS/s at 125 kHz, 1 MS/s at 500 kHz), RX gain 30 dB, centered on the channel (`rx_samples_c`, `cf32_le`). At 250 kS/s a recording takes 2 MB/s; the checker reads up to 256 MB, so about two minutes.
 
 ### SiK pair (`wiring.sik`)
 
@@ -226,7 +229,7 @@ app -> oasa-link -> bridge -> pty -> TAP -> modem A ~~ coax ~~ modem B -> TAP ->
 - 28 marked packets each way (one burst per direction; every seventh is a MAVLink heartbeat), each delivered **exactly once**.
 - **Handshake and goodput** against the airtime of the frames the modems actually carried (the `lora-sf7-bw125` model, see [profiles](profiles.md)); limits below.
 - **The air check.** The tap keeps every frame each modem delivered to its host: what anyone with a receiver would get. They are saved as `captures/NN-air-DEVICE.pcap` (frames in synthetic IP and UDP headers) and the checker scans them as it scans simulated captures: no marker, no MAVLink, random-looking bytes.
-- **The SDR recording.** The RTL-SDR records the whole exchange as SigMF (`cu8`, 250 kS/s, centered on the channel). The checker finds bursts of energy and lines them up with the frames: each frame needs a burst of the right length (airtime) at the right time. No demodulation.
+- **The SDR recording.** The RTL-SDR records the whole exchange as SigMF (`cu8`, 250 kS/s, centered on the channel), or the B200mini (`cf32_le`, twice the LoRa bandwidth; see the `lora` wiring above). The checker finds bursts of energy and lines them up with the frames: each frame needs a burst of the right length (airtime) at the right time. No demodulation.
 - `test_modems_pass_packets_both_ways` runs first and tells a radio fault from a link fault.
 
 ### `l2-sik-link` (R-COM1)

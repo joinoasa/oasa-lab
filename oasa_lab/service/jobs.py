@@ -26,6 +26,7 @@ from .audit import AuditLog
 from .auth import Principal
 from . import files
 from ..policy import JOB_ID_RE, interlock, wiring_to_confirm
+from ..suites import requirement_met
 from .checkout import SUITE_RE, Checkout, CheckoutError, Checkouts, read_suites
 from .config import Config
 from .inventory import Inventory
@@ -220,14 +221,9 @@ class JobManager:
 
     @staticmethod
     def missing_requirements(requires: list[str], present: list) -> list[str]:
-        """Suite `requires` use the hardware suites' form: a device kind, or `kind:N` for at least N."""
-        out = []
-        for req in requires:
-            kind, _, n = req.partition(":")
-            need = int(n) if n.isdigit() else 1
-            if sum(1 for d in present if d.kind == kind) < need:
-                out.append(req)
-        return out
+        """Suite `requires` use the hardware suites' form (`kind`, `kind:N`, `a|b`), read by `requirement_met`."""
+        return [req for req in requires
+                if not requirement_met(req, lambda kind: sum(1 for d in present if d.kind == kind))]
 
     async def _device_problem(self, suite: dict, profile: str | None) -> str | None:
         want_ids = list(self.cfg.profiles[profile].requires) if profile else []

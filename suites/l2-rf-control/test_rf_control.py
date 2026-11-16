@@ -5,8 +5,8 @@ both ways between two modems on coax. The frames each modem delivers are saved a
 the independent checker must FIND the marker and the MAVLink in them (and see that the bytes are not
 random). If the air check were blind, this suite would fail the checker instead of passing it.
 
-The RTL-SDR records the exchange as SigMF; the checker lines its bursts up with the airtime of the
-frames, so the control also proves the recording path works.
+The recorder (an RTL-SDR, or a B200mini that only receives) records the exchange as SigMF; the checker
+lines its bursts up with the airtime of the frames, so the control also proves the recording path works.
 """
 
 import time

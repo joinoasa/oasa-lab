@@ -1,7 +1,7 @@
-description = "Negative control for the air check: plaintext LoRa packets with a marker and MAVLink go between two modems on coax, and the checker must find them (needs 2 modems and an RTL-SDR)"
+description = "Negative control for the air check: plaintext LoRa packets with a marker and MAVLink go between two modems on coax, and the checker must find them (needs 2 modems and a recorder: an RTL-SDR, or a B200mini that only receives)"
 expectations = ["test_plaintext_lora_packets_are_seen_on_the_air"]
 transmits = true
-requires = ["serial-radio:2", "rtlsdr"]
+requires = ["serial-radio:2", "rtlsdr|b200"]   # the recorder: an RTL-SDR, or a B200mini (receive only)
 wiring = "lora"
 
 [captures]

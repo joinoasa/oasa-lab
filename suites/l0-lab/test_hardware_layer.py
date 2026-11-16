@@ -290,3 +290,26 @@ def test_real_serial_backend_against_a_pseudo_terminal(tmp_path):
     t.join(1)
     os.close(master)
     os.close(slave)
+
+
+# --- either recorder: requires = ["rtlsdr|b200"] ---------------------------------------------------------
+def test_a_requirement_can_name_alternatives(tmp_path):
+    from oasa_lab.suites import requirement_met
+    count = {"b200": 1, "serial-radio": 2}.get
+    assert requirement_met("rtlsdr|b200", lambda k: count(k, 0))
+    assert requirement_met("pluto|serial-radio:2", lambda k: count(k, 0))
+    assert not requirement_met("rtlsdr|pluto", lambda k: count(k, 0))
+    assert not requirement_met("rtlsdr|b200:2", lambda k: count(k, 0))
+    f = tmp_path / "lab.toml"
+    f.write_text('[devices.u]\nkind = "b200"\n')
+    assert Inventory.load(f, sim=False).missing(["serial-radio:2", "rtlsdr|b200"]) == ["serial-radio:2"]
+    f.write_text('[devices.e]\nkind = "e310"\n')
+    assert Inventory.load(f, sim=False).missing(["rtlsdr|b200"]) == ["rtlsdr|b200"]
+
+
+def test_the_usrp_recorder_bench_meets_the_lora_suites():
+    inv = Inventory.load(ROOT / "tests/sim/lora-usrp-recorder.toml", sim=True)
+    assert not inv.ids_of("rtlsdr")
+    for name in ("l2-lora-link", "l2-rf-control"):
+        s = load_suite(suites_dir() / name)
+        assert "rtlsdr|b200" in s.requires and not inv.missing(s.requires) and s.wiring in inv.wiring

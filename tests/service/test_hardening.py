@@ -231,11 +231,15 @@ def test_suite_list_edge_cases(tmp_path, monkeypatch):
         "stringy": 'description = "s"\ntransmits = "yes"\n',
         "_hidden": 'description = "h"\n',
         "bad-req": 'description = "b"\nrequires = ["Pluto; rm -rf /"]\n',
+        "either": 'description = "e"\nrequires = ["serial-radio:2", "rtlsdr|b200"]\n',
+        "bad-alt": 'description = "a"\nrequires = ["rtlsdr|"]\n',
+        "bad-alt2": 'description = "a"\nrequires = ["a|b|c|d|e"]\n',
         "huge": 'description = "' + "x" * 70000 + '"\n',
     })
     cks = Checkouts(str(repo), "main", tmp_path / "git")
     found = run(read_suites(cks, run(cks.at(sha))))
-    assert set(found) == {"ok", "stringy"}
+    assert set(found) == {"ok", "stringy", "either"}
+    assert found["either"]["requires"] == ["serial-radio:2", "rtlsdr|b200"]
     # the runner's reading of a non-boolean is "yes, it transmits" (the cautious one); it is not a declaration
     assert found["stringy"]["transmits"] is True and found["stringy"]["transmits_declared"] is False
 
@@ -463,3 +467,15 @@ def test_only_an_admin_may_pick_a_commit(svc, lab_repo):
         assert c.post("/api/jobs", json={"suite": "t-quick"}).status_code == 202
     with svc.client() as c:
         assert c.post("/api/jobs", json={"suite": "t-quick", "commit": head}).status_code == 202
+
+
+def test_a_requirement_with_alternatives_is_met_by_either_device():
+    from types import SimpleNamespace as D
+
+    from oasa_lab.service.jobs import JobManager as Jobs
+    req = ["serial-radio:2", "rtlsdr|b200"]
+    radios = [D(kind="serial-radio"), D(kind="serial-radio")]
+    assert Jobs.missing_requirements(req, radios + [D(kind="b200")]) == []
+    assert Jobs.missing_requirements(req, radios + [D(kind="rtlsdr")]) == []
+    assert Jobs.missing_requirements(req, radios + [D(kind="e310")]) == ["rtlsdr|b200"]
+    assert Jobs.missing_requirements(req, [D(kind="b200")]) == ["serial-radio:2"]

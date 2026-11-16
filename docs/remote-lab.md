@@ -228,7 +228,7 @@ Roles live in `oasa_lab/service/config.py` (`PERMISSIONS`). After editing users 
 
 **Devices** come from a pluggable inventory: `usb` (reads `/sys/bus/usb/devices`, and one TCP connect to the Pluto+'s iiod port to see that it answers; it never opens a radio) or `simulated` (tests and demos). A **profile** names devices that must be present; a suite may also list `requires = ["pluto"]` in its `suite.toml`. Missing devices stop the job before it starts.
 
-**Requirements.** `requires` in `suite.toml` is the hardware suites' form: a device kind (`pluto`, `rtlsdr`, `serial-radio`, `hub`), or `kind:N` for at least N (`serial-radio:2`). The inventory's device `kind` must use those names. A suite whose hardware is missing is refused before it starts.
+**Requirements.** `requires` in `suite.toml` is the hardware suites' form: a device kind (`pluto`, `rtlsdr`, `serial-radio`, `hub`), or `kind:N` for at least N (`serial-radio:2`), or alternatives joined by `|` (`rtlsdr|b200`: either one). The inventory's device `kind` must use those names. A suite whose hardware is missing is refused before it starts.
 
 **Suites that transmit** declare `transmits = true` (and usually `wiring = "NAME"`) in `suite.toml`; the service reads them with the same parser as `oasa-lab run`. Two locks, both yours:
 

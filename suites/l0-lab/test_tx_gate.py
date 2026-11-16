@@ -90,3 +90,41 @@ def test_the_suite_list_says_whether_transmits_was_declared(tmp_path):
     assert suite(tmp_path, transmits="false").transmits_declared is True
     assert suite(tmp_path).transmits_declared is False
     assert suite(tmp_path, transmits='"yes"').transmits_declared is False  # not a real boolean
+
+
+def _usrp_recorder_bench(tmp_path, receiver_transmits=None):
+    import tomllib
+    from pathlib import Path
+    data = tomllib.loads((Path(__file__).resolve().parents[2] / "tests/sim/lora-usrp-recorder.toml").read_text())
+    if receiver_transmits is not None:
+        for p in data["wiring"]["lora"]["paths"]:
+            if p["to"].startswith("b2000"):
+                p["receiver_transmits"] = receiver_transmits
+    inv = Inventory.from_dict(data, "test", force_sim=True)
+    s = suite(tmp_path, transmits="true", requires='["serial-radio:2", "rtlsdr|b200"]', wiring='"lora"')
+    return Hardware(ctx_for(s), inv, "t")
+
+
+def test_a_usrp_recorder_is_held_to_60_db(tmp_path):
+    hw = _usrp_recorder_bench(tmp_path)
+    rf = hw.use_wiring()
+    assert all(p["receiver_transmits"] for p in rf["paths"] if p["to"].startswith("b2000"))
+    hw.close()
+    hw = _usrp_recorder_bench(tmp_path, receiver_transmits=False)   # a lab.toml that claims 40 dB is enough
+    with pytest.raises(WiringRefused, match="can transmit"):
+        hw.use_wiring()
+    hw.close()
+
+
+def test_the_usrp_recorder_never_transmits_in_the_lora_suites(tmp_path, monkeypatch):
+    from oasa_lab.hwlink import LoraBench
+    hw = _usrp_recorder_bench(tmp_path)
+    lab = SimpleNamespace(air_capture=lambda *a: "cap")
+    bench = LoraBench(lab, hw)
+    assert bench.rec.id == "b2000"
+    with pytest.raises(TxRefused, match="only receives"):
+        bench.rec.tx_tone(915e6, 1e5, 10, 0.1, 1e6)
+    with pytest.raises(TxRefused, match="only receives"):
+        bench.rec.tx_file([0.1 + 0j] * 8, 915e6, 10, 1e6)
+    bench.a.link.send_packet(b"x")   # the modems still may
+    hw.close()

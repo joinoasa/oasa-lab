@@ -1,4 +1,4 @@
-"""Helpers for the LoRa hardware suites: the bench (two modems and an RTL-SDR on cables) and the
+"""Helpers for the LoRa hardware suites: the bench (two modems and a recorder, an RTL-SDR or a B200mini, on cables) and the
 encrypted link over it (oasa-link + `oasa-radio bridge --radio serial` on each side).
 
 Both run unchanged on the simulated bench and on the real one.
@@ -26,6 +26,14 @@ from .testing import Endpoint, free_udp_port, wait_for
 
 RTL_RATE = 250_000.0   # samples per second; LoRa at 125 kHz fits, and a minute of cu8 is 30 MB
 RTL_GAIN_DB = 20.0
+RECORDER_KINDS = ("rtlsdr", "b200")   # suite.toml: requires = ["rtlsdr|b200"]
+USRP_GAIN_DB = 30.0    # the modems reach the recorder at about -56 dBm (10 dBm, 66 dB): about -37 dBFS, 35 dB over the noise
+
+
+def usrp_rate(model: dict[str, Any]) -> float:
+    """Twice the LoRa bandwidth: 250 kS/s at 125 kHz, 1 MS/s at 500 kHz. cf32 is 8 bytes a sample, so at
+    250 kS/s a minute is 120 MB (the checker reads up to 256 MB)."""
+    return 2.0 * float(model.get("lora_bw_hz", 125_000))
 
 
 def find_radio_bin(lab=None) -> Path:
@@ -49,19 +57,37 @@ def frame_airtime(model: dict[str, Any], nbytes: int) -> float:
     return airtime_s(model, nbytes)
 
 
+def recorder_id(hw: Hardware, wiring: str) -> str:
+    """The recorder: the RTL-SDR or B200mini that the wiring leads to (the RTL-SDR, if it leads to both)."""
+    ends = {str(p["to"]).split(":")[0] for p in hw.inv.wiring[wiring].get("paths", [])}
+    for kind in RECORDER_KINDS:
+        for dev_id in hw.inv.ids_of(kind):
+            if dev_id in ends:
+                return dev_id
+    raise WiringRefused(f"wiring '{wiring}' has no path to a recorder ({' or '.join(RECORDER_KINDS)}); "
+                        "see the lora wiring in lab.example.toml")
+
+
+def _receive_only(dev_id: str) -> Any:
+    return lambda: f"{dev_id} is the recorder here: it only receives"
+
+
 class LoraBench:
-    """Two modems and an RTL-SDR, wired per the suite's wiring. Air captures are registered for both modems."""
+    """Two modems and a recorder (an RTL-SDR, or a B200mini that only receives), wired per the suite's wiring.
+    Air captures are registered for both modems."""
 
     def __init__(self, lab, hw: Hardware, capture_air: bool = True):
         try:
-            hw.use_wiring()
+            rf = hw.use_wiring()
             ids = hw.inv.ids_of("serial-radio")
             self.a, self.b = hw.open(ids[0]), hw.open(ids[1])
-            self.rtl = hw.first("rtlsdr")
+            self.rec = hw.open(recorder_id(hw, rf["wiring"]))
         except WiringRefused as exc:
             pytest.skip(str(exc))
         except Unavailable as exc:
             pytest.skip(str(exc))
+        if self.rec.kind != "rtlsdr":
+            self.rec.tx_gate = _receive_only(self.rec.id)   # a USRP recorder never transmits in these suites
         self.lab, self.hw = lab, hw
         self.model = lora_model(self.a)
         if lora_model(self.b) != self.model:
@@ -73,17 +99,21 @@ class LoraBench:
         self._recording = False
 
     def start_recording(self) -> None:
-        self.rtl.start_recording("lora", self.center_hz, RTL_RATE, RTL_GAIN_DB)
+        if self.rec.kind == "rtlsdr":
+            self.rec.start_recording("lora", self.center_hz, RTL_RATE, RTL_GAIN_DB)
+        else:   # tuned to the channel; UHD's automatic DC offset correction keeps the LO line small
+            self.rec.start_recording("lora", self.center_hz, usrp_rate(self.model), USRP_GAIN_DB)
         self._recording = True
 
     def finish_recording(self, name: str = "exchange", purpose: str = "lora-exchange") -> dict[str, Any]:
         """Stop the SDR and write the recording as SigMF, with a request to line its bursts up with the air captures."""
-        rec = self.rtl.stop_recording()
+        rec = self.rec.stop_recording()
         self._recording = False
+        what = "RTL-SDR" if self.rec.kind == "rtlsdr" else f"{self.rec.info()['model']} (receive only)"
         return self.lab.sigmf(
             name, rec.path, datatype=rec.datatype, sample_rate=rec.sample_rate, center_hz=rec.center_hz,
-            start_time=rec.start_time, device=self.rtl.id, purpose=purpose,
-            description=f"RTL-SDR on the cable tap while the modems exchanged packets ({purpose})",
+            start_time=rec.start_time, device=self.rec.id, purpose=purpose,
+            description=f"{what} on the cable tap while the modems exchanged packets ({purpose})",
             burst_check={"captures": list(self.caps), "model": self.model, "overhead_bytes": 0})
 
     def settle(self, quiet: float = 1.0) -> None:

@@ -240,7 +240,8 @@ class Checkouts:
         return dest
 
 _SUITES: dict[str, dict[str, dict]] = {}  # commit -> suites; a commit never changes
-REQ_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}(:[0-9]{1,2})?\Z")
+_REQ_ALT = r"[a-z][a-z0-9-]{0,31}(:[0-9]{1,2})?"
+REQ_RE = re.compile(rf"^{_REQ_ALT}(\|{_REQ_ALT}){{0,3}}\Z")   # kind, kind:N, or up to 4 alternatives a|b
 WIRING_RE = re.compile(r"^[A-Za-z0-9_.-]{0,64}\Z")
 
 

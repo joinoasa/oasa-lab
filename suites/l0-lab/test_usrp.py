@@ -72,6 +72,20 @@ def uhd(tmp_path, monkeypatch):
         a = sys.argv
         n = int(a[a.index("-n") + 1])
         mode = os.environ["FAKE_RX"]
+        if mode.startswith("stream"):   # a background recording: blocks (plus half a sample) until SIGINT
+            import signal, time
+            signal.signal(signal.SIGINT, lambda *x: sys.exit(0))
+            out = open(a[a.index("-o") + 1], "wb", buffering=0)
+            for i in range(20 if mode != "stream-ends" else 3):
+                out.write(bytes(8 * 1000))
+                if i == 2 and mode == "stream-overflow":
+                    print("O", flush=True)
+                time.sleep(0.01)
+            out.write(bytes(4))
+            if mode == "stream-ends":
+                sys.exit(1)
+            time.sleep(30)
+            sys.exit(0)
         if mode == "fail":
             print("Error: no device"); sys.exit(1)
         if mode == "short":
@@ -441,3 +455,65 @@ def test_simulated_pair_on_the_usrp_wiring_hears_the_tone_on_rx2_b_only():
     assert level_at_dbfs(b, f) - level_at_dbfs(a, f) > 30
     assert abs(level_at_dbfs(b, f) - tone_report(b)["tone_dbfs"]) < 0.5      # one DFT bin reads the tone's power
     assert cross(a, a)["coherence"] > 0.999                                  # one channel twice: what the suite catches
+
+
+# --- the LoRa suites' recorder (receive only, in the background) --------------------------------------
+def test_b200_records_in_the_background_until_stopped(uhd, monkeypatch):
+    monkeypatch.setenv("FAKE_RX", "stream")
+    with radio("b200") as dev:
+        dev.start_recording("lora", 915e6, 250e3, 30)
+        time.sleep(0.5)
+        rec = dev.stop_recording()
+        assert rec.datatype == "cf32_le" and rec.sample_rate == 250e3 and rec.center_hz == 915e6
+        assert rec.path.stat().st_size == 20 * 8000 and rec.seconds > 0   # the half sample at the stop is cut off
+        assert 0 < time.time() - rec.start_time < 5
+    log = uhd.read_text()
+    line = next(l for l in log.splitlines() if "rx_samples_c" in l)
+    for part in ("-f 915000000", "-r 250000", "-g 30", f"-n {int(250e3 * 600)}"):
+        assert part in line
+    assert "tx_waveforms" not in log and "tx_samples_from_file" not in log
+
+
+@pytest.mark.parametrize("mode,message", [("stream-overflow", "samples were lost"),
+                                          ("stream-ends", "ended before the recording was stopped")])
+def test_a_recording_that_lost_samples_or_stopped_early_is_an_error(uhd, monkeypatch, mode, message):
+    monkeypatch.setenv("FAKE_RX", mode)
+    with radio("b200") as dev:
+        dev.start_recording("lora", 915e6, 250e3, 30)
+        time.sleep(0.5)
+        with pytest.raises(DeviceError, match=message):
+            dev.stop_recording()
+
+
+def test_recording_limits_never_reach_the_tool(uhd, monkeypatch):
+    monkeypatch.setenv("FAKE_RX", "stream")
+    with radio("b200") as dev:
+        with pytest.raises(DeviceError, match="max_rx_rate"):
+            dev.start_recording("lora", 915e6, 20e6, 30)
+        with pytest.raises(DeviceError, match="max_rx_gain"):
+            dev.start_recording("lora", 915e6, 250e3, 70)
+        with pytest.raises(DeviceError, match="not recording"):
+            dev.stop_recording()
+    assert "rx_samples_c" not in uhd.read_text()
+
+
+def test_simulated_recording_shows_the_lora_bursts_through_the_wiring():
+    from oasa_lab.checker import radio as radio_check
+    inv = Inventory.load(Path(__file__).resolve().parents[2] / "tests/sim/lora-usrp-recorder.toml", sim=True)
+    world = SimWorld(3, inv.wiring)
+    a, b, rec = (make_device(i, inv, None, world).open() for i in ("heltec_a", "heltec_b", "b2000"))
+    try:
+        rec.start_recording("lora", 915e6, 250e3, 30)
+        time.sleep(0.1)
+        for _ in range(3):
+            a.link.send_packet(bytes(50))
+            time.sleep(0.25)
+        r = rec.stop_recording()
+        levels, win = radio_check.window_levels(r.path, r.datatype, r.sample_rate)
+        bursts, _ = radio_check.detect_bursts(levels, win)
+        assert len(bursts) == 3 and min(x["snr_db"] for x in bursts) > 20
+        assert len(b.link.rx_packets()) == 3
+    finally:
+        for d in (a, b, rec):
+            d.close()
+        world.close()

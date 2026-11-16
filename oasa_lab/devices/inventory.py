@@ -14,6 +14,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from ..suites import requirement_met
+
 KINDS = ("pluto", "rtlsdr", "serial-radio", "sik", "korad", "b200", "e310", "power_sensor", "tinysa", "hub")
 BACKENDS = ("sim", "hardware")
 RF_SETUPS = ("cabled", "shielded", "antenna")   # "antenna": radios on antennas, for suites that radiate
@@ -137,14 +139,14 @@ class Inventory:
     def ids_of(self, kind: str) -> list[str]:
         return [i for i, d in self.devices.items() if d["kind"] == kind]
 
-    def has(self, requirement: str) -> bool:
-        """`pluto`, `rtlsdr`, `hub`, or `serial-radio:2` (at least 2)."""
-        kind, _, n = requirement.partition(":")
-        need = int(n) if n else 1
-        have = len(self.ids_of(kind))
+    def count(self, kind: str) -> int:
         if kind == "hub":
-            have = 1 if self.hub else 0
-        return have >= need
+            return 1 if self.hub else 0
+        return len(self.ids_of(kind))
+
+    def has(self, requirement: str) -> bool:
+        """`pluto`, `rtlsdr`, `hub`, `serial-radio:2` (at least 2) or `rtlsdr|b200` (either)."""
+        return requirement_met(requirement, self.count)
 
     def missing(self, requires: list[str]) -> list[str]:
         return [r for r in requires if not self.has(r)]

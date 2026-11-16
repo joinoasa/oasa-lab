@@ -499,7 +499,8 @@ def test_recording_limits_never_reach_the_tool(uhd, monkeypatch):
 
 def test_simulated_recording_shows_the_lora_bursts_through_the_wiring():
     from oasa_lab.checker import radio as radio_check
-    inv = Inventory.load(Path(__file__).resolve().parents[2] / "tests/sim/lora-usrp-recorder.toml", sim=True)
+    from oasa_lab.devices.inventory import SIM_BENCHES
+    inv = Inventory.from_dict(SIM_BENCHES["lora-usrp-recorder"], "test", force_sim=True)
     world = SimWorld(3, inv.wiring)
     a, b, rec = (make_device(i, inv, None, world).open() for i in ("heltec_a", "heltec_b", "b2000"))
     try:

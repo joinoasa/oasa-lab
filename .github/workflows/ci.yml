@@ -48,7 +48,7 @@ jobs:
         if: matrix.suite == 'l2-rf-control'
         run: |
           set -euo pipefail
-          OASA_LAB_INVENTORY=tests/sim/lora-usrp-recorder.toml oasa-lab run l2-rf-control --out runs-usrp
+          OASA_LAB_SIM_BENCH=lora-usrp-recorder oasa-lab run l2-rf-control --out runs-usrp
       - name: Show the summary
         if: always()
         run: cat runs/*/summary.md >> "$GITHUB_STEP_SUMMARY" || true
@@ -179,7 +179,7 @@ jobs:
       - name: Run l2-lora-link again with a B200mini as the recorder (no RTL-SDR)
         run: |
           set -euo pipefail
-          OASA_LAB_SIM=1 OASA_LAB_INVENTORY=tests/sim/lora-usrp-recorder.toml \
+          OASA_LAB_SIM=1 OASA_LAB_SIM_BENCH=lora-usrp-recorder \
           OASA_SEC_BIN_DIR="$GITHUB_WORKSPACE/oasa-sec/target/debug" \
           OASA_RADIO_BIN_DIR="$GITHUB_WORKSPACE/oasa-radio/target/debug" \
             oasa-lab run l2-lora-link --out runs | tee -a "$RUNNER_TEMP/run.txt"

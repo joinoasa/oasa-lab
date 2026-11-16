@@ -34,8 +34,7 @@ def good_control(tmp_path_factory):
 @pytest.fixture(scope="module")
 def good_usrp_control(tmp_path_factory):
     """l2-rf-control with a B200mini as the recorder (no RTL-SDR)."""
-    inv = os.path.join(os.path.dirname(suites_dir()), "tests", "sim", "lora-usrp-recorder.toml")
-    return make_bundle(tmp_path_factory, "l2-rf-control", OASA_LAB_INVENTORY=inv)
+    return make_bundle(tmp_path_factory, "l2-rf-control", OASA_LAB_SIM_BENCH="lora-usrp-recorder")
 
 
 @pytest.fixture(scope="module")

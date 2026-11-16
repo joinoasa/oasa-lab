@@ -68,7 +68,7 @@ env = { OASA_LAB_SIM = "1" }
 [[check]]
 name = "l2-rf-control-usrp-recorder"
 run = ".venv/bin/oasa-lab run l2-rf-control"
-env = { OASA_LAB_SIM = "1", OASA_LAB_INVENTORY = "tests/sim/lora-usrp-recorder.toml" }
+env = { OASA_LAB_SIM = "1", OASA_LAB_SIM_BENCH = "lora-usrp-recorder" }
 
 [[check]]
 name = "l2-rx-noise"
@@ -129,7 +129,7 @@ needs = ["both built with cargo build --locked --bins"]
 [[check]]
 name = "l2-lora-link-usrp-recorder"
 run = 'OASA_SEC_BIN_DIR="${OASA_SEC_BIN_DIR:-$OASA_ROOT_OASA_SEC/target/debug}" OASA_RADIO_BIN_DIR="${OASA_RADIO_BIN_DIR:-$OASA_ROOT_OASA_RADIO/target/debug}" .venv/bin/oasa-lab run l2-lora-link'
-env = { OASA_LAB_SIM = "1", OASA_LAB_INVENTORY = "tests/sim/lora-usrp-recorder.toml" }
+env = { OASA_LAB_SIM = "1", OASA_LAB_SIM_BENCH = "lora-usrp-recorder" }
 required = false
 repos = ["oasa-sec", "oasa-radio"]
 needs = ["both built with cargo build --locked --bins"]

@@ -93,9 +93,9 @@ def test_the_suite_list_says_whether_transmits_was_declared(tmp_path):
 
 
 def _usrp_recorder_bench(tmp_path, receiver_transmits=None):
-    import tomllib
-    from pathlib import Path
-    data = tomllib.loads((Path(__file__).resolve().parents[2] / "tests/sim/lora-usrp-recorder.toml").read_text())
+    import copy
+    from oasa_lab.devices.inventory import SIM_BENCHES
+    data = copy.deepcopy(SIM_BENCHES["lora-usrp-recorder"])
     if receiver_transmits is not None:
         for p in data["wiring"]["lora"]["paths"]:
             if p["to"].startswith("b2000"):

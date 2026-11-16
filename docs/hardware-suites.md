@@ -29,7 +29,7 @@ OASA_LAB_SIM=1 oasa-lab devices
 OASA_LAB_SIM=1 oasa-lab run l2-pluto-acceptance
 OASA_LAB_SIM=1 oasa-lab run l2-rf-control
 OASA_LAB_SIM=1 OASA_SEC_BIN_DIR=... OASA_RADIO_BIN_DIR=... oasa-lab run l2-lora-link
-OASA_LAB_SIM=1 OASA_LAB_INVENTORY=tests/sim/lora-usrp-recorder.toml oasa-lab run l2-rf-control   # B200mini recorder
+OASA_LAB_SIM=1 OASA_LAB_SIM_BENCH=lora-usrp-recorder oasa-lab run l2-rf-control   # B200mini recorder
 ```
 
 The simulation is real-time: a LoRa packet takes its real airtime on a shared half-duplex medium, the Pluto and the RTL-SDR agree on tones through the cable losses, and the RTL-SDR "records" noise with a burst wherever a packet was on the air. So the checks have something real to check. CI runs these suites this way.

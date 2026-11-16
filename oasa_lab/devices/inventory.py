@@ -2,7 +2,7 @@
 
 Where it is read from: `$OASA_LAB_INVENTORY`, else `./lab.toml`. The real file is not committed;
 `lab.example.toml` is. `OASA_LAB_SIM=1` runs every device on its simulated backend, with a built-in
-inventory when there is no file.
+inventory when there is no file (`OASA_LAB_SIM_BENCH=NAME` picks another built-in bench: SIM_BENCHES).
 """
 
 from __future__ import annotations
@@ -92,6 +92,24 @@ DEFAULT_SIM: dict[str, Any] = {
         },
     },
 }
+
+
+def _lora_usrp_recorder() -> dict[str, Any]:
+    """The built-in bench with a B200mini as the LoRa suites' recorder and no RTL-SDR: the B200mini variant of
+    the lora wiring in lab.example.toml (its RX2 on the RTL-SDR's splitter leg, 30 + 6 + 30 dB)."""
+    keep = ("heltec_a", "heltec_b", "b2000")
+    lora = DEFAULT_SIM["wiring"]["lora"]
+    paths = [p for p in lora["paths"] if p["to"] != "rtl0"]
+    paths += [{"name": f"{x}-to-b200", "from": f"heltec_{x}", "to": "b2000:rx2", "loss_db": 66.0} for x in ("a", "b")]
+    return {"lab": {"name": "simulated bench, B200mini recorder", "backend": "sim"}, "hub": DEFAULT_SIM["hub"],
+            "devices": {k: v for k, v in DEFAULT_SIM["devices"].items() if k in keep},
+            "wiring": {"lora": {"rf_setup": "cabled", "paths": paths,
+                                "description": "Heltec A and B through 30 dB each and a 4-way splitter; B200mini RX2 "
+                                               "on a third leg through 30 dB (receive only)"}}}
+
+
+# Other built-in simulated benches: OASA_LAB_SIM=1 OASA_LAB_SIM_BENCH=NAME (with no lab.toml).
+SIM_BENCHES: dict[str, dict[str, Any]] = {"default": DEFAULT_SIM, "lora-usrp-recorder": _lora_usrp_recorder()}
 
 
 class InventoryError(Exception):
@@ -199,5 +217,9 @@ class Inventory:
             except tomllib.TOMLDecodeError as exc:
                 raise InventoryError(f"{file}: {exc}") from None
         if sim:
-            return cls.from_dict(DEFAULT_SIM, "built-in simulated bench", True)
+            bench = os.environ.get("OASA_LAB_SIM_BENCH") or "default"
+            if bench not in SIM_BENCHES:
+                raise InventoryError(f"OASA_LAB_SIM_BENCH={bench!r} is not one of {sorted(SIM_BENCHES)}")
+            return cls.from_dict(SIM_BENCHES[bench], "built-in simulated bench"
+                                 + ("" if bench == "default" else f" {bench}"), True)
         return cls("none", "hardware", None, {}, {}, "no lab.toml")

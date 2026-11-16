@@ -16,6 +16,7 @@ docs = [
   "docs/calibration.md",
   "docs/software-used.md",
   "docs/profiles.md",
+  "docs/voice-lora-sim.md",
 ]
 
 [review]
@@ -49,6 +50,10 @@ run = ".venv/bin/oasa-lab run l1-plaintext-control"
 [[check]]
 name = "l1-profiles"
 run = ".venv/bin/oasa-lab run l1-profiles"
+
+[[check]]
+name = "l1-voice-lora"
+run = ".venv/bin/oasa-lab run l1-voice-lora"
 
 [[check]]
 name = "l2-pluto-acceptance"
@@ -177,6 +182,9 @@ suite = "l1-plaintext-control"
 
 [[lab]]
 suite = "l1-profiles"
+
+[[lab]]
+suite = "l1-voice-lora"
 
 [[lab]]
 suite = "l1-oasa-link"

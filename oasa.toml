@@ -17,6 +17,7 @@ docs = [
   "docs/software-used.md",
   "docs/profiles.md",
   "docs/voice-lora-sim.md",
+  "docs/crowd-sim.md",
 ]
 
 [review]
@@ -54,6 +55,10 @@ run = ".venv/bin/oasa-lab run l1-profiles"
 [[check]]
 name = "l1-voice-lora"
 run = ".venv/bin/oasa-lab run l1-voice-lora"
+
+[[check]]
+name = "l1-crowd"
+run = ".venv/bin/oasa-lab run l1-crowd"
 
 [[check]]
 name = "l2-pluto-acceptance"

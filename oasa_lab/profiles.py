@@ -24,10 +24,21 @@ class Profile:
     settings: dict[str, Any] = field(default_factory=dict)
 
 
-def _lora(sf: int) -> dict[str, Any]:
+def _lora(sf: int, bw_khz: int = 125) -> dict[str, Any]:
     # CR 4/5, 8-symbol preamble, explicit header, CRC on, low data rate optimize when needed.
-    return dict(airtime="lora", lora_sf=sf, lora_bw_hz=125_000, lora_cr=1, lora_preamble=8,
+    return dict(airtime="lora", lora_sf=sf, lora_bw_hz=bw_khz * 1000, lora_cr=1, lora_preamble=8,
                 lora_explicit_header=True, lora_crc=True, lora_ldro=-1, mtu=255, half_duplex=True)
+
+
+# SF7 to SF11 at 125, 250 and 500 kHz (voice sweep, T-MSG1), plus SF12 at 125 kHz.
+LORA_SFS = (7, 8, 9, 10, 11)
+LORA_BWS_KHZ = (125, 250, 500)
+
+
+def _lora_profile(sf: int, bw_khz: int) -> "Profile":
+    s = _lora(sf, bw_khz)
+    ldro = ", low data rate optimize" if (1 << sf) / (bw_khz * 1000) > 0.016 else ""
+    return Profile(f"lora-sf{sf}-bw{bw_khz}", f"LoRa SF{sf}, {bw_khz} kHz, CR 4/5{ldro}. Half-duplex.", s)
 
 
 _SIK = dict(airtime="bitrate", air_kbps=64.0, fixed_us=1625.0, serial_bps=57_600, half_duplex=True)
@@ -35,8 +46,7 @@ _MLRS_UP, _MLRS_DOWN = 64, 82  # serial payload bytes per frame, A to B and B to
 
 _LIST = [
     Profile("ideal", "No impairments and no airtime. For reference.", {}),
-    Profile("lora-sf7-bw125", "LoRa SF7, 125 kHz, CR 4/5. Half-duplex.", _lora(7)),
-    Profile("lora-sf9-bw125", "LoRa SF9, 125 kHz, CR 4/5. Half-duplex.", _lora(9)),
+    *(_lora_profile(sf, bw) for bw in LORA_BWS_KHZ for sf in LORA_SFS),
     Profile("lora-sf12-bw125", "LoRa SF12, 125 kHz, CR 4/5, low data rate optimize. Half-duplex.", _lora(12)),
     Profile("sik-64k", "SiK telemetry radio, 64 kbps air rate, 57600 baud serial, ECC off. Half-duplex.",
             {**_SIK, "overhead_bytes": 2, "fec_ratio": 1.0, "mtu": 250}),

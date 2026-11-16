@@ -25,7 +25,20 @@ Settings you pass override the profile's. The manifest records the profile name 
 |---|---|---|---|---|
 | `ideal` | unlimited | none | 0 | full |
 | `lora-sf7-bw125` | 5.5 kbps | 255 | 118.0 ms | half |
+| `lora-sf8-bw125` | 3.1 kbps | 255 | 215.6 ms | half |
 | `lora-sf9-bw125` | 1.8 kbps | 255 | 390.1 ms | half |
+| `lora-sf10-bw125` | 1.0 kbps | 255 | 698.4 ms | half |
+| `lora-sf11-bw125` | 0.5 kbps | 255 | 1.56 s | half |
+| `lora-sf7-bw250` | 10.9 kbps | 255 | 59.0 ms | half |
+| `lora-sf8-bw250` | 6.2 kbps | 255 | 107.8 ms | half |
+| `lora-sf9-bw250` | 3.5 kbps | 255 | 195.1 ms | half |
+| `lora-sf10-bw250` | 2.0 kbps | 255 | 349.2 ms | half |
+| `lora-sf11-bw250` | 1.1 kbps | 255 | 657.4 ms | half |
+| `lora-sf7-bw500` | 21.9 kbps | 255 | 29.5 ms | half |
+| `lora-sf8-bw500` | 12.5 kbps | 255 | 53.9 ms | half |
+| `lora-sf9-bw500` | 7.0 kbps | 255 | 97.5 ms | half |
+| `lora-sf10-bw500` | 3.9 kbps | 255 | 174.6 ms | half |
+| `lora-sf11-bw500` | 2.1 kbps | 255 | 328.7 ms | half |
 | `lora-sf12-bw125` | 0.3 kbps | 255 | 2.79 s | half |
 | `sik-64k` | 64 kbps | 250 | 9.9 ms | half |
 | `sik-64k-ecc` | 64 kbps | 118 | 19.1 ms | half |
@@ -56,17 +69,17 @@ Three models, set by `airtime`:
 
 ## Numbers and sources
 
-### LoRa (`lora-sf7-bw125`, `lora-sf9-bw125`, `lora-sf12-bw125`)
+### LoRa (`lora-sfN-bwB`: SF7 to SF11 at 125, 250 and 500 kHz, and `lora-sf12-bw125`)
 
 | Number | Value | Source | Status |
 |---|---|---|---|
 | Time-on-air formula | integer steps of the SX126x driver: `ceil((8*PL + 16*CRC - 4*SF + 8 + 20*explicit) / (4*(SF - 2*LDRO))) * (CR + 4) + preamble + 12`, then `(4*symbols + 1) * 2^(SF-2) / BW` | [Semtech SX126x driver, `sx126x_get_lora_time_on_air_numerator`](https://github.com/Lora-net/sx126x_driver/blob/master/src/sx126x.c). The datasheet formula (SX1261/2 datasheet, time on air, page 41 per [Semtech's forum](https://forum.lora-developers.semtech.com/t/sx126x-time-on-air-calculation/127)) | Confirmed from the driver code. The datasheet PDF itself was not re-read. A test compares our code with a line-by-line port of the driver over more than 10,000 settings |
 | Cross-check | 13 bytes at SF12, 125 kHz: 1.155 s here, "1.16 seconds" quoted | [TTN forum](https://www.thethingsnetwork.org/forum/t/spreadsheet-for-lora-airtime-calculation/1190) | Agrees |
-| Bandwidth, SF | 125 kHz; 7, 9, 12 | The brief | Choice |
+| Bandwidth, SF | 125 kHz with SF7, SF9, SF12 (first brief); SF7 to SF11 at 125, 250 and 500 kHz added for the voice sweep ([T-MSG1, issue 64](https://github.com/joinoasa/oasa-lab/issues/64)) | The briefs. The SX1262 supports all of them: `sx126x_lora_bw_e` has `SX126X_LORA_BW_125`, `_250`, `_500` and `sx126x_lora_sf_e` SF5 to SF12 in [`sx126x.h`](https://github.com/Lora-net/sx126x_driver/blob/master/src/sx126x.h) (checked November 2026) | Choice; supported values confirmed |
 | Coding rate | 4/5 | The brief; the usual LoRaWAN setting | *est.* Not looked up |
 | Preamble | 8 symbols | [RadioLib `SX1262::begin`](https://github.com/jgromes/RadioLib/blob/master/src/modules/SX126x/SX1262.h) default | Confirmed |
 | Header, CRC | explicit header, CRC on | The brief | Choice |
-| Low data rate optimize | on when a symbol is over 16 ms: SF11 and SF12 at 125 kHz (SF12: 32.8 ms) | [Semtech SX1262 application note, "Recommendations for Best Performance"](https://cdn.sparkfun.com/assets/f/f/b/4/2/SX1262_AN-Recommendations_for_Best_Performance.pdf) ("when the symbol time exceeds 16.38 ms"); [TTN forum](https://www.thethingsnetwork.org/forum/t/a-point-to-note-lora-low-data-rate-optimisation-flag/12007) | Confirmed. The channel uses "over 16 ms" |
+| Low data rate optimize | on when a symbol is over 16 ms: SF11 and SF12 at 125 kHz (SF11: 16.4 ms, SF12: 32.8 ms); off for every 250 and 500 kHz profile (longest: SF11 at 250 kHz, 8.2 ms) | [Semtech SX1262 application note, "Recommendations for Best Performance"](https://cdn.sparkfun.com/assets/f/f/b/4/2/SX1262_AN-Recommendations_for_Best_Performance.pdf) ("when the symbol time exceeds 16.38 ms"); [TTN forum](https://www.thethingsnetwork.org/forum/t/a-point-to-note-lora-low-data-rate-optimisation-flag/12007) | Confirmed. The channel uses "over 16 ms" |
 | Max payload | 255 | Payload length is an 8-bit field (`pld_len_in_bytes` is `uint8_t` in [`sx126x.h`](https://github.com/Lora-net/sx126x_driver/blob/master/src/sx126x.h)) | Confirmed |
 | Half-duplex | one transmitter or receiver at a time | How LoRa transceivers work | Confirmed in principle |
 | Bit rate in the table | `SF * BW / 2^SF * 4 / (4 + CR)` | Textbook definition of the LoRa raw rate | *est.* Derived, not looked up |

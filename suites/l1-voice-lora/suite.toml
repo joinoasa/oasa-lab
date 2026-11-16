@@ -1,0 +1,23 @@
+description = "Push-to-talk voice (Codec 2 at 700, 1200 and 2400 bit/s plus the OASA link overhead) over LoRa SF7 to SF11 at 125, 250 and 500 kHz, direct and through one relay on the same half-duplex channel: occupancy, delivery and delay per setting (simulated, not measured)"
+expectations = [
+  "test_overloaded_setting_is_reported_failing",
+  "test_same_seed_same_results",
+]
+
+[captures]
+encrypted = false
+
+# Sanity bounds only. A setting that cannot carry the voice is reported in its voice_case line
+# (carries = false); it is a finding, not a fault in the run.
+[limits.voice_occupancy]
+min = 0.0
+
+[limits.voice_delivery]
+min = 0.0
+max = 1.0
+
+[limits.voice_delay_mean_ms]
+min = 0.0
+
+[limits.voice_delay_p95_ms]
+min = 0.0

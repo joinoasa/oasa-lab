@@ -1,0 +1,29 @@
+description = "Crowd: 10 to 300 radios share one half-duplex long-range LoRa channel for text and position, with and without listen-before-send, with 0 to 4 voice calls; 1 to 4 voice conversations share one fast setting. Delivery, delay and the largest crowd that keeps text delivery above 95 % (simulated, not measured)"
+expectations = [
+  "test_overloaded_case_is_reported_failing",
+  "test_same_seed_same_results",
+  "test_collision_destroys_both",
+]
+
+[captures]
+encrypted = false
+
+# Sanity bounds only. A case under the 95 % mark is reported in its crowd_case line
+# (meets_mark = false); it is a finding, not a fault in the run.
+[limits.crowd_text_delivery]
+min = 0.0
+max = 1.0
+
+[limits.crowd_pos_delivery]
+min = 0.0
+max = 1.0
+
+[limits.crowd_text_delay_p95_s]
+min = 0.0
+
+[limits.crowd_voice_delivery]
+min = 0.0
+max = 1.0
+
+[limits.crowd_voice_delay_p95_ms]
+min = 0.0

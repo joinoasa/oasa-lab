@@ -202,7 +202,8 @@ channel = 1                   # 0 is RX2-A, 1 is RX2-B
 # --- Cabling ------------------------------------------------------------------------------------------
 # A suite that transmits names one of these in suite.toml. `loss_db` is the nominal loss of everything
 # between the two ends (fixed attenuators, splitter legs, cables): add it up from the parts. The
-# checker requires 60 dB or more wherever the far end can transmit (40 dB for the RTL-SDR).
+# checker requires 60 dB or more wherever the far end can transmit (40 dB for the RTL-SDR; a USRP that only
+# receives still counts as able to transmit).
 # A transmitting suite on real hardware runs only with: oasa-lab run SUITE --confirm-wiring NAME
 
 [wiring.pluto]
@@ -272,6 +273,19 @@ from = "heltec_b"
 to = "rtl0"
 loss_db = 66.0
 receiver_transmits = false
+# No RTL-SDR? The B200mini records instead, receive only, on the same splitter leg (its RX2 port). Replace the
+# two RTL-SDR paths above with these. A B200mini can transmit, so it needs 60 dB like any radio (no
+# receiver_transmits = false): 30 + 6 + 30 = 66 dB is enough. The suites never let it transmit.
+# [[wiring.lora.paths]]
+# name = "a-to-b200"
+# from = "heltec_a"
+# to = "b2000:rx2"
+# loss_db = 66.0                # 30 + 6 + 30
+# [[wiring.lora.paths]]
+# name = "b-to-b200"
+# from = "heltec_b"
+# to = "b2000:rx2"
+# loss_db = 66.0
 
 [wiring.sik]
 rf_setup = "cabled"

@@ -17,6 +17,7 @@ Hardware suites (L2) add:
     transmits = true                    # the suite puts RF on a cable; the checker then needs wiring with 60 dB or more
                                         # (a suite with `requires` must say transmits = true or false; on real hardware it is refused otherwise)
     requires  = ["pluto", "rtlsdr", "serial-radio:2"]   # devices from lab.toml; missing ones skip the suite
+                                        # "kind:N" = at least N; "rtlsdr|b200" = either one (requirement_met)
     wiring    = "pluto"                 # the [wiring.NAME] of lab.toml the cables must match
     [limits.METRIC]                     # pass/fail limits of measurements; the checker re-applies them
     min = 0.6
@@ -34,6 +35,20 @@ import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
+
+
+def requirement_met(req: str, count: Callable[[str], int]) -> bool:
+    """One `requires` entry against what is there. `count(kind)` says how many devices of a kind there are.
+
+    An entry is `kind` (one), `kind:N` (at least N), or alternatives joined by `|` (any one will do, for
+    example `rtlsdr|b200`: a recorder). The runner and the job service both read entries here; the checker,
+    which imports the standard library only, has its own copy (checker/core.py)."""
+    for alt in req.split("|"):
+        kind, _, n = alt.partition(":")
+        if count(kind) >= (int(n) if n.isdigit() else 1):
+            return True
+    return False
 
 
 def repo_root() -> Path:

@@ -1,7 +1,7 @@
-description = "The encrypted oasa-sec link over two LoRa modems on coax, each through oasa-radio bridge: delivery both ways, handshake and goodput against the lora-sf7-bw125 model, ciphertext on the air, and an RTL-SDR recording whose bursts match the airtime (needs 2 modems, an RTL-SDR, OASA_SEC_BIN_DIR and OASA_RADIO_BIN_DIR)"
+description = "The encrypted oasa-sec link over two LoRa modems on coax, each through oasa-radio bridge: delivery both ways, handshake and goodput against the lora-sf7-bw125 model, ciphertext on the air, and a recording (RTL-SDR, or a B200mini that only receives) whose bursts match the airtime (needs 2 modems, a recorder, OASA_SEC_BIN_DIR and OASA_RADIO_BIN_DIR)"
 expectations = ["test_encrypted_link_over_lora"]
 transmits = true
-requires = ["serial-radio:2", "rtlsdr"]
+requires = ["serial-radio:2", "rtlsdr|b200"]   # the recorder: an RTL-SDR, or a B200mini (receive only)
 wiring = "lora"
 
 [captures]

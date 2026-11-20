@@ -10,7 +10,8 @@ What it shows:
   - the handshake time and the goodput match the lora-sf7-bw125 airtime model (limits in suite.toml);
   - the frames each modem heard on the air (what anyone with a receiver gets) hold no marker, no
     MAVLink and look random: the checker scans them, as air captures;
-  - the RTL-SDR recorded the exchange, and the checker lines its bursts up with the airtime.
+  - the recorder (an RTL-SDR, or a B200mini that only receives) recorded the exchange, and the checker
+    lines its bursts up with the airtime.
 """
 
 import time

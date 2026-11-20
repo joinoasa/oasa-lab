@@ -8,6 +8,8 @@ single sine tone, and `tx_samples_from_file` to send a block of IQ samples on re
 the suite made, never anything from a caller).
 
 A capture with an overflow, a dropped packet or the wrong sample count is an error, not a short recording.
+`start_recording`/`stop_recording` run the same receive tool in the background (the LoRa suites' recorder when
+the bench has no RTL-SDR); a recording that lost samples, or whose tool ended before it was stopped, is an error too.
 
 Transmitting goes through `require_tx` first (the suite must declare `transmits = true` and the
 operator must have confirmed the wiring). The gain is capped by `max_tx_gain` (default 40 dB, the level
@@ -43,12 +45,15 @@ from typing import Any
 
 from ..iq import DATATYPES, IQ
 from .base import Device, DeviceError, Unavailable
+from .rtlsdr import Recording
 
 EXAMPLE_DIRS = ("/usr/libexec/uhd/examples", "/usr/lib/uhd/examples")
 PROBE_TIMEOUT_S = 60.0
 START_TIMEOUT_S = 30.0  # first start of a B200 loads its firmware and FPGA image
 SIM_NOISE_DBFS_AT_0DB = -107.0  # simulated receive chain: noise in dBFS = this + gain
 SIM_RX_K_DB = 0.0               # simulated receive chain: dBFS = dBm + gain + this
+SIM_LORA_DBM = 10.0             # simulated LoRa modems send at 10 dBm (lab.example.toml)
+SIM_BLOCK = 4096                # simulated recordings tile blocks of this many noise samples
 TX_DBM_AT_0DB = -75.0           # full-scale tone at TX gain 0, 915 MHz (est.; with 60 dB of cable, TX 40 and
                                 # amplitude 0.3 a real B200mini gave -66 dBFS on an E310 at RX gain 40)
 DEFAULT_MAX_TX_GAIN = 40.0      # dB. The level first tested on a cabled bench (2 x 60 dB). lab.toml may raise it
@@ -60,6 +65,8 @@ TX_START_TIMEOUT_S = 45.0       # a B200 loads its firmware and FPGA image on fi
 CLAIM_RETRIES = 2
 CLAIM_WAIT_S = 15.0             # the E310 drops a stale claim after a few seconds
 CLAIM_CLASH = "claim this device again"
+DEFAULT_MAX_REC_SECONDS = 600.0  # a background recording stops by itself after this
+LOST_SAMPLES = re.compile(r"overflow|^[ODS]+\s*$|\bLate\b|ERROR_CODE", re.IGNORECASE | re.MULTILINE)
 
 
 class Usrp(Device):
@@ -83,6 +90,9 @@ class Usrp(Device):
         self._tmp: Path | None = None
         self._tx_proc: subprocess.Popen | None = None
         self._tx_log: deque[str] = deque(maxlen=200)
+        self._rec: dict[str, Any] | None = None
+        self._rec_proc: subprocess.Popen | None = None
+        self._rec_log: deque[str] = deque(maxlen=200)
 
     # --- to override -------------------------------------------------------------------------
     def device_args(self) -> str:
@@ -111,6 +121,10 @@ class Usrp(Device):
     @property
     def max_tx_seconds(self) -> float:
         return float(self.cfg.get("max_tx_seconds", DEFAULT_MAX_TX_SECONDS))
+
+    @property
+    def max_rec_seconds(self) -> float:
+        return float(self.cfg.get("max_rec_seconds", DEFAULT_MAX_REC_SECONDS))
 
     @property
     def tx_port(self) -> str:
@@ -181,6 +195,7 @@ class Usrp(Device):
     def _close(self) -> None:
         try:
             self.tx_off()
+            self._stop_rec_proc()
         finally:
             if self._tmp is not None:
                 shutil.rmtree(self._tmp, ignore_errors=True)
@@ -360,7 +375,7 @@ class Usrp(Device):
         out = self._tmp / "rx.iq"
         text = self._run(self.rx_command(out, center_hz, fs, n, gain), START_TIMEOUT_S + seconds * 2)
         ended = time.time()
-        if re.search(r"overflow|^[ODS]+\s*$|\bLate\b|ERROR_CODE", text, re.IGNORECASE | re.MULTILINE):
+        if LOST_SAMPLES.search(text):
             raise DeviceError(f"{self.id}: samples were lost at {fs:g} S/s: {text.strip()[-200:]}")
         per_sample = DATATYPES[self.datatype]
         if not out.is_file() or out.stat().st_size != per_sample * n:
@@ -369,6 +384,113 @@ class Usrp(Device):
         data = out.read_bytes()
         out.unlink()
         return data, ended
+
+    # --- a recording in the background (receive only) --------------------------------------------
+    def start_recording(self, name: str, center_hz: float, sample_rate: float, gain_db: float = 30.0) -> None:
+        """Record to a file until stop_recording() (or max_rec_seconds). Receive only: nothing here transmits.
+        The same receive tool as capture(), asked for max_rec_seconds of samples and stopped early."""
+        if self._rec is not None:
+            raise DeviceError(f"{self.id}: already recording")
+        center_hz, fs, gain_db = float(center_hz), float(sample_rate), float(gain_db)
+        n = int(fs * self.max_rec_seconds)
+        self._check_rx(fs, n, gain_db)
+        assert self._tmp is not None
+        path = self._tmp / f"{name}.iq"
+        if self.backend == "sim":
+            self._rec = {"path": path, "fs": fs, "center": center_hz, "gain": gain_db, "t0": time.time()}
+            return
+        self._rec_log.clear()
+        proc = subprocess.Popen(self.rx_command(path, center_hz, fs, n, gain_db), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+        self._rec_proc = proc
+
+        def read() -> None:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                self._rec_log.append(line.rstrip("\n"))
+        threading.Thread(target=read, daemon=True, name=f"{self.id}-rec-log").start()
+        size = DATATYPES[self.datatype]
+        end = time.time() + START_TIMEOUT_S
+        while time.time() < end:   # wait for the first block; its size tells when sampling began
+            if proc.poll() is not None:
+                self._stop_rec_proc()
+                raise DeviceError(f"{self.id}: the receive tool stopped at once: {' | '.join(self._rec_log)[-300:]}")
+            if path.exists() and path.stat().st_size > 0:
+                t_seen, first = time.time(), path.stat().st_size
+                self._rec = {"path": path, "fs": fs, "center": center_hz, "gain": gain_db,
+                             "t0": t_seen - (first / size) / fs}
+                return
+            time.sleep(0.005)
+        self._stop_rec_proc()
+        raise DeviceError(f"{self.id}: the receive tool wrote nothing in {START_TIMEOUT_S:.0f} s")
+
+    def _stop_rec_proc(self) -> int | None:
+        """Stop the receive tool if it runs. Returns its exit code if it had already ended by itself, else None."""
+        proc, self._rec_proc = self._rec_proc, None
+        if proc is None:
+            return None
+        ended = proc.poll()
+        if ended is None:
+            proc.send_signal(signal.SIGINT)
+            try:
+                proc.wait(10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(5)
+        return ended
+
+    def stop_recording(self) -> Recording:
+        """Stop and return the file. Lost samples, or a tool that ended before it was stopped, are an error."""
+        rec, self._rec = self._rec, None
+        if rec is None:
+            raise DeviceError(f"{self.id}: not recording")
+        if self.backend == "sim":
+            return self._sim_recording(rec)
+        ended = self._stop_rec_proc()
+        time.sleep(0.05)   # let the log reader take the last lines
+        text = "\n".join(self._rec_log)
+        if LOST_SAMPLES.search(text):
+            raise DeviceError(f"{self.id}: samples were lost at {rec['fs']:g} S/s: {text.strip()[-200:]}")
+        if ended is not None:
+            raise DeviceError(f"{self.id}: the receive tool ended before the recording was stopped (exit {ended}, "
+                              f"max_rec_seconds is {self.max_rec_seconds:g}): {text.strip()[-200:]}")
+        size = DATATYPES[self.datatype]
+        total = rec["path"].stat().st_size if rec["path"].is_file() else 0
+        total -= total % size   # a stop in the middle of a write leaves part of a sample
+        with open(rec["path"], "r+b") as fh:
+            fh.truncate(total)
+        return Recording(rec["path"], rec["fs"], rec["center"], rec["t0"], total / size / rec["fs"], self.datatype)
+
+    def _sim_recording(self, rec: dict[str, Any]) -> Recording:
+        """Noise, plus a burst wherever the simulated LoRa air carried a packet, at the level the wiring gives."""
+        fs, t0 = rec["fs"], rec["t0"]
+        n = int((time.time() - t0) * fs)
+        rng = self.world.rng if self.world is not None else random.Random(1)
+        sim = self.cfg.get("sim") or {}
+        noise_dbfs = float(sim.get("noise_dbfs", SIM_NOISE_DBFS_AT_0DB + rec["gain"]))
+        losses = [float(p["loss_db"]) for p in (self.world.paths if self.world is not None else [])
+                  if str(p["to"]).split(":")[0] == self.id]
+        burst_dbfs = SIM_LORA_DBM - (min(losses) if losses else 60.0) + rec["gain"] + SIM_RX_K_DB
+
+        def block(dbfs: float) -> bytes:   # noise samples to tile; building every sample in Python would be slow
+            sigma = 10 ** (dbfs / 20) / math.sqrt(2)
+            vals = [complex(rng.gauss(0, sigma), rng.gauss(0, sigma)) for _ in range(SIM_BLOCK)]
+            if self.datatype == "cf32_le":
+                return array("f", (c for v in vals for c in (v.real, v.imag))).tobytes()
+            return array("h", (max(-32768, min(32767, round(c * 32767))) for v in vals for c in (v.real, v.imag))).tobytes()
+
+        size = DATATYPES[self.datatype]
+        quiet, loud = block(noise_dbfs), block(10 * math.log10(10 ** (burst_dbfs / 10) + 10 ** (noise_dbfs / 10)))
+        buf = bytearray((quiet * (n // SIM_BLOCK + 1))[:n * size])
+        bursts = self.world.air.bursts if self.world is not None and self.world.air is not None else []
+        for b in bursts:
+            i0 = max(0, int((b["t_start"] - t0) * fs))
+            i1 = min(n, int((b["t_start"] - t0) * fs) + int(b["seconds"] * fs))
+            if i1 > i0:
+                buf[i0 * size:i1 * size] = (loud * ((i1 - i0) // SIM_BLOCK + 1))[:(i1 - i0) * size]
+        rec["path"].write_bytes(bytes(buf))
+        # The claimed start is off by a few ms, like a real one, so the checker's alignment has work to do.
+        return Recording(rec["path"], fs, rec["center"], t0 + rng.uniform(-0.015, 0.015), n / fs, self.datatype)
 
     def _sim_capture(self, center_hz: float, fs: float, n: int, gain_db: float) -> bytes:
         """Noise, plus every simulated tone that reaches this receiver through a [wiring] path."""
@@ -487,7 +609,7 @@ class E310(Usrp):
             f.unlink(missing_ok=True)
         text = self._run(self.pair_command(center_hz, fs, n, gain), START_TIMEOUT_S + seconds * 2, cwd=self._tmp)
         ended = time.time()
-        if re.search(r"overflow|^[ODS]+\s*$|\bLate\b|ERROR_CODE", text, re.IGNORECASE | re.MULTILINE):
+        if LOST_SAMPLES.search(text):
             raise DeviceError(f"{self.id}: samples were lost at {fs:g} S/s: {text.strip()[-200:]}")
         per_sample = DATATYPES[self.datatype]
         datas = []

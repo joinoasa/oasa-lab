@@ -25,6 +25,8 @@ class UndeclaredTransmit(WiringRefused):
 
 # Kinds whose TX gain the lab can cap; only these may radiate.
 RADIATING_KINDS = ("b200", "e310")
+# Kinds that cannot transmit: only a path toward one of these may say receiver_transmits = false (40 dB, not 60).
+RX_ONLY_KINDS = ("rtlsdr", "tinysa", "power_sensor")
 
 
 def antenna_caps_from_env() -> dict[str, float]:
@@ -76,6 +78,9 @@ class Hardware:
         for p in w.get("paths", []):
             dest = str(p["to"]).split(":")[0]
             kind = self.inv.devices.get(dest, {}).get("kind")
+            if p.get("receiver_transmits") is False and kind not in RX_ONLY_KINDS:
+                raise WiringRefused(f"wiring '{name}' path {p['name']}: receiver_transmits = false, but {dest} ({kind}) "
+                                    "can transmit. It needs 60 dB even as a receiver; drop receiver_transmits")
             paths.append({"name": p["name"], "from": p["from"], "to": p["to"], "loss_db": float(p["loss_db"]),
                           "receiver_transmits": bool(p.get("receiver_transmits", kind != "rtlsdr"))})
         rf = {"setup": w["rf_setup"], "wiring": name, "description": w.get("description", ""), "paths": paths}

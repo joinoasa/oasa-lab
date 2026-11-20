@@ -765,6 +765,8 @@ MAX_ANTENNA_TX_GAIN_DB = 90.0
 RADIATING_KINDS = ("b200", "e310")
 MIN_LOSS_TX_DB = 60.0       # cable loss between a transmitter and any receiver that a transmitter could damage
 MIN_LOSS_RX_ONLY_DB = 40.0  # ... and a receive-only device (an RTL-SDR)
+RX_ONLY_KINDS = ("rtlsdr", "tinysa", "power_sensor")   # cannot transmit. Any other receiver needs the 60 dB, even
+                                                       # when the suite only receives on it (a USRP as a recorder)
 RUN_SLACK_S = 2.0           # a recording may start this long before the run or end after it
 LIMIT_KEYS = ("min", "max")
 
@@ -886,6 +888,10 @@ def _rf_errors(rf: Any, by_id: dict[str, dict], transmits: bool, radiates: bool 
         for end in ("from", "to"):
             if p[end].split(":")[0] not in by_id:
                 errs.append(f"RF path {p['name']}: {end} {p[end]!r} is not a device in the manifest")
+        to_kind = by_id.get(p["to"].split(":")[0], {}).get("kind")
+        if not p["receiver_transmits"] and to_kind is not None and to_kind not in RX_ONLY_KINDS:
+            errs.append(f"RF path {p['name']}: receiver_transmits = false, but {to_kind} can transmit: it needs "
+                        f"{MIN_LOSS_TX_DB:g} dB even when the suite only receives on it")
         need = MIN_LOSS_TX_DB if p["receiver_transmits"] else MIN_LOSS_RX_ONLY_DB
         if p["loss_db"] < need:
             errs.append(f"RF path {p['name']}: {p['loss_db']:g} dB is below the {need:g} dB required "
@@ -1092,11 +1098,17 @@ def check_radio(b: Bundle) -> dict:
             errs.append(f"the manifest dropped hardware the suite file requires: {dropped}")
     device_errs, by_id = _device_errors(hw.get("devices", []), hw.get("hub"))
     errs.extend(device_errs)
-    for req in requires:
-        kind, _, n = req.partition(":")
-        have = (1 if hw.get("hub") else 0) if kind == "hub" else sum(1 for d in by_id.values() if d.get("kind") == kind)
-        if have < (int(n) if n.isdigit() else 1):
-            errs.append(f"the suite requires {req} but the manifest lists {have}")
+    for req in requires:   # kind, kind:N, or alternatives a|b (oasa_lab/suites.py requirement_met; a copy here)
+        have = {}
+        for alt in req.split("|"):
+            kind, _, n = alt.partition(":")
+            have[kind] = ((1 if hw.get("hub") else 0) if kind == "hub"
+                          else sum(1 for d in by_id.values() if d.get("kind") == kind))
+            if have[kind] >= (int(n) if n.isdigit() else 1):
+                break
+        else:
+            listed = ", ".join(f"{v} {k}" for k, v in have.items())
+            errs.append(f"the suite requires {req} but the manifest lists {listed}")
     errs.extend(_rf_errors(hw.get("rf"), by_id, transmits, radiates))
     rec_errs, burst_rows = _recording_errors(b, m, recs, by_id)
     errs.extend(rec_errs)
